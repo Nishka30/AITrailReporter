@@ -1,3 +1,4 @@
+import { File } from 'expo-file-system';
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { uploadSubmissionAudio } from '../api/audio';
@@ -168,6 +169,23 @@ async function syncOneVoiceCapture(serverGuideId: string, capture: LocalCapture)
     // local data, not a network response, so fail loudly rather than guessing.
     throw new Error('Voice capture is missing its local audio file reference.');
   }
+
+  // React Native's fetch throws the SAME generic "Network request failed"
+  // error whether the server is genuinely unreachable OR a FormData file part
+  // points at a URI that no longer exists on disk — there is no way to tell
+  // those apart from the fetch() rejection alone (see api/audio.ts). Checking
+  // existence explicitly here, before ever calling fetch, means a missing
+  // recording gets its own honest, specific message instead of silently
+  // masquerading as a connectivity problem (which sent guides chasing their
+  // network/firewall setup for a problem no retry could ever fix).
+  const file = new File(capture.localAudioUri);
+  if (!file.exists) {
+    throw new Error(
+      'This recording is no longer on your device (it may have been cleared by the OS or the ' +
+        'app was reinstalled). It cannot be sent — record a new voice update instead.'
+    );
+  }
+
   const submission = await createOrGetSubmission({
     guideId: serverGuideId,
     clientSubmissionId: capture.clientSubmissionId,
@@ -180,7 +198,6 @@ async function syncOneVoiceCapture(serverGuideId: string, capture: LocalCapture)
     clientAudioId: capture.clientAudioId,
     localUri: capture.localAudioUri,
     contentType: capture.audioContentType ?? 'audio/m4a',
-    filename: `${capture.clientAudioId}.m4a`,
     durationSeconds:
       capture.audioDurationMillis != null ? capture.audioDurationMillis / 1000 : null,
   });

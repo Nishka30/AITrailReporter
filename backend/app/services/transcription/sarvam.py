@@ -19,6 +19,30 @@ logger = logging.getLogger(__name__)
 SARVAM_MODE = "codemix"
 SARVAM_LANGUAGE_CODE = "unknown"
 
+# Sarvam's speech-to-text endpoint validates the file's content type against
+# its OWN allow-list, which is narrower/spelled differently than this
+# project's own (see app/services/audio_validation.py) -- confirmed against
+# the real API: it rejects the literal string "audio/m4a" (HTTP 400,
+# "Invalid file type: audio/m4a... Only [...] are allowed"), even though that
+# is exactly what expo-audio's HIGH_QUALITY preset reports and what this
+# backend's own upload validation correctly accepts as real M4A audio.
+# Sarvam's allow-list does include "audio/x-m4a", an equally valid MIME alias
+# for the same format -- so this is purely a spelling mismatch between the two
+# APIs' allow-lists, not a real difference in the audio. Only entries this
+# app's recording pipeline can actually produce are mapped here (see
+# RECORDED_CONTENT_TYPE in mobile's src/audio/audioRecordingService.ts) --
+# not a speculative full mapping table for content types nothing here ever
+# generates.
+_SARVAM_CONTENT_TYPE_ALIASES = {
+    "audio/m4a": "audio/x-m4a",
+}
+
+
+def _sarvam_content_type(content_type: str | None) -> str | None:
+    if content_type is None:
+        return None
+    return _SARVAM_CONTENT_TYPE_ALIASES.get(content_type.lower(), content_type)
+
 
 class TranscriptionProviderError(Exception):
     """Raised for any failure that prevents a usable transcript — auth, network,
@@ -64,7 +88,7 @@ def transcribe_audio(
     client = _get_client()
     try:
         response = client.speech_to_text.transcribe(
-            file=(filename, audio_bytes, content_type),
+            file=(filename, audio_bytes, _sarvam_content_type(content_type)),
             model=settings.sarvam_transcription_model,
             mode=SARVAM_MODE,
             language_code=SARVAM_LANGUAGE_CODE,
