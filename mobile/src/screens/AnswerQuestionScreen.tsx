@@ -64,6 +64,7 @@ export default function AnswerQuestionScreen({ guide, question, onDone }: Props)
   }, [loadExisting]);
 
   async function handleSave() {
+    if (saving) return;
     const trimmed = text.trim();
     if (!trimmed) {
       setError('Please enter an answer before saving.');

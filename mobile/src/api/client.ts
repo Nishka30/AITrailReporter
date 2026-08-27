@@ -52,6 +52,18 @@ export function extractDetailMessage(payload: unknown, fallback: string): string
   return fallback;
 }
 
+/** React Native's fetch() has no built-in timeout: on a flaky mobile
+ * connection (WiFi dropping mid-request, a dead TCP socket that never resets)
+ * it can stay pending forever, neither resolving nor rejecting. Every caller
+ * of apiRequest() awaits it inside a try/finally that only releases its
+ * loading state once the awaited promise SETTLES — so a promise that never
+ * settles means that loading state never terminates, exactly the "keeps
+ * loading indefinitely" failure mode. Aborting after a bounded time turns
+ * that hang into an honest NetworkError, which every existing caller already
+ * catches and surfaces truthfully. Value chosen generously for a slow trail
+ * connection, not tuned to this app's fastest expected request. */
+const REQUEST_TIMEOUT_MS = 20_000;
+
 /**
  * Minimal fetch wrapper shared by every endpoint module in src/api/. Screens and
  * the sync engine never call fetch() directly — everything goes through this (or
@@ -61,15 +73,21 @@ export function extractDetailMessage(payload: unknown, fallback: string): string
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
   let response: Response;
   try {
     response = await fetch(url, {
       method: options.method ?? 'GET',
       headers: { 'Content-Type': 'application/json' },
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
     });
   } catch (err) {
     throw new NetworkError(err);
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   const text = await response.text();
