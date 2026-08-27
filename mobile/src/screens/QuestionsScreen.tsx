@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { ApiError, NetworkError } from '../api/client';
 import { listAssignedQuestions, type Question } from '../api/questions';
 import { Badge, type BadgeTone, Card, EmptyState, ErrorState, Screen, SectionHeader } from '../components/ui';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { listAnswersForGuide } from '../repositories/answerRepository';
 import { colors, spacing, type } from '../theme/theme';
 import type { LocalAnswer, LocalGuide } from '../types/models';
@@ -139,6 +140,10 @@ export default function QuestionsScreen({ guide, onSelectQuestion, onCountChange
     refresh();
   }, [refresh, refreshKey]);
 
+  // Spinner shows only for a real pull; background loads use the inline
+  // "Loading questions…" state below.
+  const { pulling, onPull } = usePullToRefresh(refresh);
+
   const needsAttention = questions?.filter((q) => q.assignment?.status !== 'completed') ?? [];
   const answered = questions?.filter((q) => q.assignment?.status === 'completed') ?? [];
 
@@ -146,8 +151,8 @@ export default function QuestionsScreen({ guide, onSelectQuestion, onCountChange
     <Screen
       scroll={!!questions?.length}
       contentContainerStyle={questions?.length ? undefined : styles.emptyContainer}
-      onRefresh={guide.serverGuideId ? refresh : undefined}
-      refreshing={loading && questions !== null}
+      onRefresh={guide.serverGuideId ? onPull : undefined}
+      refreshing={pulling}
     >
       <View style={styles.header}>
         <Text style={styles.title}>Questions</Text>

@@ -55,7 +55,17 @@ export default function Screen({
       keyboardShouldPersistTaps="handled"
       refreshControl={
         onRefresh ? (
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.marigoldDeep} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            // `tintColor` is iOS-ONLY. Android reads `colors` (an array) and
+            // `progressBackgroundColor` — without them Android falls back to
+            // its stock blue spinner, which is why the indicator appeared in a
+            // colour that exists nowhere in this app's palette.
+            tintColor={colors.marigoldDeep}
+            colors={[colors.marigoldDeep]}
+            progressBackgroundColor={colors.paperElevated}
+          />
         ) : undefined
       }
     >

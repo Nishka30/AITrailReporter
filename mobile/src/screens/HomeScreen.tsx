@@ -188,6 +188,16 @@ export default function HomeScreen({
 
   const hasWaiting = (sync.waiting ?? 0) + (sync.failed ?? 0) > 0;
 
+  /** One truthful description of the last sync, shared by BOTH "Sync now"
+   * buttons so they can never report different things. A guide-level failure
+   * takes precedence: if the profile could not be resolved, nothing else was
+   * attempted, and saying "nothing to sync" there would be a lie. */
+  const syncMessage = lastSyncResult
+    ? lastSyncResult.guideError
+      ? `Sync could not run: ${lastSyncResult.guideError}`
+      : lastSyncResult.message
+    : null;
+
   return (
     <Screen footerSpace={8}>
       {/* The avatar is the entry point to the Profile screen (Step 17). It
@@ -228,8 +238,19 @@ export default function HomeScreen({
           </Text>
           <Text style={styles.heroSubtitleMuted}>Nothing is lost — send them whenever you have a connection.</Text>
           <View style={styles.heroButtonWrap}>
-            <Button label="Sync now" onPress={handleSyncNow} loading={syncing} fullWidth={false} />
+            <Button
+              label={syncing ? 'Syncing…' : 'Sync now'}
+              onPress={handleSyncNow}
+              loading={syncing}
+              fullWidth={false}
+            />
           </View>
+          {/* Both "Sync now" buttons run the SAME handler, so they must also
+              report the same outcome. Without this, tapping the button up here
+              and having the sync fail looked like nothing happened at all —
+              the only result text lived in the Sync card far below, which the
+              guide may never scroll to. */}
+          {syncMessage ? <Text style={styles.heroResultText}>{syncMessage}</Text> : null}
         </Card>
       ) : (
         <Card style={styles.heroCardCalm}>
@@ -352,11 +373,7 @@ export default function HomeScreen({
           <Button label={syncing ? 'Syncing…' : 'Sync now'} onPress={handleSyncNow} loading={syncing} variant="secondary" />
         </View>
 
-        {lastSyncResult ? (
-          <Text style={styles.syncResultText}>
-            {lastSyncResult.guideError ? `Sync could not run: ${lastSyncResult.guideError}` : lastSyncResult.message}
-          </Text>
-        ) : null}
+        {syncMessage ? <Text style={styles.syncResultText}>{syncMessage}</Text> : null}
       </Card>
 
       <SectionHeader title="More" />
@@ -382,6 +399,7 @@ const styles = StyleSheet.create({
   greetingSubtitle: { ...type.small, color: colors.inkFaint, marginTop: 2 },
 
   heroButtonWrap: { marginTop: spacing.md },
+  heroResultText: { ...type.small, color: colors.inkSoft, marginTop: spacing.sm, lineHeight: 19 },
 
   shortcutRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.xs },
   shortcut: { flex: 1 },

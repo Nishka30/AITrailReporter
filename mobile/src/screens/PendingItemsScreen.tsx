@@ -7,6 +7,7 @@ import { triggerTranscription, type TranscriptionResponse } from '../api/transcr
 import { triggerExtraction, type ExtractionResponse } from '../api/extractions';
 import { ApiError, NetworkError } from '../api/client';
 import { formatDurationOrUnknown } from '../audio/duration';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { Badge, type BadgeTone, Button, Card, EmptyState, Screen, SectionHeader } from '../components/ui';
 import { listCaptures } from '../repositories/captureRepository';
 import { listLocations } from '../repositories/locationRepository';
@@ -432,6 +433,10 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
     load();
   }, [load, refreshKey]);
 
+  // Spinner only for a genuine pull — this screen's `loading` also covers its
+  // initial mount, which must not draw the pull indicator.
+  const { pulling, onPull } = usePullToRefresh(load);
+
   const notes = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'note'));
   const voiceCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'voice'));
   const exploreCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'explore'));
@@ -443,7 +448,7 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
     sortedLocations.length === 0;
 
   return (
-    <Screen onRefresh={load} refreshing={loading}>
+    <Screen onRefresh={onPull} refreshing={pulling}>
       <View style={styles.header}>
         <Text style={styles.title}>Activity</Text>
         <Text style={styles.subtitle}>Everything saved on this device — status shows what's actually reached the server.</Text>

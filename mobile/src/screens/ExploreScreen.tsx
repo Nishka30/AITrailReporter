@@ -16,6 +16,7 @@ import {
   buildPrompts,
   type ExplorePrompt,
 } from '../explore/explorePrompts';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { countCapturesByStatus } from '../repositories/captureRepository';
 import { colors, radii, shadow, spacing, type } from '../theme/theme';
 import type { LocalGuide } from '../types/models';
@@ -145,11 +146,15 @@ export default function ExploreScreen({ guide, onStartContribution, refreshKey }
     refresh();
   }, [refresh, refreshKey]);
 
+  // Only a real pull gesture spins the RefreshControl — background loads (mount,
+  // tab re-entry) show the inline "Checking where you are…" state instead.
+  const { pulling, onPull } = usePullToRefresh(refresh);
+
   const prompts = buildPrompts(context, knowledgeStates);
   const place = context?.nearestKnownPlace;
 
   return (
-    <Screen onRefresh={refresh} refreshing={loading && loaded} footerSpace={8}>
+    <Screen onRefresh={onPull} refreshing={pulling} footerSpace={8}>
       <View style={styles.header}>
         <Text style={styles.title}>Explore</Text>
         <Text style={styles.subtitle}>
