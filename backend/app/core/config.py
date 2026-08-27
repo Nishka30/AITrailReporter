@@ -1,16 +1,18 @@
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    database_url_env: str | None = Field(default=None, validation_alias="DATABASE_URL")
     database_host: str = "localhost"
     database_port: int = 5432
-    database_name: str = "postgres"
+    database_name: str = "aitrailreporter"
     database_user: str = "postgres"
-    database_password: str
+    database_password: str = ""
 
     # How close a coordinate must be to a known place before that place is considered
     # part of the coordinate's geographic context. NOT the same as each knowledge
@@ -65,6 +67,13 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.database_url_env:
+            url = self.database_url_env
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql+psycopg://", 1)
+            elif url.startswith("postgresql://") and not url.startswith("postgresql+psycopg://"):
+                url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+            return url
         return (
             f"postgresql+psycopg://{self.database_user}:{self.database_password}"
             f"@{self.database_host}:{self.database_port}/{self.database_name}"
