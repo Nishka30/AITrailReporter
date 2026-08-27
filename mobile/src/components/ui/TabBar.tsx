@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, spacing, type } from '../../theme/theme';
 
-export type TabKey = 'home' | 'questions' | 'activity';
+export type TabKey = 'home' | 'explore' | 'questions' | 'activity';
 
 type TabDef = {
   key: TabKey;
@@ -13,8 +13,13 @@ type TabDef = {
   iconActive: keyof typeof Ionicons.glyphMap;
 };
 
+// Order encodes the product hierarchy: Home is the calm dashboard, Explore is
+// the proactive discovery surface, Questions is the operational work queue,
+// Activity is the record of what this device has captured. Explore sits before
+// Questions on purpose — it is the invitation, Questions is the obligation.
 const TABS: TabDef[] = [
   { key: 'home', label: 'Home', icon: 'home-outline', iconActive: 'home' },
+  { key: 'explore', label: 'Explore', icon: 'compass-outline', iconActive: 'compass' },
   { key: 'questions', label: 'Questions', icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses' },
   { key: 'activity', label: 'Activity', icon: 'time-outline', iconActive: 'time' },
 ];

@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     # upload limit.
     max_audio_upload_size_bytes: int = 20_971_520  # 20 MiB
 
+    # Step 16: where Explore photo uploads are stored. A SEPARATE directory from
+    # audio (same storage abstraction, different root) so the two can be given
+    # different operational treatment without a code change — see
+    # app/services/storage/__init__.py.
+    photo_storage_dir: str = "var/photo_uploads"
+
+    # Sized for a phone photo already downscaled by the mobile client before
+    # upload (see mobile/src/photo/photoPickerService.ts), not for a full
+    # original-resolution capture.
+    max_photo_upload_size_bytes: int = 10_485_760  # 10 MiB
+
     # Step 8: Sarvam AI (Saaras) transcription. The backend is the ONLY thing that
     # ever holds this key — never sent to, or read by, the mobile app. `None` (not
     # set) is a valid, expected local-dev state: the transcribe endpoint reports a

@@ -17,6 +17,7 @@ type Props = {
   guide: LocalGuide;
   onCreateNote: () => void;
   onViewQuestions: () => void;
+  onViewExplore: () => void;
   onViewActivity: () => void;
   refreshKey: number;
 };
@@ -67,7 +68,15 @@ function useSyncSnapshot(guide: LocalGuide, refreshKey: number) {
 /** How many currently-assigned questions still need the guide's input — a
  * single, cheap, honest fetch of the real server truth (assignment.status
  * !== 'completed'). Not shown at all until it resolves — never a fabricated
- * placeholder count. */
+ * placeholder count.
+ *
+ * Step 16: Home no longer RENDERS the question queue (that moved wholly to the
+ * Questions tab); this count now feeds only a compact shortcut row. The fetch
+ * is kept here rather than lifted to RootNavigator deliberately — the badge
+ * RootNavigator holds is populated by QuestionsScreen, so it is null until
+ * that tab has been visited at least once, and Home must be truthful on a cold
+ * start. Only one tab is mounted at a time, so this never races or duplicates
+ * a simultaneous request. */
 function useAttentionQuestionCount(guide: LocalGuide, refreshKey: number) {
   const [count, setCount] = useState<number | null>(null);
 
@@ -97,7 +106,14 @@ function useAttentionQuestionCount(guide: LocalGuide, refreshKey: number) {
   return count;
 }
 
-export default function HomeScreen({ guide, onCreateNote, onViewQuestions, onViewActivity, refreshKey }: Props) {
+export default function HomeScreen({
+  guide,
+  onCreateNote,
+  onViewQuestions,
+  onViewExplore,
+  onViewActivity,
+  refreshKey,
+}: Props) {
   const db = useSQLiteContext();
   const sync = useSyncSnapshot(guide, refreshKey);
   const attentionQuestions = useAttentionQuestionCount(guide, refreshKey);
@@ -122,6 +138,7 @@ export default function HomeScreen({ guide, onCreateNote, onViewQuestions, onVie
         guideError: 'Unexpected error',
         notes: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         voice: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
+        explore: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         locations: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         answers: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         message: 'Sync failed unexpectedly. Your local data is safe and unchanged.',
@@ -179,22 +196,12 @@ export default function HomeScreen({ guide, onCreateNote, onViewQuestions, onVie
         </View>
       </View>
 
-      {/* Adaptive hero: the single most useful next action, derived from
-          real data only — never a fixed/generic message. */}
-      {attentionQuestions !== null && attentionQuestions > 0 ? (
-        <Card style={styles.heroCard} onPress={onViewQuestions} accessibilityLabel="Answer assigned questions">
-          <Text style={styles.heroEyebrow}>NEEDS YOUR INPUT</Text>
-          <Text style={styles.heroTitle}>
-            {attentionQuestions} question{attentionQuestions === 1 ? '' : 's'} for you
-          </Text>
-          <Text style={styles.heroSubtitle}>
-            The server would like a quick report from you on your current area.
-          </Text>
-          <View style={styles.heroButtonWrap}>
-            <Button label="Answer now" onPress={onViewQuestions} fullWidth={false} />
-          </View>
-        </Card>
-      ) : hasWaiting ? (
+      {/* Step 16: Home is a calm dashboard about THIS DEVICE's state — is
+          anything waiting to go out? The operational question queue no longer
+          lives here at all; it belongs to the Questions tab, and is surfaced
+          below only as a compact shortcut. Derived from real local data only,
+          never a fixed/generic message. */}
+      {hasWaiting ? (
         <Card style={styles.heroCardMuted}>
           <Text style={styles.heroEyebrowMuted}>WAITING TO SEND</Text>
           <Text style={styles.heroTitleMuted}>
@@ -209,11 +216,60 @@ export default function HomeScreen({ guide, onCreateNote, onViewQuestions, onVie
         <Card style={styles.heroCardCalm}>
           <View style={styles.heroCalmRow}>
             <Ionicons name="checkmark-circle" size={22} color={colors.ok} />
-            <Text style={styles.heroCalmTitle}>You're all caught up</Text>
+            <Text style={styles.heroCalmTitle}>Everything is sent</Text>
           </View>
-          <Text style={styles.heroSubtitleMuted}>No pending questions or unsent reports right now.</Text>
+          <Text style={styles.heroSubtitleMuted}>
+            Nothing is waiting on this device right now.
+          </Text>
         </Card>
       )}
+
+      {/* Compact navigation affordances — a truthful count and a way through,
+          NOT a second copy of either queue. `attentionQuestions === null` means
+          the count hasn't resolved (or couldn't be fetched); the row still
+          navigates, it just doesn't claim a number it doesn't have. */}
+      <View style={styles.shortcutRow}>
+        <Card
+          onPress={onViewExplore}
+          accessibilityLabel="Open Explore"
+          style={styles.shortcut}
+        >
+          <View style={[styles.shortcutIcon, { backgroundColor: colors.marigoldSoft }]}>
+            <Ionicons name="compass-outline" size={19} color={colors.marigoldDeep} />
+          </View>
+          <Text style={styles.shortcutTitle}>Explore</Text>
+          <Text style={styles.shortcutMeta}>Share what's around you</Text>
+        </Card>
+
+        <Card
+          onPress={onViewQuestions}
+          accessibilityLabel={
+            attentionQuestions && attentionQuestions > 0
+              ? `Open Questions, ${attentionQuestions} waiting`
+              : 'Open Questions'
+          }
+          style={styles.shortcut}
+        >
+          <View style={styles.shortcutIconRow}>
+            <View style={[styles.shortcutIcon, { backgroundColor: colors.infoSoft }]}>
+              <Ionicons name="chatbubble-ellipses-outline" size={19} color={colors.info} />
+            </View>
+            {attentionQuestions !== null && attentionQuestions > 0 ? (
+              <View style={styles.shortcutCount}>
+                <Text style={styles.shortcutCountText}>{attentionQuestions}</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={styles.shortcutTitle}>Questions</Text>
+          <Text style={styles.shortcutMeta}>
+            {attentionQuestions === null
+              ? 'Asked by the server'
+              : attentionQuestions === 0
+                ? 'None waiting'
+                : `${attentionQuestions} waiting for you`}
+          </Text>
+        </Card>
+      </View>
 
       <SectionHeader title="Record an update" />
       <View style={styles.quickActionsRow}>
@@ -314,11 +370,30 @@ const styles = StyleSheet.create({
   greeting: { ...type.display, fontSize: 24, lineHeight: 29, color: colors.ink },
   greetingSubtitle: { ...type.small, color: colors.inkFaint, marginTop: 2 },
 
-  heroCard: { backgroundColor: colors.ink, marginBottom: spacing.sm },
-  heroEyebrow: { ...type.captionBold, color: colors.marigold, letterSpacing: 0.6 },
-  heroTitle: { ...type.title, color: colors.white, marginTop: spacing.xxs },
-  heroSubtitle: { ...type.small, color: 'rgba(255,255,255,0.75)', marginTop: spacing.xxs },
   heroButtonWrap: { marginTop: spacing.md },
+
+  shortcutRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.xs },
+  shortcut: { flex: 1 },
+  shortcutIconRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  shortcutIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shortcutCount: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    backgroundColor: colors.ink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shortcutCountText: { ...type.captionBold, color: colors.marigoldSoft },
+  shortcutTitle: { ...type.subtitle, color: colors.ink, marginTop: spacing.xs },
+  shortcutMeta: { ...type.caption, color: colors.inkFaint, marginTop: 1 },
 
   heroCardMuted: { backgroundColor: colors.marigoldSoft, marginBottom: spacing.sm },
   heroEyebrowMuted: { ...type.captionBold, color: colors.marigoldDeep, letterSpacing: 0.6 },

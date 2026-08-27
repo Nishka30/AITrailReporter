@@ -44,11 +44,14 @@ def resolve_source_text(db: Session, submission: Submission) -> str:
     """Returns the text to feed to LLM extraction for this submission, or raises
     a SourceTextError subclass describing exactly why none is available yet."""
     # 'answer' (Step 13: a guide's answer to an assigned Question, represented
-    # as a Submission -- see services/question_answers.py) has its content
-    # directly in raw_text, exactly like 'note' -- reuses the identical branch
-    # rather than a parallel extraction path, per this step's explicit
-    # "do not duplicate extraction logic" requirement.
-    if submission.submission_type in ("note", "answer"):
+    # as a Submission -- see services/question_answers.py) and 'explore'
+    # (Step 16: a proactive Explore-tab discovery contribution) both have their
+    # content directly in raw_text, exactly like 'note' -- all three reuse the
+    # identical branch rather than a parallel extraction path, per the explicit
+    # "do not duplicate extraction logic" requirement. This is precisely why
+    # Explore needed no second extraction pipeline: making it a Submission with
+    # raw_text was enough for the whole existing chain to work unchanged.
+    if submission.submission_type in ("note", "answer", "explore"):
         text = (submission.raw_text or "").strip()
         if not text:
             raise EmptySourceTextError()

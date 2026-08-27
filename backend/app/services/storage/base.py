@@ -4,24 +4,29 @@ from pathlib import Path
 
 
 @dataclass
-class StoredAudio:
+class StoredFile:
     """What the caller needs after a successful save: the durable reference to
     persist on the Submission row, and the size actually written (source of
-    truth for audio_size_bytes, not whatever the client claimed)."""
+    truth for the *_size_bytes column, not whatever the client claimed)."""
 
     storage_key: str
     size_bytes: int
 
 
-class AudioStorage(ABC):
-    """Durable storage for uploaded voice-note audio, independent of the request
-    that uploaded it. This step's only implementation is local filesystem storage
-    for development (see local_filesystem.py) — production would swap in an
+class MediaStorage(ABC):
+    """Durable storage for an uploaded binary attachment, independent of the
+    request that uploaded it. Step 7 introduced this for voice-note audio;
+    Step 16 generalized it (unchanged in behavior) so Explore photos reuse the
+    identical contract rather than growing a second, parallel storage system.
+
+    This step's only implementation is local filesystem storage for
+    development (see local_filesystem.py) — production would swap in an
     S3-compatible implementation of this same interface; nothing in
-    services/submissions.py or the API routes would need to change."""
+    services/submissions.py or the API routes would need to change.
+    """
 
     @abstractmethod
-    def save(self, content: bytes, original_filename: str) -> StoredAudio:
+    def save(self, content: bytes, original_filename: str) -> StoredFile:
         """Persists `content` durably and returns a server-generated reference to
         it. Must never use `original_filename` as, or as part of, a filesystem
         path — it is client-supplied and untrusted."""
@@ -33,3 +38,10 @@ class AudioStorage(ABC):
         storage_key is always server-generated (see save()), but implementations
         must still reject a value that would resolve outside the storage root."""
         raise NotImplementedError
+
+
+# Step 7 names, preserved so existing imports (app/services/submissions.py,
+# app/api/routes/submissions.py) keep working unchanged. Audio storage is
+# simply a MediaStorage whose configured extension allow-list is the audio one.
+AudioStorage = MediaStorage
+StoredAudio = StoredFile

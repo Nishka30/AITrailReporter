@@ -36,6 +36,13 @@
           "enableBackgroundRecording": false
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "This app opens your photo library only when you tap \"Choose photo\" on an Explore prompt, so you can share a picture of a place.",
+          "cameraPermission": "This app uses your camera only when you tap \"Take photo\" on an Explore prompt, so you can share how a place looks right now."
+        }
+      ],
       "expo-font"
     ]
   }

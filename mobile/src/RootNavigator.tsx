@@ -5,17 +5,20 @@ import { useSQLiteContext } from 'expo-sqlite';
 import type { Question } from './api/questions';
 import { colors, spacing, type } from './theme/theme';
 import { LoadingState, TabBar, type TabKey } from './components/ui';
+import type { ExplorePrompt } from './explore/explorePrompts';
 import { useLocalActivityCount } from './hooks/useLocalActivityCount';
 import { getCurrentLocalGuide } from './repositories/guideRepository';
 import AnswerQuestionScreen from './screens/AnswerQuestionScreen';
 import CreateNoteScreen from './screens/CreateNoteScreen';
+import ExploreContributeScreen from './screens/ExploreContributeScreen';
+import ExploreScreen from './screens/ExploreScreen';
 import HomeScreen from './screens/HomeScreen';
 import PendingItemsScreen from './screens/PendingItemsScreen';
 import QuestionsScreen from './screens/QuestionsScreen';
 import SetupScreen from './screens/SetupScreen';
 import type { LocalGuide } from './types/models';
 
-type PushedScreen = 'createNote' | 'answerQuestion' | null;
+type PushedScreen = 'createNote' | 'answerQuestion' | 'exploreContribute' | null;
 
 /**
  * Navigation shell (Step 15): a persistent bottom TabBar (Home / Questions /
@@ -39,6 +42,7 @@ export default function RootNavigator() {
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [pushed, setPushed] = useState<PushedScreen>(null);
   const [selectedQuestion, setSelectedQuestion] = useState<Question | null>(null);
+  const [selectedPrompt, setSelectedPrompt] = useState<ExplorePrompt | null>(null);
   const [questionBadgeCount, setQuestionBadgeCount] = useState<number | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -69,6 +73,7 @@ export default function RootNavigator() {
   const closePushed = useCallback((returnTo?: TabKey) => {
     setPushed(null);
     setSelectedQuestion(null);
+    setSelectedPrompt(null);
     if (returnTo) setActiveTab(returnTo);
     setRefreshKey((k) => k + 1);
   }, []);
@@ -107,6 +112,16 @@ export default function RootNavigator() {
     );
   }
 
+  if (pushed === 'exploreContribute' && selectedPrompt) {
+    return (
+      <ExploreContributeScreen
+        guide={guide}
+        prompt={selectedPrompt}
+        onDone={() => closePushed('explore')}
+      />
+    );
+  }
+
   return (
     <View style={styles.shell}>
       <View style={styles.content}>
@@ -115,7 +130,17 @@ export default function RootNavigator() {
             guide={guide}
             onCreateNote={() => setPushed('createNote')}
             onViewQuestions={() => goToTab('questions')}
+            onViewExplore={() => goToTab('explore')}
             onViewActivity={() => goToTab('activity')}
+            refreshKey={refreshKey}
+          />
+        ) : activeTab === 'explore' ? (
+          <ExploreScreen
+            guide={guide}
+            onStartContribution={(prompt) => {
+              setSelectedPrompt(prompt);
+              setPushed('exploreContribute');
+            }}
             refreshKey={refreshKey}
           />
         ) : activeTab === 'questions' ? (

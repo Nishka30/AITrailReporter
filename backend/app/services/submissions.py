@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.models.submission import Submission
 from app.schemas.submission import SubmissionCreate
 from app.services import transcriptions as transcription_service
-from app.services.storage.base import AudioStorage
+from app.services.storage.base import AudioStorage, MediaStorage
 
 
 class SubmissionConflictError(Exception):
@@ -33,6 +33,19 @@ class AudioConflictError(Exception):
         super().__init__(
             f"submission {existing.id} already has audio attached under a "
             "different client_audio_id"
+        )
+
+
+class PhotoConflictError(Exception):
+    """Photo equivalent of AudioConflictError (Step 16): the submission already
+    has a photo attached under a DIFFERENT client_photo_id. Replacing an
+    already-attached photo is deliberately not supported, matching audio."""
+
+    def __init__(self, existing: Submission):
+        self.existing = existing
+        super().__init__(
+            f"submission {existing.id} already has a photo attached under a "
+            "different client_photo_id"
         )
 
 
@@ -148,6 +161,57 @@ def attach_audio_to_submission(
     # atomically together — no window where audio exists but nothing tracks its
     # transcription state.
     transcription_service.ensure_pending_transcription(db, submission_id)
+    db.commit()
+    db.refresh(submission)
+    return submission, True
+
+
+def attach_photo_to_submission(
+    db: Session,
+    submission_id: UUID,
+    client_photo_id: str,
+    photo_bytes: bytes,
+    content_type: str,
+    original_filename: str,
+    storage: MediaStorage,
+) -> tuple[Submission, bool]:
+    """Attaches a durably-stored photo to an 'explore' submission (Step 16).
+
+    Structurally identical to attach_audio_to_submission above — same
+    idempotency contract on client_photo_id, same SELECT ... FOR UPDATE row
+    lock serializing concurrent attach attempts for the same submission, same
+    documented orphaned-file-on-crash gap. Two deliberate differences:
+
+    - No transcription row is created. A photo has no transcript, and inventing
+      a pipeline stage that does nothing would be dishonest state.
+    - No duration is recorded, for the same reason (see
+      SubmissionPhotoMetadata).
+
+    A photo does NOT by itself make a submission extractable: extraction reads
+    source TEXT (app/services/source_text.py), and this step does not do image
+    understanding. An Explore photo contribution therefore always carries the
+    guide's own text alongside it — that text is what becomes observations,
+    while the photo is durable evidence attached to the same submission. This
+    is stated plainly rather than implying the image is being analysed.
+    """
+    stmt = select(Submission).where(Submission.id == submission_id).with_for_update()
+    submission = db.execute(stmt).scalar_one_or_none()
+    if submission is None:
+        raise LookupError(f"Submission {submission_id} not found")
+
+    if submission.client_photo_id is not None:
+        if submission.client_photo_id == client_photo_id:
+            db.commit()  # releases the row lock acquired above
+            return submission, False
+        db.commit()
+        raise PhotoConflictError(submission)
+
+    stored = storage.save(photo_bytes, original_filename)
+    submission.client_photo_id = client_photo_id
+    submission.photo_storage_key = stored.storage_key
+    submission.photo_content_type = content_type
+    submission.photo_original_filename = original_filename
+    submission.photo_size_bytes = stored.size_bytes
     db.commit()
     db.refresh(submission)
     return submission, True

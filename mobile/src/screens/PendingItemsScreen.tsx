@@ -151,6 +151,61 @@ function NoteItem({ item }: { item: LocalCapture }) {
   );
 }
 
+/**
+ * An Explore discovery contribution (Step 16). Same truthful sync/extraction
+ * reporting as NoteItem — it IS a submission and goes through the identical
+ * extraction pipeline — plus two Explore-specific facts: which prompt it
+ * answered (local-only provenance) and whether a photo is attached.
+ *
+ * The photo line reports the LOCAL attachment honestly: once the capture is
+ * uploaded the photo went with it, but before that it is still only on this
+ * device. It never claims the photo was understood — this step does no image
+ * analysis, and the extraction block below reflects the TEXT only.
+ */
+function ExploreItem({ item }: { item: LocalCapture }) {
+  const badge = syncBadge(item.syncStatus);
+  return (
+    <Card style={styles.item}>
+      <View style={styles.itemHeaderRow}>
+        <View style={styles.itemTypeRow}>
+          <Ionicons name="compass-outline" size={13} color={colors.inkFaint} />
+          <Text style={styles.itemType}>Discovery</Text>
+        </View>
+        <Text style={styles.itemDate}>{new Date(item.createdAt).toLocaleDateString()}</Text>
+      </View>
+
+      {item.explorePromptTitle ? (
+        <Text style={styles.itemMetaTop}>In response to: {item.explorePromptTitle}</Text>
+      ) : null}
+
+      <Text style={styles.itemText} numberOfLines={4}>
+        {item.textContent}
+      </Text>
+
+      <View style={styles.itemBadgeRow}>
+        <Badge label={badge.label} tone={badge.tone} icon={badge.icon} />
+        {item.localPhotoUri ? (
+          <Badge
+            label={item.syncStatus === 'uploaded' ? 'Photo sent' : 'Photo attached'}
+            tone={item.syncStatus === 'uploaded' ? 'success' : 'info'}
+            icon="image-outline"
+          />
+        ) : null}
+      </View>
+
+      {item.syncStatus === 'failed' && item.lastSyncError ? (
+        <Text style={styles.nestedErrorText}>{item.lastSyncError}</Text>
+      ) : null}
+
+      {item.serverSubmissionId ? (
+        <ExtractionBlock submissionId={item.serverSubmissionId} />
+      ) : (
+        <Text style={styles.itemMeta}>Send this before it can be understood.</Text>
+      )}
+    </Card>
+  );
+}
+
 function formatDuration(ms: number | null): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return 'duration unknown';
   const totalSeconds = Math.floor(ms / 1000);
@@ -307,8 +362,13 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
 
   const notes = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'note'));
   const voiceCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'voice'));
+  const exploreCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'explore'));
   const sortedLocations = byNeedsAttentionFirst(locations);
-  const isEmpty = notes.length === 0 && voiceCaptures.length === 0 && sortedLocations.length === 0;
+  const isEmpty =
+    notes.length === 0 &&
+    voiceCaptures.length === 0 &&
+    exploreCaptures.length === 0 &&
+    sortedLocations.length === 0;
 
   return (
     <Screen onRefresh={load} refreshing={loading}>
@@ -323,7 +383,7 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
         <EmptyState
           icon="file-tray-outline"
           title="Nothing captured yet"
-          message="Notes, voice updates, and locations you save will show up here."
+          message="Notes, voice updates, discoveries, and locations you save will show up here."
         />
       ) : (
         <>
@@ -339,6 +399,13 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
             <Text style={styles.emptyText}>No voice updates yet.</Text>
           ) : (
             voiceCaptures.map((item) => <VoiceItem key={item.id} item={item} />)
+          )}
+
+          <SectionHeader title="Discoveries" meta={String(exploreCaptures.length)} />
+          {exploreCaptures.length === 0 ? (
+            <Text style={styles.emptyText}>Nothing shared from Explore yet.</Text>
+          ) : (
+            exploreCaptures.map((item) => <ExploreItem key={item.id} item={item} />)
           )}
 
           <SectionHeader title="Locations" meta={String(sortedLocations.length)} />
@@ -367,6 +434,7 @@ const styles = StyleSheet.create({
   itemText: { ...type.body, color: colors.ink, marginBottom: spacing.xs },
   itemBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: 2 },
   itemMeta: { ...type.caption, color: colors.inkFaint, marginTop: spacing.sm, fontStyle: 'italic' },
+  itemMetaTop: { ...type.caption, color: colors.inkFaint, marginBottom: spacing.xs },
   nestedBlock: {
     marginTop: spacing.sm,
     paddingTop: spacing.sm,

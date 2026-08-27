@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 5;
+const DATABASE_VERSION = 6;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -205,7 +205,44 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 5;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 5) { ...; currentDbVersion = 6; }`
+  if (currentDbVersion === 5) {
+    // Step 16 (Explore): photo attachment metadata on the existing
+    // local_capture table, plus the prompt provenance for an Explore
+    // contribution. Purely additive nullable columns, exactly like the v3->v4
+    // audio step — 'note'/'voice'/'location' rows never populate them, so no
+    // existing row changes shape and NO BACKFILL IS NEEDED (a capture that
+    // predates Explore genuinely has no photo and no prompt; NULL is the
+    // truthful value, not a "not yet migrated" placeholder).
+    //
+    // The unique index on client_photo_id is safe to create immediately
+    // precisely BECAUSE no existing row has a value: SQLite treats NULLs as
+    // distinct in a UNIQUE index, so every pre-existing row trivially
+    // satisfies it. (Contrast the v1->v2 step, which had to backfill ids
+    // before its unique indexes could be created.)
+    //
+    // explore_prompt_id / explore_prompt_title record WHICH discovery prompt
+    // the guide was answering. Stored locally only — the backend receives the
+    // contribution as an 'explore' submission and does not model prompts (see
+    // backend/README.md); this exists so the Activity/Explore UI can honestly
+    // show what was asked, not to drive any server behavior.
+    await db.execAsync(`
+      BEGIN TRANSACTION;
+
+      ALTER TABLE local_capture ADD COLUMN local_photo_uri TEXT;
+      ALTER TABLE local_capture ADD COLUMN client_photo_id TEXT;
+      ALTER TABLE local_capture ADD COLUMN photo_content_type TEXT;
+      ALTER TABLE local_capture ADD COLUMN explore_prompt_id TEXT;
+      ALTER TABLE local_capture ADD COLUMN explore_prompt_title TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_local_capture_client_photo_id
+        ON local_capture (client_photo_id);
+
+      COMMIT;
+    `);
+    currentDbVersion = 6;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 6) { ...; currentDbVersion = 7; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

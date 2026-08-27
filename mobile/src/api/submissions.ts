@@ -4,10 +4,12 @@ export interface CreateSubmissionRequest {
   guideId: string;
   /** Makes this call idempotent — see backend Submission.client_submission_id. */
   clientSubmissionId: string;
-  captureType: 'note' | 'voice';
-  /** Required for 'note'. Must be null for 'voice' — the backend rejects a
-   * 'voice' submission that supplies text_content (its content is the audio,
-   * uploaded separately — see api/audio.ts). */
+  captureType: 'note' | 'voice' | 'explore';
+  /** Required for 'note' and 'explore'. Must be null for 'voice' — the backend
+   * rejects a 'voice' submission that supplies text_content (its content is the
+   * audio, uploaded separately — see api/audio.ts). An 'explore' contribution's
+   * photo, when present, is likewise uploaded separately (see api/photos.ts),
+   * but its text is always carried here. */
   textContent: string | null;
   /** ISO-8601, timezone-aware — when the device captured this, not when it's sent. */
   submittedAt: string;
@@ -18,6 +20,15 @@ export interface SubmissionAudioResponse {
   originalFilename: string;
   sizeBytes: number;
   durationSeconds: number | null;
+}
+
+/** Photo metadata for an 'explore' submission (Step 16). No duration field —
+ * a photo has none, and the backend deliberately does not fabricate a shared
+ * shape across the two media kinds. */
+export interface SubmissionPhotoResponse {
+  contentType: string;
+  originalFilename: string;
+  sizeBytes: number;
 }
 
 export interface SubmissionResponse {
@@ -32,6 +43,8 @@ export interface SubmissionResponse {
   updatedAt: string;
   /** Null until audio has actually been uploaded for a 'voice' submission. */
   audio: SubmissionAudioResponse | null;
+  /** Null until a photo has actually been uploaded for an 'explore' submission. */
+  photo: SubmissionPhotoResponse | null;
 }
 
 interface SubmissionAudioResponseWire {
@@ -52,6 +65,13 @@ interface SubmissionResponseWire {
   created_at: string;
   updated_at: string;
   audio: SubmissionAudioResponseWire | null;
+  photo: SubmissionPhotoResponseWire | null;
+}
+
+interface SubmissionPhotoResponseWire {
+  content_type: string;
+  original_filename: string;
+  size_bytes: number;
 }
 
 export function submissionFromWire(wire: SubmissionResponseWire): SubmissionResponse {
@@ -71,6 +91,16 @@ export function submissionFromWire(wire: SubmissionResponseWire): SubmissionResp
           originalFilename: wire.audio.original_filename,
           sizeBytes: wire.audio.size_bytes,
           durationSeconds: wire.audio.duration_seconds,
+        }
+      : null,
+    // `?? null` rather than a bare ternary: a backend that predates Step 16
+    // omits this key entirely, and `undefined` would violate the declared
+    // `| null` contract for every consumer.
+    photo: wire.photo
+      ? {
+          contentType: wire.photo.content_type,
+          originalFilename: wire.photo.original_filename,
+          sizeBytes: wire.photo.size_bytes,
         }
       : null,
   };

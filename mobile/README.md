@@ -1530,3 +1530,142 @@ honestly rather than claimed.
 - No screenshots/visual QA were possible without a device; all "modern,
   polished" claims in this summary describe the code and design tokens
   actually written, not an observed rendering.
+
+## Explore (Step 16)
+
+A new bottom tab: **Home · Explore · Questions · Activity**.
+
+### What Explore is, and how it differs from Questions
+
+> Explore helps us discover knowledge **before** we know we need it.
+> Questions helps us deliberately collect knowledge **once we know** we're missing it.
+
+|  | **Explore** | **Questions** |
+|---|---|---|
+| Feel | Invitation — open, contextual, discovery-led | Obligation — an operational work queue |
+| Prompts come from | The device, built from real backend context | The server, generated from a ranked gap |
+| Persisted server-side? | No | Yes (`Question` + `QuestionAssignment`) |
+| Assigned to you? | No — always available | Yes |
+| Saves as | `explore` capture → `explore` submission | `local_answer` → `answer` submission |
+
+They are deliberately **not** mixed. Explore prompts never enter the Questions
+queue, and assigned questions never appear in Explore.
+
+### Home is now a dashboard, not a queue
+
+The dominant "N questions for you" hero card is **gone** from Home. Home's hero
+now reports *this device's* state (anything waiting to send?), and Questions is
+reachable via a compact shortcut showing a truthful count — or no count at all
+when it hasn't resolved yet, rather than a fabricated placeholder.
+
+### Offline-first flow
+
+```
+Explore prompt -> compose (text, optional photo) -> saved to SQLite ('pending')
+       -> app can be closed / offline for days
+       -> "Sync now" on Home
+       -> POST /submissions (capture_type 'explore')      [idempotent: clientSubmissionId]
+       -> POST /submissions/{id}/photo, only if attached  [idempotent: clientPhotoId]
+       -> marked 'uploaded'
+       -> (explicit) extraction -> Observations -> knowledge lifecycle
+```
+
+Same single sync engine (`src/sync/syncService.ts`) as notes, voice, locations,
+and answers — **no parallel sync system**. `syncOneExploreCapture` mirrors
+`syncOneVoiceCapture`'s two-stage, both-idempotent shape, with one difference:
+the photo is genuinely optional (a voice capture without audio is meaningless;
+a text-only discovery is complete).
+
+Crash/restart recovery is inherited unchanged: `'uploading'` is in
+`SYNCABLE_STATUSES`, so a capture stranded by an app kill is retried rather
+than orphaned.
+
+### Text is always required
+
+Even with a photo attached. The backend turns **text** into observations and
+does no image understanding, so a photo-only contribution could never become
+knowledge. The composer says this plainly instead of accepting a silent dead
+end.
+
+### Prompt generation — on-device, never fabricated
+
+Built in `src/explore/explorePrompts.ts` from two existing endpoints
+(`/guides/{id}/context`, `/guides/{id}/knowledge-state`). No new backend
+surface, no persistence, no LLM call, no polling.
+
+The governing honesty rule: **a prompt may only name a place if the backend
+actually resolved one.** With no location, copy falls back to place-neutral
+wording and the hero says so — Explore never claims "you're near X" on a guess.
+
+The deck mixes:
+- **Grounded prompts** (max 2) built from real gaps the backend reported, each
+  showing *why* it's being asked ("The last weather report here is out of
+  date"). Ordered safety-first, then missing → stale → aging, matching the
+  backend's own urgency ordering.
+- **Open discovery prompts** — photo moments, local stories, cultural context,
+  good finds — rotated by a seed derived from the day and ~1km-rounded
+  coordinates, so the deck feels alive as you move but is stable while you
+  stand still (pull-to-refresh is not a slot machine).
+- **"Share anything"** — a permanent, always-first affordance. A guide must
+  never have to wait for the right card to appear to report something.
+
+### Every state is truthful
+
+| Situation | What Explore shows |
+|---|---|
+| Profile not synced | "Profile not synced yet" — you can still save; it sends later |
+| No location captured | Place-neutral prompts + an honest nudge, never a guessed place |
+| Context loaded | Real place name, real distance, real location age |
+| Fetch failed | `ErrorState` with retry — never a silently empty deck |
+| Items awaiting sync | "N discovery items waiting to send", from local SQLite (works offline) |
+
+Loading state is released in a `finally` on every path, so it can never outlive
+the work it describes.
+
+### Photos
+
+`expo-image-picker` (SDK-pinned `~57.0.14`), with permission strings declared in
+`app.json`. Following the existing microphone/location discipline: permission is
+requested **only** from an explicit user action, denial and cancellation are
+distinct outcomes, and nothing is fabricated on failure.
+
+The picked image is **copied into the app's document directory** before use.
+That matters: the OS picker URI points at a cache location that can be reclaimed
+at any time — exactly the class of bug that made voice notes silently unsendable
+earlier in this project. Copying means the file is still there when sync runs
+days later, after a restart. Images are downscaled/recompressed
+(`quality: 0.6`, EXIF stripped) to stay well inside the backend's 10 MiB cap.
+
+Upload uses `expo-file-system`'s native `File#upload()` — the same proven path
+as audio, deliberately reusing that hard-won fix rather than rediscovering the
+RN `fetch`+`FormData` failure.
+
+### Local schema (v5 → v6)
+
+Five additive nullable columns on `local_capture`: `local_photo_uri`,
+`client_photo_id`, `photo_content_type`, `explore_prompt_id`,
+`explore_prompt_title`; plus `ux_local_capture_client_photo_id`.
+
+**No backfill** — a pre-Step-16 capture genuinely has no photo. The unique index
+is safe to create immediately precisely *because* every existing row is NULL,
+and SQLite treats NULLs as distinct (contrast the v1→v2 step, which had to
+backfill ids first).
+
+`explore_prompt_*` are **local-only provenance** — the backend does not model
+prompts. They exist so Activity can honestly show what was asked.
+
+### Idempotency
+
+Three distinct client-generated ids per Explore contribution with a photo:
+`clientSubmissionId` (the submission), `clientPhotoId` (the photo attachment).
+Both are generated once and never regenerated, so a retry after a lost response
+resolves to the same server state instead of duplicating. `clientPhotoId` is
+`NULL` when no photo is attached — that null is what tells the sync engine there
+is no second upload step.
+
+### Deliberately NOT implemented
+
+Editing or deleting a saved contribution, multiple photos per contribution,
+voice-based Explore contributions (voice capture remains on Home), viewing
+already-uploaded photos back from the server, offline map/tiles, background
+sync, notifications, or any automatic extraction trigger.

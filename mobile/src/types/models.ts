@@ -13,10 +13,23 @@ export type SyncStatus =
   | 'dead_letter';
 
 /**
- * What kind of capture this is. Only 'note' is supported in Step 4 — voice/photo/
- * mixed are future capture types, listed here so the column's meaning is fixed now.
+ * What kind of capture this is.
+ *
+ * - 'note'    — an unprompted text field report (Step 4)
+ * - 'voice'   — an audio recording (Step 7)
+ * - 'explore' — a proactive Explore-tab discovery contribution (Step 16):
+ *               always carries text, and OPTIONALLY a photo attached to the
+ *               same submission. It is its own capture type rather than a flag
+ *               on 'note' because the provenance genuinely differs (a note is
+ *               unprompted; an Explore contribution answers a discovery prompt
+ *               the app surfaced) — and the backend models it the same way, as
+ *               submission_type 'explore'.
+ * - 'photo'/'mixed' — reserved, still not produced by any flow. A photo is
+ *               attached to an 'explore' capture, NOT stored as a standalone
+ *               'photo' capture, so that a contribution is always one
+ *               submission with one extractable text body.
  */
-export type CaptureType = 'note' | 'voice' | 'photo' | 'mixed';
+export type CaptureType = 'note' | 'voice' | 'explore' | 'photo' | 'mixed';
 
 /**
  * A guide profile stored on this device.
@@ -78,6 +91,28 @@ export interface LocalCapture {
   clientAudioId: string | null;
   audioDurationMillis: number | null;
   audioContentType: string | null;
+  /**
+   * Photo fields (Step 16) — only ever set for `captureType === 'explore'`
+   * rows, and even then only when the guide actually attached a photo (an
+   * Explore contribution can be text-only). Always null for note/voice.
+   *
+   * `localPhotoUri` is the on-device file path; the image bytes are never
+   * stored in SQLite, exactly like audio. `clientPhotoId` is a THIRD distinct
+   * stable id (alongside clientSubmissionId and clientAudioId) making the
+   * photo upload step independently idempotent, since it is its own backend
+   * request during sync.
+   */
+  localPhotoUri: string | null;
+  clientPhotoId: string | null;
+  photoContentType: string | null;
+  /**
+   * Which Explore prompt this contribution answered. Local-only provenance —
+   * the backend does not model prompts (see mobile/README.md). Null for every
+   * non-Explore capture, and also for a free-form "share anything" Explore
+   * contribution that wasn't answering a specific prompt.
+   */
+  explorePromptId: string | null;
+  explorePromptTitle: string | null;
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;

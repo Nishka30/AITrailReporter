@@ -5,6 +5,7 @@ import { uploadSubmissionAudio } from '../api/audio';
 import { ApiError, NetworkError } from '../api/client';
 import { createOrGetGuide } from '../api/guides';
 import { createOrGetLocation } from '../api/locations';
+import { uploadSubmissionPhoto } from '../api/photos';
 import { submitAnswer } from '../api/questionAnswers';
 import { createOrGetSubmission } from '../api/submissions';
 import {
@@ -77,6 +78,10 @@ export interface SyncResult {
    * bucket) so the UI can report on each kind without parsing outcome lists. */
   notes: CaptureSyncSummary;
   voice: CaptureSyncSummary;
+  /** Explore discovery contributions (Step 16) — reported separately from
+   * `notes` for the same reason voice is: they are a distinct thing the guide
+   * did, and folding them into "notes uploaded" would misdescribe the work. */
+  explore: CaptureSyncSummary;
   locations: LocationSyncSummary;
   /** Answers to assigned questions (Step 13) — synced independently of
    * notes/voice/locations; one failed answer never blocks the others. */
@@ -103,6 +108,7 @@ function emptyResult(message: string): SyncResult {
     guideError: null,
     notes: emptySummary<CaptureSyncOutcome>(),
     voice: emptySummary<CaptureSyncOutcome>(),
+    explore: emptySummary<CaptureSyncOutcome>(),
     locations: emptySummary<LocationSyncOutcome>(),
     answers: emptySummary<AnswerSyncOutcome>(),
     message,
@@ -204,8 +210,66 @@ async function syncOneVoiceCapture(serverGuideId: string, capture: LocalCapture)
   return submission.id;
 }
 
-/** STEP 2 of the outbox flow: sync one capture (note or voice). Never throws —
- * always resolves. */
+/**
+ * Sync an Explore contribution (Step 16): ONE request if it's text-only, TWO
+ * if it carries a photo — deliberately the same two-stage, both-idempotent
+ * shape as syncOneVoiceCapture above, for the same reasons:
+ *
+ *   1. Create/resolve the server Submission (idempotent on
+ *      clientSubmissionId). Its text_content is what the existing extraction
+ *      pipeline will later turn into observations.
+ *   2. If and only if a photo is attached, upload it against the SEPARATE
+ *      clientPhotoId. If step 1 succeeds and step 2 throws, the capture is
+ *      marked 'failed' and retried from step 1 next sync — safe and cheap,
+ *      because step 1 just returns the existing submission on replay.
+ *
+ * The photo is genuinely optional here, which is the one structural difference
+ * from voice: a voice capture without audio is meaningless, whereas a
+ * text-only Explore contribution is complete and useful on its own.
+ */
+async function syncOneExploreCapture(
+  serverGuideId: string,
+  capture: LocalCapture
+): Promise<string> {
+  const text = (capture.textContent ?? '').trim();
+  if (!text) {
+    // Should be unreachable — createExploreCapture always requires text — but
+    // this is local data, not a network response, so fail loudly rather than
+    // sending an empty submission the backend would reject anyway.
+    throw new Error('This Explore contribution has no text and cannot be sent.');
+  }
+
+  const submission = await createOrGetSubmission({
+    guideId: serverGuideId,
+    clientSubmissionId: capture.clientSubmissionId,
+    captureType: 'explore',
+    textContent: text,
+    submittedAt: capture.createdAt,
+  });
+
+  if (capture.localPhotoUri && capture.clientPhotoId) {
+    // Same honest existence check as voice: a picked photo whose file has been
+    // reclaimed must report that specifically, never as a network failure.
+    const file = new File(capture.localPhotoUri);
+    if (!file.exists) {
+      throw new Error(
+        'The photo for this contribution is no longer on your device. Its text can be ' +
+          'sent, but the photo must be added again.'
+      );
+    }
+    await uploadSubmissionPhoto({
+      submissionId: submission.id,
+      clientPhotoId: capture.clientPhotoId,
+      localUri: capture.localPhotoUri,
+      contentType: capture.photoContentType ?? 'image/jpeg',
+    });
+  }
+
+  return submission.id;
+}
+
+/** STEP 2 of the outbox flow: sync one capture (note, voice, or explore).
+ * Never throws — always resolves. */
 async function syncOneCapture(
   db: SQLiteDatabase,
   serverGuideId: string,
@@ -218,6 +282,8 @@ async function syncOneCapture(
       serverSubmissionId = await syncOneNote(serverGuideId, capture);
     } else if (capture.captureType === 'voice') {
       serverSubmissionId = await syncOneVoiceCapture(serverGuideId, capture);
+    } else if (capture.captureType === 'explore') {
+      serverSubmissionId = await syncOneExploreCapture(serverGuideId, capture);
     } else {
       // Step 7 only ingests notes and voice — a future capture type reaching
       // here means this build genuinely can't sync it yet, not a transient
@@ -292,11 +358,13 @@ async function syncOneAnswer(
 function buildSummaryMessage(
   notes: CaptureSyncSummary,
   voice: CaptureSyncSummary,
+  explore: CaptureSyncSummary,
   locations: LocationSyncSummary,
   answers: AnswerSyncSummary
 ): string {
-  const uploaded = notes.uploaded + voice.uploaded + locations.uploaded + answers.uploaded;
-  const failed = notes.failed + voice.failed + locations.failed + answers.failed;
+  const uploaded =
+    notes.uploaded + voice.uploaded + explore.uploaded + locations.uploaded + answers.uploaded;
+  const failed = notes.failed + voice.failed + explore.failed + locations.failed + answers.failed;
   if (uploaded === 0 && failed === 0) {
     return 'Nothing to sync — everything is already uploaded.';
   }
@@ -306,6 +374,9 @@ function buildSummaryMessage(
   }
   if (voice.uploaded > 0) {
     parts.push(`${voice.uploaded} voice note${voice.uploaded === 1 ? '' : 's'} uploaded`);
+  }
+  if (explore.uploaded > 0) {
+    parts.push(`${explore.uploaded} discovery${explore.uploaded === 1 ? '' : ' items'} uploaded`);
   }
   if (locations.uploaded > 0) {
     parts.push(`${locations.uploaded} location${locations.uploaded === 1 ? '' : 's'} uploaded`);
@@ -348,20 +419,15 @@ async function performSync(db: SQLiteDatabase): Promise<SyncResult> {
   for (const capture of syncableCaptures) {
     captureOutcomes.push(await syncOneCapture(db, serverGuideId, capture));
   }
-  const noteOutcomes = captureOutcomes.filter((o) => o.captureType === 'note');
-  const voiceOutcomes = captureOutcomes.filter((o) => o.captureType === 'voice');
-  const notes: CaptureSyncSummary = {
-    attempted: noteOutcomes.length,
-    uploaded: noteOutcomes.filter((o) => o.status === 'uploaded').length,
-    failed: noteOutcomes.filter((o) => o.status === 'failed').length,
-    outcomes: noteOutcomes,
-  };
-  const voice: CaptureSyncSummary = {
-    attempted: voiceOutcomes.length,
-    uploaded: voiceOutcomes.filter((o) => o.status === 'uploaded').length,
-    failed: voiceOutcomes.filter((o) => o.status === 'failed').length,
-    outcomes: voiceOutcomes,
-  };
+  const summarize = (outcomes: CaptureSyncOutcome[]): CaptureSyncSummary => ({
+    attempted: outcomes.length,
+    uploaded: outcomes.filter((o) => o.status === 'uploaded').length,
+    failed: outcomes.filter((o) => o.status === 'failed').length,
+    outcomes,
+  });
+  const notes = summarize(captureOutcomes.filter((o) => o.captureType === 'note'));
+  const voice = summarize(captureOutcomes.filter((o) => o.captureType === 'voice'));
+  const explore = summarize(captureOutcomes.filter((o) => o.captureType === 'explore'));
 
   // GPS locations — same eligibility/ordering/independence rules as captures, just
   // against the GuideLocation endpoint instead of submissions.
@@ -397,9 +463,10 @@ async function performSync(db: SQLiteDatabase): Promise<SyncResult> {
     guideError: null,
     notes,
     voice,
+    explore,
     locations,
     answers,
-    message: buildSummaryMessage(notes, voice, locations, answers),
+    message: buildSummaryMessage(notes, voice, explore, locations, answers),
   };
 }
 

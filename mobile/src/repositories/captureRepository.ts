@@ -14,6 +14,11 @@ interface LocalCaptureRow {
   client_audio_id: string | null;
   audio_duration_millis: number | null;
   audio_content_type: string | null;
+  local_photo_uri: string | null;
+  client_photo_id: string | null;
+  photo_content_type: string | null;
+  explore_prompt_id: string | null;
+  explore_prompt_title: string | null;
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
@@ -44,6 +49,11 @@ function mapRow(row: LocalCaptureRow): LocalCapture {
     clientAudioId: row.client_audio_id,
     audioDurationMillis: row.audio_duration_millis,
     audioContentType: row.audio_content_type,
+    localPhotoUri: row.local_photo_uri,
+    clientPhotoId: row.client_photo_id,
+    photoContentType: row.photo_content_type,
+    explorePromptId: row.explore_prompt_id,
+    explorePromptTitle: row.explore_prompt_title,
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
@@ -128,6 +138,67 @@ export async function createVoiceCapture(
   );
   if (!row) {
     throw new Error('Failed to read back the newly created local voice capture.');
+  }
+  return mapRow(row);
+}
+
+/**
+ * Stores an Explore discovery contribution locally with sync_status =
+ * 'pending' (Step 16). Purely local — does not call the backend and does not
+ * touch the photo file itself, which must already exist on disk at
+ * `localPhotoUri` before this is called (the picker copies it into app
+ * storage first — see src/photo/photoPickerService.ts).
+ *
+ * Always carries text: `textContent` is what becomes observations through the
+ * existing extraction pipeline, so an Explore contribution is never
+ * photo-only. The photo is optional durable evidence attached to the same
+ * submission.
+ *
+ * Generates clientSubmissionId always, and clientPhotoId ONLY when a photo is
+ * actually attached — a null clientPhotoId is what tells the sync engine there
+ * is no second upload step to perform for this row.
+ */
+export async function createExploreCapture(
+  db: SQLiteDatabase,
+  localGuideId: number,
+  textContent: string,
+  options: {
+    localPhotoUri?: string | null;
+    photoContentType?: string | null;
+    promptId?: string | null;
+    promptTitle?: string | null;
+  } = {}
+): Promise<LocalCapture> {
+  const now = new Date().toISOString();
+  const clientSubmissionId = generateClientId();
+  const localPhotoUri = options.localPhotoUri ?? null;
+  const clientPhotoId = localPhotoUri ? generateClientId() : null;
+
+  const result = await db.runAsync(
+    `INSERT INTO local_capture
+       (local_guide_id, client_submission_id, capture_type, text_content,
+        local_photo_uri, client_photo_id, photo_content_type,
+        explore_prompt_id, explore_prompt_title,
+        sync_status, created_at, updated_at)
+     VALUES (?, ?, 'explore', ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+    localGuideId,
+    clientSubmissionId,
+    textContent,
+    localPhotoUri,
+    clientPhotoId,
+    localPhotoUri ? (options.photoContentType ?? null) : null,
+    options.promptId ?? null,
+    options.promptTitle ?? null,
+    now,
+    now
+  );
+
+  const row = await db.getFirstAsync<LocalCaptureRow>(
+    'SELECT * FROM local_capture WHERE id = ?',
+    result.lastInsertRowId
+  );
+  if (!row) {
+    throw new Error('Failed to read back the newly created Explore contribution.');
   }
   return mapRow(row);
 }

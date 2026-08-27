@@ -18,7 +18,11 @@ from app.services import knowledge_types as knowledge_type_service
 from app.services import observations as observation_service
 from app.services import source_text as source_text_service
 from app.services.extraction.anthropic_provider import ExtractionProviderError, extract_observations
-from app.services.extraction.validation import InvalidExtractionOutputError, validate_llm_output
+from app.services.extraction.validation import (
+    InvalidExtractionOutputError,
+    ValidatedObservation,
+    validate_llm_output,
+)
 
 
 def get_extraction_by_submission_id(db: Session, submission_id: UUID) -> Extraction | None:
@@ -195,9 +199,34 @@ def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]
         return _mark_failed(db, extraction, exc.message), "failed"
 
     try:
-        validated_observations = validate_llm_output(raw_output, allowed_types)
+        validated_observations, validated_new_types = validate_llm_output(
+            raw_output, allowed_types
+        )
     except InvalidExtractionOutputError as exc:
         return _mark_failed(db, extraction, exc.message), "failed"
+
+    # Step 16 (Case B): resolve each validated proposal into a real
+    # KnowledgeTypeConfig row FIRST, then treat its observation exactly like any
+    # other. This happens inside the same transaction as the observation inserts
+    # and the 'completed' flip below, so a crash can never leave a new knowledge
+    # type behind with no observation to justify it -- or observations behind
+    # for an extraction that isn't marked complete.
+    #
+    # create_or_get_dynamic_type flushes but never commits, so it composes with
+    # that single final commit. A concurrent extraction proposing the same
+    # category is resolved inside it via IntegrityError-catch-and-refetch.
+    for proposal in validated_new_types:
+        config, _created = knowledge_type_service.create_or_get_dynamic_type(
+            db, proposal.policy
+        )
+        validated_observations.append(
+            ValidatedObservation(
+                knowledge_type_id=config.id,
+                value=proposal.value,
+                confidence=proposal.confidence,
+                evidence=proposal.evidence,
+            )
+        )
 
     for obs in validated_observations:
         db.add(

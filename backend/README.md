@@ -1761,6 +1761,175 @@ before starting: `ix_observations_knowledge_type_id_observed_at` and
 lookup query; aging classification is pure Python arithmetic on the
 already-fetched row, so no new index was needed or added.
 
+## Explore & a growing knowledge system (Step 16)
+
+Step 16 adds a second way knowledge enters the system, and — more
+significantly — lets the set of knowledge *categories* itself grow.
+
+### Two collection modes, deliberately separate
+
+| | **Questions** (Steps 12–13) | **Explore** (Step 16) |
+|---|---|---|
+| Purpose | Collect knowledge we already know is missing | Discover knowledge before we know we need it |
+| Trigger | System-generated from a ranked gap | Guide opens the Explore tab |
+| Persisted? | Yes — `Question` + `QuestionAssignment` | No — prompts are built on the device |
+| Becomes | `Submission(submission_type='answer')` | `Submission(submission_type='explore')` |
+| Assigned? | Yes, to one guide | No — always available |
+
+Both converge on the SAME pipeline: a `Submission` with `raw_text`, extracted
+by the existing `POST /api/v1/submissions/{id}/extract` into `Observation`
+rows. Explore required **no second extraction system** — adding `'explore'` to
+one tuple in `app/services/source_text.py` was enough.
+
+Explore prompts are generated **client-side** from context the backend already
+exposes (`/guides/{id}/context`, `/guides/{id}/knowledge-state`). No new
+endpoint, no prompt table, no prompt lifecycle, no LLM call. See
+`mobile/src/explore/explorePrompts.ts` for the full rationale.
+
+### The full product loop
+
+```
+Explore contribution  ->  extraction  ->  existing type?  -> Observation
+                                       \
+                                        -> new reusable  -> KnowledgeTypeConfig
+                                           category         + Observation
+                                                                  |
+       fresh -> aging -> stale -> ranked gap -> Question ---------+
+                                                    |
+                                              Questions tab
+                                                    |
+                                              guide answers
+                                                    |
+                                          Submission -> extraction
+                                                    |
+                                            fresh knowledge again
+```
+
+### Case A / B / C — when a new knowledge type is created
+
+Extraction now returns two arrays: `observations` (against existing types) and
+`new_knowledge_types` (proposed categories).
+
+- **Case A — fits an existing type.** Normal `Observation` against it. If the
+  model proposes a "new" category whose *normalized* name matches an existing
+  active type (e.g. `Trail-Condition` → `trail_condition`), the observation is
+  silently recorded against that existing type rather than rejecting the
+  extraction.
+- **Case B — a genuinely new, reusable category.** A `KnowledgeTypeConfig` row
+  is created (`active=True`, so it immediately joins the lifecycle) plus its
+  `Observation`.
+- **Case C — random/personal/non-reusable.** Nothing is created. `"I drank tea
+  at 4 PM"` produces zero observations and zero types (verified).
+
+**The criterion**, enforced in the system prompt: it must be a reusable
+*category* (not a one-off fact), about the *place or its conditions*, that the
+system could sensibly ask a different guide about again in future.
+
+### The LLM is never the database authority
+
+This is the load-bearing safety property. The model may only **select one value
+from each of three fixed, application-owned enumerations**. It can never supply
+a number, a boolean, or any policy value:
+
+| Model chooses | Application decides (`app/services/knowledge_type_policy.py`) |
+|---|---|
+| `volatility`: `hours` / `days` / `weeks` / `months` | `freshness_window_hours`, `aging_threshold_hours` |
+| `scope`: `point` / `local` / `area` | `geographic_relevance_radius_meters` |
+| `significance`: `safety` / `practical` / `enrichment` | `safety_critical`, `default_priority` |
+
+Profile values are anchored to the four hand-seeded types, so a dynamic type
+lands in the same value space as a hand-tuned one:
+
+```
+hours  -> 6h / 3h     (anchored on weather)        point -> 500m    (obstruction)
+days   -> 72h / 24h   (anchored on trail_condition) local -> 2000m  (trail_condition)
+weeks  -> 336h / 168h                               area  -> 10000m (weather)
+months -> 2160h / 720h
+safety -> safety_critical=True,  priority 5   practical -> False, 3   enrichment -> False, 1
+```
+
+Additional deterministic guards, all in application code:
+
+- **Name normalization** — `"Parking Availability"`, `"parking-availability"`,
+  and `"parking  availability"` all collapse to `parking_availability`, which
+  is what makes duplicate detection real.
+- **Reserved names** — the four seeded types can never be redefined.
+- **Hard cap** — at most `MAX_NEW_TYPES_PER_EXTRACTION` (2) new types per
+  extraction.
+- **Unknown enum value → reject the whole extraction.** Never a fallback guess.
+- **All-or-nothing** — one malformed proposal rejects the entire extraction
+  rather than persisting the observations that happened to be fine.
+- **Intra-response dedup** — two proposals normalizing to the same name are
+  collapsed, never inserted twice.
+
+**Honest limitation:** the application validates *structure*, not *semantics*.
+It cannot itself judge whether a category is genuinely reusable — that judgement
+lives in the prompt. The cap and the reserved list bound the blast radius if the
+model misjudges; they do not eliminate it. Auditing
+`knowledge_type_config` occasionally is expected.
+
+### Concurrency & idempotency
+
+`create_or_get_dynamic_type` uses **IntegrityError-catch-and-refetch**, not
+`SELECT ... FOR UPDATE` — this is an INSERT race, and you cannot lock a row that
+does not exist yet. The DB unique constraint on `knowledge_type` is the real
+guarantee. *Verified with 8 genuinely concurrent threads: exactly one
+`created=True`, all 8 returned the same id, exactly one row.*
+
+Type creation happens **inside the same transaction** as the observation inserts
+and the `completed` flip, so a crash can never leave a new type with no
+observation, or observations under an incomplete extraction.
+
+### `active` semantics
+
+An existing type is reused whether active or not, and an inactive one is
+**never reactivated** — `active` is a human decision an LLM proposal must not
+undo. The observation is still recorded (never discarded); it simply does not
+participate in knowledge-state evaluation until an administrator reactivates
+the type.
+
+### Photos
+
+`POST /api/v1/submissions/{id}/photo`, restricted to `explore` submissions.
+Mirrors the audio attachment exactly: idempotent on `client_photo_id` (a third
+distinct client id), row-locked, server-generated storage key, client filename
+never used as any part of a path.
+
+Validation (`app/services/photo_validation.py`) adds a **magic-byte check** on
+top of the content-type/extension allow-list — image formats have short,
+reliable signatures, so a text file renamed `.jpg` is rejected. (Audio has no
+equivalently simple story, which is why Step 7 documented that check as
+deferred rather than faking one.)
+
+**A photo never becomes an observation.** This step does no image
+understanding. An Explore contribution always carries the guide's own text, and
+that text is what extraction reads. The photo is durable evidence attached to
+the same submission — the mobile copy says so plainly rather than implying the
+image is analysed.
+
+Storage was generalized (`MediaStorage` / `LocalFilesystemMediaStorage`) with
+`AudioStorage`/`StoredAudio`/`LocalFilesystemAudioStorage` kept as aliases, so
+no existing call site changed. Photos use a separate configured directory
+(`photo_storage_dir`) so the two can be given different operational treatment.
+
+### Migration
+
+`386c20775143` adds the five `photo_*` columns plus
+`uq_submissions_client_photo_id`. Purely additive and fully nullable — **no
+backfill**, because a pre-Step-16 submission genuinely has no photo (NULL is
+the truthful value, not a placeholder). The unique constraint is named
+explicitly rather than left to autogenerate's `None`, which would have produced
+an undroppable constraint and a broken `downgrade()`. Upgrade → downgrade →
+upgrade round-trip verified against real PostgreSQL.
+
+### Deliberately NOT implemented in Step 16
+
+Automatic/background extraction (still the explicit `POST .../extract`),
+prompt persistence, LLM-generated prompts, image understanding/vision,
+knowledge-type merging or retirement tooling, an admin UI for reviewing
+dynamically created types, reassignment, notifications, embeddings, vector
+search, RAG, or any background worker/queue.
+
 ## Project layout
 
 ```
