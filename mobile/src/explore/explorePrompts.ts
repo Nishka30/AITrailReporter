@@ -45,6 +45,17 @@ export interface ExplorePrompt {
   body: string;
   /** Placeholder for the compose field — sets the expected shape of an answer. */
   placeholder: string;
+  /**
+   * Invitation shown on the voice-note control (Step 17), phrased for THIS
+   * prompt so recording feels like answering the question rather than
+   * operating a generic widget.
+   *
+   * Governed by the same honesty rule as every other line here: it may only
+   * name a place when the backend actually resolved one, and it never implies
+   * the app knows something it doesn't. It is derived from the prompt the guide
+   * is already looking at — never independently invented.
+   */
+  voiceCopy: string;
   /** True when this prompt is specifically asking for a picture. Drives the
    * compose screen opening with the photo actions foregrounded. */
   wantsPhoto: boolean;
@@ -61,6 +72,7 @@ interface Template {
   title: string;
   body: (place: string, hasRealPlace: boolean) => string;
   placeholder: string;
+  voiceCopy: (place: string, hasRealPlace: boolean) => string;
   wantsPhoto: boolean;
 }
 
@@ -73,6 +85,8 @@ const TEMPLATES: Template[] = [
         ? `How does ${place} actually look right now? A photo tells the next guide more than a forecast can.`
         : 'How does it look where you are right now? A photo tells the next guide more than a forecast can.',
     placeholder: 'Say what the photo shows…',
+    voiceCopy: (place, real) =>
+      real ? `Describe ${place} out loud` : 'Tell us what it looks like right now',
     wantsPhoto: true,
   },
   {
@@ -83,6 +97,7 @@ const TEMPLATES: Template[] = [
         ? `You're near ${place}. What stands out about the conditions here at the moment?`
         : "What stands out about the conditions where you're standing right now?",
     placeholder: 'Weather, ground, water, anything you notice…',
+    voiceCopy: () => 'Say what the conditions are like',
     wantsPhoto: false,
   },
   {
@@ -93,6 +108,7 @@ const TEMPLATES: Template[] = [
         ? `Do people here tell a story about ${place} that a visitor would never find in a guidebook?`
         : 'Is there a story about this place that a visitor would never find in a guidebook?',
     placeholder: 'What locals say about this place…',
+    voiceCopy: () => 'Share the story in your own words',
     wantsPhoto: false,
   },
   {
@@ -101,6 +117,7 @@ const TEMPLATES: Template[] = [
     body: () =>
       'Noticed something today another traveller would genuinely want to know before they set out?',
     placeholder: "Anything you'd want to be told yourself…",
+    voiceCopy: () => 'Tell us what you noticed',
     wantsPhoto: false,
   },
   {
@@ -111,6 +128,7 @@ const TEMPLATES: Template[] = [
         ? `What do most visitors walk straight past at ${place} without realising it matters?`
         : 'What do most visitors walk straight past here without realising it matters?',
     placeholder: 'The thing people overlook…',
+    voiceCopy: () => 'Say what people walk past',
     wantsPhoto: false,
   },
   {
@@ -119,6 +137,7 @@ const TEMPLATES: Template[] = [
     body: () =>
       'Found somewhere worth stopping — food, shelter, water, a view, a person worth knowing?',
     placeholder: 'What you found and why it is worth it…',
+    voiceCopy: () => 'Tell us what you found',
     wantsPhoto: false,
   },
 ];
@@ -203,6 +222,7 @@ export function buildPrompts(
         ? `You're near ${placeLabel} — what's the ${gap.displayName.toLowerCase()} like right now?`
         : `What's the ${gap.displayName.toLowerCase()} like where you are right now?`,
       placeholder: `Describe the ${gap.displayName.toLowerCase()} you can see…`,
+      voiceCopy: `Tell us about the ${gap.displayName.toLowerCase()} here`,
       wantsPhoto: false,
       reason: describeGap(gap),
     });
@@ -223,6 +243,7 @@ export function buildPrompts(
       title: template.title,
       body: template.body(placeLabel, hasRealPlace),
       placeholder: template.placeholder,
+      voiceCopy: template.voiceCopy(placeLabel, hasRealPlace),
       wantsPhoto: template.wantsPhoto,
       reason: null,
     });
@@ -241,6 +262,7 @@ export const FREE_FORM_PROMPT: ExplorePrompt = {
   title: 'Share anything',
   body: "Seen something we didn't think to ask about? Tell us in your own words.",
   placeholder: 'Anything worth recording…',
+  voiceCopy: 'Say it in your own words',
   wantsPhoto: false,
   reason: null,
 };

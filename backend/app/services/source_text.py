@@ -17,8 +17,9 @@ class EmptySourceTextError(SourceTextError):
 
 
 class TranscriptionMissingError(SourceTextError):
-    """A 'voice' submission has no Transcription row yet -- transcription was
-    never triggered (POST .../transcribe was never called)."""
+    """An audio-bearing submission ('voice', or a voice-only 'explore') has no
+    Transcription row yet -- transcription was never triggered (POST
+    .../transcribe was never called)."""
 
 
 class TranscriptionNotReadyError(SourceTextError):
@@ -51,13 +52,35 @@ def resolve_source_text(db: Session, submission: Submission) -> str:
     # "do not duplicate extraction logic" requirement. This is precisely why
     # Explore needed no second extraction pipeline: making it a Submission with
     # raw_text was enough for the whole existing chain to work unchanged.
-    if submission.submission_type in ("note", "answer", "explore"):
+    if submission.submission_type in ("note", "answer"):
         text = (submission.raw_text or "").strip()
         if not text:
             raise EmptySourceTextError()
         return text
 
-    if submission.submission_type == "voice":
+    # 'explore' (Step 16, extended in Step 17) carries its content in raw_text
+    # like a note, AND/OR in a voice note like a 'voice' submission. Text wins
+    # when present: it is what the guide actually typed, needs no provider call,
+    # and is available immediately.
+    #
+    # A voice-only Explore contribution falls through to the SAME transcription
+    # branch a 'voice' submission uses -- not a parallel path. That is the whole
+    # reason Explore voice needed no new extraction pipeline: once the audio is
+    # on a Submission, every existing downstream stage already knows what to do
+    # with it, and each "not ready yet" reason keeps its own honest, pre-existing
+    # error type rather than collapsing into a generic failure.
+    if submission.submission_type == "explore":
+        text = (submission.raw_text or "").strip()
+        if text:
+            return text
+        if submission.audio_storage_key is None:
+            # Neither text nor audio. Accepted at creation time because audio
+            # arrives in a separate later request (see schemas/submission.py) --
+            # this is the honest report that nothing extractable ever landed.
+            raise EmptySourceTextError()
+        # Falls through to the shared transcription resolution below.
+
+    if submission.submission_type in ("voice", "explore"):
         transcription = transcription_service.get_transcription_by_submission_id(
             db, submission.id
         )

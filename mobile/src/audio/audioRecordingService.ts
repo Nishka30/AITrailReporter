@@ -88,6 +88,27 @@ export async function startRecording(recorder: AudioRecorder): Promise<StartReco
 }
 
 /**
+ * Returns the audio session to a playback-friendly mode (Step 17).
+ *
+ * Necessary because startRecording() sets `allowsRecording: true`, and on iOS
+ * that routes output to the quiet earpiece speaker rather than the loudspeaker
+ * — so playing a just-finished recording back would be almost inaudible. Called
+ * after a recording is stopped, and before previewing one, wherever the app
+ * offers playback.
+ *
+ * Best-effort by design: if it fails, playback may simply be quieter. Throwing
+ * would fail a recording the guide has already successfully made, which is a
+ * far worse outcome than suboptimal routing.
+ */
+export async function restorePlaybackAudioMode(): Promise<void> {
+  try {
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+  } catch (err) {
+    console.error('[audioRecordingService] Failed to restore playback audio mode:', err);
+  }
+}
+
+/**
  * Stops recording and returns a stable description of the resulting audio file.
  * `lastKnownDurationMillis` is whatever the caller's live recorder state (from
  * useAudioRecorderState) last reported while recording was in progress — passed

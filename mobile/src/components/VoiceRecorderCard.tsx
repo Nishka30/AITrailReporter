@@ -6,6 +6,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
 import { RECORDING_OPTIONS, startRecording, stopRecording } from '../audio/audioRecordingService';
+import { formatDurationMillis as formatDuration } from '../audio/duration';
 import { createVoiceCapture } from '../repositories/captureRepository';
 import { colors, radii, spacing, type } from '../theme/theme';
 import Card from './ui/Card';
@@ -19,14 +20,6 @@ type Props = {
 };
 
 type UiState = 'idle' | 'recording' | 'saving';
-
-function formatDuration(ms: number | null): string {
-  if (ms == null || !Number.isFinite(ms) || ms < 0) return '0:00';
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
 
 /**
  * The recorder instance MUST be created via expo-audio's useAudioRecorder hook,

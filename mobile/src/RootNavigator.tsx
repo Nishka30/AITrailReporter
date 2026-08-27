@@ -14,11 +14,12 @@ import ExploreContributeScreen from './screens/ExploreContributeScreen';
 import ExploreScreen from './screens/ExploreScreen';
 import HomeScreen from './screens/HomeScreen';
 import PendingItemsScreen from './screens/PendingItemsScreen';
+import ProfileScreen from './screens/ProfileScreen';
 import QuestionsScreen from './screens/QuestionsScreen';
 import SetupScreen from './screens/SetupScreen';
 import type { LocalGuide } from './types/models';
 
-type PushedScreen = 'createNote' | 'answerQuestion' | 'exploreContribute' | null;
+type PushedScreen = 'createNote' | 'answerQuestion' | 'exploreContribute' | 'profile' | null;
 
 /**
  * Navigation shell (Step 15): a persistent bottom TabBar (Home / Questions /
@@ -112,6 +113,22 @@ export default function RootNavigator() {
     );
   }
 
+  if (pushed === 'profile') {
+    return (
+      <ProfileScreen
+        guide={guide}
+        // Re-reads the guide row before closing, so the Home avatar, the
+        // greeting and every initial reflect the save immediately. Without
+        // this the navigator would keep serving the stale `guide` object it
+        // loaded at mount.
+        onDone={async () => {
+          await reloadGuide();
+          closePushed('home');
+        }}
+      />
+    );
+  }
+
   if (pushed === 'exploreContribute' && selectedPrompt) {
     return (
       <ExploreContributeScreen
@@ -132,6 +149,7 @@ export default function RootNavigator() {
             onViewQuestions={() => goToTab('questions')}
             onViewExplore={() => goToTab('explore')}
             onViewActivity={() => goToTab('activity')}
+            onOpenProfile={() => setPushed('profile')}
             refreshKey={refreshKey}
           />
         ) : activeTab === 'explore' ? (

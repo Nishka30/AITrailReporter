@@ -6,7 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.schemas.submission import SubmissionCreate, SubmissionRead
+from app.schemas.submission import (
+    AUDIO_CAPABLE_SUBMISSION_TYPES,
+    SubmissionCreate,
+    SubmissionRead,
+)
 from app.services import guides as guide_service
 from app.services import submissions as submission_service
 from app.services.audio_validation import InvalidAudioUploadError, validate_audio_upload
@@ -50,14 +54,22 @@ async def upload_submission_audio(
     duration_seconds: float | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    """Uploads and durably attaches audio to a 'voice' submission created via
-    POST /api/v1/submissions. Idempotent on client_audio_id (a second, distinct
-    stable id from client_submission_id — see Submission.client_audio_id): a
-    retried request with the same client_audio_id returns the existing reference
-    (200) instead of storing a duplicate file; the same submission with a
-    DIFFERENT client_audio_id is rejected with 409. See
+    """Uploads and durably attaches audio to a 'voice' or 'explore' submission
+    created via POST /api/v1/submissions. Idempotent on client_audio_id (a
+    second, distinct stable id from client_submission_id — see
+    Submission.client_audio_id): a retried request with the same client_audio_id
+    returns the existing reference (200) instead of storing a duplicate file; the
+    same submission with a DIFFERENT client_audio_id is rejected with 409. See
     services/submissions.py:attach_audio_to_submission for the full idempotency
-    and race-safety strategy."""
+    and race-safety strategy.
+
+    'explore' was added in Step 17 (voice notes on Explore contributions). It
+    needed NO new columns, table, or storage path: Submission's audio_* columns
+    and photo_* columns were already independent of each other (see
+    db/models/submission.py), so an Explore contribution can now carry text, a
+    photo, and a voice note on ONE submission. Deliberately still an allow-list
+    rather than "any type": accepting audio on a 'note' or 'answer' submission
+    would create a state no flow produces, stores, or renders."""
     try:
         uuid_module.UUID(client_audio_id)
     except ValueError:
@@ -66,10 +78,11 @@ async def upload_submission_audio(
     submission = submission_service.get_submission(db, submission_id)
     if submission is None:
         raise HTTPException(status_code=404, detail="Submission not found")
-    if submission.submission_type != "voice":
+    if submission.submission_type not in AUDIO_CAPABLE_SUBMISSION_TYPES:
         raise HTTPException(
             status_code=400,
-            detail="Audio can only be attached to a submission with capture_type 'voice'",
+            detail="Audio can only be attached to a submission with capture_type "
+            "'voice' or 'explore'",
         )
 
     # Read at most one byte past the configured cap: enough to detect an oversized

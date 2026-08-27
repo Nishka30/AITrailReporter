@@ -3,7 +3,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { uploadSubmissionAudio } from '../api/audio';
 import { ApiError, NetworkError } from '../api/client';
-import { createOrGetGuide } from '../api/guides';
+import { createOrGetGuide, updateGuideProfile } from '../api/guides';
 import { createOrGetLocation } from '../api/locations';
 import { uploadSubmissionPhoto } from '../api/photos';
 import { submitAnswer } from '../api/questionAnswers';
@@ -20,7 +20,11 @@ import {
   markCaptureUploaded,
   markCaptureUploading,
 } from '../repositories/captureRepository';
-import { getCurrentLocalGuide, setServerGuideId } from '../repositories/guideRepository';
+import {
+  getCurrentLocalGuide,
+  markProfileSynced,
+  setServerGuideId,
+} from '../repositories/guideRepository';
 import {
   listSyncableLocations,
   markLocationFailed,
@@ -74,6 +78,11 @@ export interface SyncResult {
   /** True once the guide has (or already had) a serverGuideId after this run. */
   guideSynced: boolean;
   guideError: string | null;
+  /** Step 17: why the guide's locally-edited name/phone could not be pushed,
+   * or null if there was nothing to push or the push succeeded. Reported
+   * separately from `guideError` because it is NOT fatal — the rest of the sync
+   * runs regardless, and the edit stays saved locally and retries next time. */
+  profileError: string | null;
   /** Text notes only — kept distinct from `voice` (not a merged "captures"
    * bucket) so the UI can report on each kind without parsing outcome lists. */
   notes: CaptureSyncSummary;
@@ -106,6 +115,7 @@ function emptyResult(message: string): SyncResult {
     ranAt: new Date().toISOString(),
     guideSynced: false,
     guideError: null,
+    profileError: null,
     notes: emptySummary<CaptureSyncOutcome>(),
     voice: emptySummary<CaptureSyncOutcome>(),
     explore: emptySummary<CaptureSyncOutcome>(),
@@ -116,6 +126,43 @@ function emptyResult(message: string): SyncResult {
 }
 
 type GuideResolution = { serverGuideId: string } | { error: string };
+
+/**
+ * STEP 1b of the outbox flow (Step 17): push locally-edited profile fields.
+ *
+ * Runs only when the guide has local edits pending (`profileDirty`) AND already
+ * exists on the server — a guide created during THIS run already carried the
+ * current name/phone in its creation request, so there is nothing to push.
+ *
+ * Never throws: a failed profile push must not block notes, voice, discoveries,
+ * locations or answers from syncing. The dirty flag simply stays set and the
+ * push is retried on the next sync — the same "keep local truth, retry later"
+ * rule every other record in this outbox follows. Returns an error message for
+ * honest reporting, or null on success/nothing-to-do.
+ *
+ * Only name and phone_number are sent. The About text and profile photo are
+ * local-only and are never transmitted (see api/guides.ts).
+ */
+async function pushProfileIfDirty(
+  db: SQLiteDatabase,
+  guide: LocalGuide,
+  serverGuideId: string
+): Promise<string | null> {
+  if (!guide.profileDirty) return null;
+  try {
+    await updateGuideProfile({
+      serverGuideId,
+      name: guide.name,
+      phoneNumber: guide.phoneNumber,
+    });
+    // Cleared only after the server CONFIRMED the change — never optimistically.
+    await markProfileSynced(db, guide.id);
+    return null;
+  } catch (err) {
+    console.error('[syncService] Failed to push profile changes:', err);
+    return describeError(err);
+  }
+}
 
 /** STEP 1 of the outbox flow: ensure the guide exists on the backend. */
 async function ensureServerGuideId(
@@ -232,36 +279,69 @@ async function syncOneExploreCapture(
   capture: LocalCapture
 ): Promise<string> {
   const text = (capture.textContent ?? '').trim();
-  if (!text) {
-    // Should be unreachable — createExploreCapture always requires text — but
-    // this is local data, not a network response, so fail loudly rather than
-    // sending an empty submission the backend would reject anyway.
-    throw new Error('This Explore contribution has no text and cannot be sent.');
+  const hasAudio = Boolean(capture.localAudioUri && capture.clientAudioId);
+  if (!text && !hasAudio) {
+    // Should be unreachable — createExploreCapture rejects this — but this is
+    // local data, not a network response, so fail loudly rather than sending a
+    // submission that could never produce knowledge.
+    throw new Error('This Explore contribution has no description and no voice note.');
+  }
+
+  // Both media files are checked for existence BEFORE the submission is
+  // created. Doing it up front means a contribution whose media the OS has
+  // reclaimed fails with its own specific message without first creating a
+  // server submission that would then permanently lack the attachment it was
+  // supposed to carry. (Order matters here in a way it doesn't for voice
+  // notes, which have exactly one attachment.)
+  if (capture.localAudioUri && !new File(capture.localAudioUri).exists) {
+    throw new Error(
+      'The voice note for this contribution is no longer on your device (it may have been ' +
+        'cleared by the OS, or the app was reinstalled). Record it again to send this.'
+    );
+  }
+  if (capture.localPhotoUri && !new File(capture.localPhotoUri).exists) {
+    throw new Error(
+      'The photo for this contribution is no longer on your device. Add the photo again to ' +
+        'send this.'
+    );
   }
 
   const submission = await createOrGetSubmission({
     guideId: serverGuideId,
     clientSubmissionId: capture.clientSubmissionId,
+    // A voice-only contribution genuinely has no text. Sending null (rather
+    // than "") is what the backend expects, and its transcript becomes the
+    // source text instead (see backend services/source_text.py).
     captureType: 'explore',
-    textContent: text,
+    textContent: text || null,
     submittedAt: capture.createdAt,
   });
 
+  // Each attachment is its own idempotent request keyed on its own client id,
+  // so a retry after any single stage's response is lost re-runs the whole
+  // chain safely: submission creation replays to the existing submission, and
+  // an already-attached photo/audio replays to the existing attachment rather
+  // than duplicating it.
   if (capture.localPhotoUri && capture.clientPhotoId) {
-    // Same honest existence check as voice: a picked photo whose file has been
-    // reclaimed must report that specifically, never as a network failure.
-    const file = new File(capture.localPhotoUri);
-    if (!file.exists) {
-      throw new Error(
-        'The photo for this contribution is no longer on your device. Its text can be ' +
-          'sent, but the photo must be added again.'
-      );
-    }
     await uploadSubmissionPhoto({
       submissionId: submission.id,
       clientPhotoId: capture.clientPhotoId,
       localUri: capture.localPhotoUri,
       contentType: capture.photoContentType ?? 'image/jpeg',
+    });
+  }
+
+  if (capture.localAudioUri && capture.clientAudioId) {
+    // Exactly the same call a 'voice' capture makes — one audio upload path for
+    // the whole app. The backend accepts it on an 'explore' submission and
+    // creates the Transcription tracking row atomically, identically to voice.
+    await uploadSubmissionAudio({
+      submissionId: submission.id,
+      clientAudioId: capture.clientAudioId,
+      localUri: capture.localAudioUri,
+      contentType: capture.audioContentType ?? 'audio/m4a',
+      durationSeconds:
+        capture.audioDurationMillis != null ? capture.audioDurationMillis / 1000 : null,
     });
   }
 
@@ -360,13 +440,16 @@ function buildSummaryMessage(
   voice: CaptureSyncSummary,
   explore: CaptureSyncSummary,
   locations: LocationSyncSummary,
-  answers: AnswerSyncSummary
+  answers: AnswerSyncSummary,
+  profileError: string | null
 ): string {
   const uploaded =
     notes.uploaded + voice.uploaded + explore.uploaded + locations.uploaded + answers.uploaded;
   const failed = notes.failed + voice.failed + explore.failed + locations.failed + answers.failed;
   if (uploaded === 0 && failed === 0) {
-    return 'Nothing to sync — everything is already uploaded.';
+    return profileError
+      ? 'Nothing to sync — but your profile changes could not be sent, and are still saved here.'
+      : 'Nothing to sync — everything is already uploaded.';
   }
   const parts: string[] = [];
   if (notes.uploaded > 0) {
@@ -387,6 +470,9 @@ function buildSummaryMessage(
   if (failed > 0) {
     parts.push(`${failed} item${failed === 1 ? '' : 's'} could not be uploaded`);
   }
+  if (profileError) {
+    parts.push('your profile changes could not be sent');
+  }
   return `${parts.join(', ')}.`;
 }
 
@@ -406,6 +492,11 @@ async function performSync(db: SQLiteDatabase): Promise<SyncResult> {
     };
   }
   const serverGuideId = guideResolution.serverGuideId;
+
+  // Profile edits go out before content, so the guide the server attributes
+  // this batch to already carries the guide's current name. Non-blocking: a
+  // failure here is reported but never stops the content below from syncing.
+  const profileError = await pushProfileIfDirty(db, guide, serverGuideId);
 
   // Captures — notes and voice recordings together, pending/failed/(leftover-
   // from-a-crash) uploading; see SYNCABLE_STATUSES in captureRepository.ts.
@@ -461,12 +552,13 @@ async function performSync(db: SQLiteDatabase): Promise<SyncResult> {
     ranAt: new Date().toISOString(),
     guideSynced: true,
     guideError: null,
+    profileError,
     notes,
     voice,
     explore,
     locations,
     answers,
-    message: buildSummaryMessage(notes, voice, explore, locations, answers),
+    message: buildSummaryMessage(notes, voice, explore, locations, answers, profileError),
   };
 }
 

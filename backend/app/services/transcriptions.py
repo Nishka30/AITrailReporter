@@ -6,12 +6,25 @@ from sqlalchemy.orm import Session
 
 from app.db.models.submission import Submission
 from app.db.models.transcription import Transcription
+from app.schemas.submission import AUDIO_CAPABLE_SUBMISSION_TYPES
 from app.services.storage import get_audio_storage
 from app.services.transcription.sarvam import TranscriptionProviderError, transcribe_audio
 
 
-class SubmissionNotVoiceError(Exception):
-    """Raised when transcription is requested for a non-'voice' submission."""
+class SubmissionNotAudioCapableError(Exception):
+    """Raised when transcription is requested for a submission type that cannot
+    carry audio at all (see AUDIO_CAPABLE_SUBMISSION_TYPES) — e.g. a 'note'.
+
+    Renamed from SubmissionNotVoiceError in Step 17: 'explore' submissions can
+    now carry a voice note too, so "not voice" stopped being the actual reason
+    a transcription request is refused. The check is driven by the SAME
+    allow-list the upload route uses, so a submission can never be in the state
+    "audio accepted but transcription refused"."""
+
+
+# Backwards-compatible alias: kept so any caller written against the Step 8 name
+# keeps working rather than breaking on an import that silently moved.
+SubmissionNotVoiceError = SubmissionNotAudioCapableError
 
 
 class AudioNotUploadedError(Exception):
@@ -75,8 +88,8 @@ def start_transcription(db: Session, submission_id: UUID) -> tuple[Transcription
     submission = db.get(Submission, submission_id)
     if submission is None:
         raise LookupError(f"Submission {submission_id} not found")
-    if submission.submission_type != "voice":
-        raise SubmissionNotVoiceError()
+    if submission.submission_type not in AUDIO_CAPABLE_SUBMISSION_TYPES:
+        raise SubmissionNotAudioCapableError()
     if submission.audio_storage_key is None:
         raise AudioNotUploadedError()
 

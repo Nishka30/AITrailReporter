@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
 import { listAssignedQuestions } from '../api/questions';
 import VoiceRecorderCard from '../components/VoiceRecorderCard';
-import { Badge, Button, Card, QuickActionTile, Screen, SectionHeader } from '../components/ui';
+import { Avatar, Badge, Button, Card, QuickActionTile, Screen, SectionHeader } from '../components/ui';
 import { captureCurrentLocation } from '../location/locationService';
 import { countCapturesByStatus } from '../repositories/captureRepository';
 import { countLocationsByStatus, createLocation, getLatestLocation } from '../repositories/locationRepository';
@@ -19,6 +19,8 @@ type Props = {
   onViewQuestions: () => void;
   onViewExplore: () => void;
   onViewActivity: () => void;
+  /** Opens the Profile screen (Step 17) — wired to the header avatar. */
+  onOpenProfile: () => void;
   refreshKey: number;
 };
 
@@ -112,6 +114,7 @@ export default function HomeScreen({
   onViewQuestions,
   onViewExplore,
   onViewActivity,
+  onOpenProfile,
   refreshKey,
 }: Props) {
   const db = useSQLiteContext();
@@ -136,6 +139,7 @@ export default function HomeScreen({
         ranAt: new Date().toISOString(),
         guideSynced: false,
         guideError: 'Unexpected error',
+        profileError: null,
         notes: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         voice: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         explore: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
@@ -186,14 +190,29 @@ export default function HomeScreen({
 
   return (
     <Screen footerSpace={8}>
+      {/* The avatar is the entry point to the Profile screen (Step 17). It
+          shows the guide's photo when they have set one and their initial
+          otherwise — both handled by the shared Avatar component, so the header
+          can never disagree with the Profile screen about how the guide is
+          represented. */}
       <View style={styles.greetingRow}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{guide.name.trim().slice(0, 1).toUpperCase() || '?'}</Text>
-        </View>
-        <View style={styles.greetingTextWrap}>
+        <Avatar
+          name={guide.name}
+          photoUri={guide.localPhotoUri}
+          size={52}
+          onPress={onOpenProfile}
+          accessibilityLabel="Open your profile"
+          style={styles.avatarWrap}
+        />
+        <Pressable
+          onPress={onOpenProfile}
+          accessibilityRole="button"
+          accessibilityLabel="Open your profile"
+          style={({ pressed }) => [styles.greetingTextWrap, pressed && styles.greetingPressed]}
+        >
           <Text style={styles.greeting}>Namaste, {guide.name}</Text>
           <Text style={styles.greetingSubtitle}>Offline-ready — everything saves on your device first</Text>
-        </View>
+        </Pressable>
       </View>
 
       {/* Step 16: Home is a calm dashboard about THIS DEVICE's state — is
@@ -356,17 +375,9 @@ export default function HomeScreen({
 
 const styles = StyleSheet.create({
   greetingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.lg },
-  avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: colors.ink,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.sm,
-  },
-  avatarText: { ...type.title, color: colors.marigoldSoft },
+  avatarWrap: { marginRight: spacing.sm },
   greetingTextWrap: { flex: 1 },
+  greetingPressed: { opacity: 0.7 },
   greeting: { ...type.display, fontSize: 24, lineHeight: 29, color: colors.ink },
   greetingSubtitle: { ...type.small, color: colors.inkFaint, marginTop: 2 },
 

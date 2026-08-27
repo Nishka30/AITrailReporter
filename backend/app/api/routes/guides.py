@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.geographic_context import GuideContext
-from app.schemas.guide import GuideCreate, GuideRead
+from app.schemas.guide import GuideCreate, GuideRead, GuideUpdate
 from app.schemas.guide_location import NearbyGuideResult
 from app.schemas.knowledge_decision import KnowledgeDecisionResult
 from app.schemas.knowledge_state import GuideKnowledgeStateResult
@@ -47,6 +47,25 @@ def get_nearby_guides(
 @router.get("/{guide_id}", response_model=GuideRead)
 def get_guide(guide_id: UUID, db: Session = Depends(get_db)):
     guide = guide_service.get_guide(db, guide_id)
+    if guide is None:
+        raise HTTPException(status_code=404, detail="Guide not found")
+    return guide
+
+
+@router.patch("/{guide_id}", response_model=GuideRead)
+def update_guide(guide_id: UUID, payload: GuideUpdate, db: Session = Depends(get_db)):
+    """Updates a guide's editable identity fields (Step 17: the mobile Profile
+    screen). Partial — only the fields present in the request body are written.
+
+    Accepts ONLY name and phone_number. The Profile screen's "About you" text
+    and profile photo are never sent here and have no server representation at
+    all; see GuideUpdate for the privacy reasoning.
+
+    Naturally idempotent: applying the same body twice leaves the same state, so
+    unlike the creation endpoints this needs no client-generated id. The mobile
+    app retries it from its normal offline outbox on failure (see
+    mobile/src/sync/syncService.ts)."""
+    guide = guide_service.update_guide(db, guide_id, payload)
     if guide is None:
         raise HTTPException(status_code=404, detail="Guide not found")
     return guide

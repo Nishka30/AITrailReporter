@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { triggerTranscription, type TranscriptionResponse } from '../api/transcriptions';
 import { triggerExtraction, type ExtractionResponse } from '../api/extractions';
 import { ApiError, NetworkError } from '../api/client';
+import { formatDurationOrUnknown } from '../audio/duration';
 import { Badge, type BadgeTone, Button, Card, EmptyState, Screen, SectionHeader } from '../components/ui';
 import { listCaptures } from '../repositories/captureRepository';
 import { listLocations } from '../repositories/locationRepository';
@@ -164,6 +165,10 @@ function NoteItem({ item }: { item: LocalCapture }) {
  */
 function ExploreItem({ item }: { item: LocalCapture }) {
   const badge = syncBadge(item.syncStatus);
+  const uploaded = item.syncStatus === 'uploaded';
+  const hasVoice = Boolean(item.localAudioUri);
+  const hasText = Boolean(item.textContent?.trim());
+
   return (
     <Card style={styles.item}>
       <View style={styles.itemHeaderRow}>
@@ -178,16 +183,31 @@ function ExploreItem({ item }: { item: LocalCapture }) {
         <Text style={styles.itemMetaTop}>In response to: {item.explorePromptTitle}</Text>
       ) : null}
 
-      <Text style={styles.itemText} numberOfLines={4}>
-        {item.textContent}
-      </Text>
+      {/* A voice-only discovery genuinely has no text to show. Saying so is
+          more honest than rendering an empty line that looks like a bug. */}
+      {hasText ? (
+        <Text style={styles.itemText} numberOfLines={4}>
+          {item.textContent}
+        </Text>
+      ) : (
+        <Text style={styles.itemTextMuted}>
+          Spoken discovery · {formatDurationOrUnknown(item.audioDurationMillis)}
+        </Text>
+      )}
 
       <View style={styles.itemBadgeRow}>
         <Badge label={badge.label} tone={badge.tone} icon={badge.icon} />
+        {hasVoice && hasText ? (
+          <Badge
+            label={uploaded ? 'Voice sent' : 'Voice attached'}
+            tone={uploaded ? 'success' : 'info'}
+            icon="mic-outline"
+          />
+        ) : null}
         {item.localPhotoUri ? (
           <Badge
-            label={item.syncStatus === 'uploaded' ? 'Photo sent' : 'Photo attached'}
-            tone={item.syncStatus === 'uploaded' ? 'success' : 'info'}
+            label={uploaded ? 'Photo sent' : 'Photo attached'}
+            tone={uploaded ? 'success' : 'info'}
             icon="image-outline"
           />
         ) : null}
@@ -198,20 +218,39 @@ function ExploreItem({ item }: { item: LocalCapture }) {
       ) : null}
 
       {item.serverSubmissionId ? (
-        <ExtractionBlock submissionId={item.serverSubmissionId} />
+        <View style={styles.nestedBlock}>
+          {hasText ? (
+            <>
+              {/* Text is the source for extraction, so it can be understood
+                  straight away — exactly as before Step 17. An attached voice
+                  note can still be transcribed separately, which is why both
+                  controls appear for a text+voice discovery. */}
+              <ExtractionBlock submissionId={item.serverSubmissionId} />
+              {hasVoice ? (
+                <View style={styles.nestedDivider}>
+                  <TranscriptionBlock
+                    submissionId={item.serverSubmissionId}
+                    startLabel="Transcribe the voice note"
+                  />
+                </View>
+              ) : null}
+            </>
+          ) : (
+            // Voice-only: there is no text yet, so transcription must complete
+            // before extraction has anything to read. Same chain a plain voice
+            // note follows.
+            <TranscriptionBlock
+              submissionId={item.serverSubmissionId}
+              startLabel="Transcribe this discovery"
+              renderWhenCompleted={<ExtractionBlock submissionId={item.serverSubmissionId} />}
+            />
+          )}
+        </View>
       ) : (
         <Text style={styles.itemMeta}>Send this before it can be understood.</Text>
       )}
     </Card>
   );
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms == null || !Number.isFinite(ms) || ms < 0) return 'duration unknown';
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function formatTranscriptionStatus(t: TranscriptionResponse): { label: string; tone: BadgeTone } {
@@ -229,23 +268,38 @@ function formatTranscriptionStatus(t: TranscriptionResponse): { label: string; t
   }
 }
 
-// Playback is intentionally out of scope (record -> save -> sync -> server
-// reference only) -- this item shows metadata only, never a fake "play"
-// affordance. Transcription is a manual, on-demand fetch, same discipline as
-// extraction -- see ExtractionBlock above.
-function VoiceItem({ item }: { item: LocalCapture }) {
+/**
+ * Transcription state for any submission carrying audio — a plain 'voice'
+ * capture, or (Step 17) an Explore contribution with a voice note. Shared by
+ * both rather than duplicated, because the backend treats them identically:
+ * one transcription flow, one set of states, one place to render them.
+ *
+ * Manual and on-demand, same discipline as ExtractionBlock above: no polling,
+ * no auto-trigger, backend truth over UI guesswork.
+ *
+ * `renderWhenCompleted` is what should appear once a transcript actually
+ * exists — for a voice note that is the extraction control, since extraction
+ * cannot run before there is text to extract from.
+ */
+function TranscriptionBlock({
+  submissionId,
+  startLabel,
+  renderWhenCompleted,
+}: {
+  submissionId: string;
+  startLabel: string;
+  renderWhenCompleted?: React.ReactNode;
+}) {
   const [transcription, setTranscription] = useState<TranscriptionResponse | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
-  const badge = syncBadge(item.syncStatus);
 
   async function handleTranscribePress() {
-    if (!item.serverSubmissionId || checking) return;
+    if (checking) return;
     setChecking(true);
     setCheckError(null);
     try {
-      const result = await triggerTranscription(item.serverSubmissionId);
-      setTranscription(result);
+      setTranscription(await triggerTranscription(submissionId));
     } catch (err) {
       const message =
         err instanceof ApiError || err instanceof NetworkError ? err.message : 'Could not check status.';
@@ -255,7 +309,44 @@ function VoiceItem({ item }: { item: LocalCapture }) {
     }
   }
 
-  const transcriptionStatus = transcription ? formatTranscriptionStatus(transcription) : null;
+  const status = transcription ? formatTranscriptionStatus(transcription) : null;
+
+  return (
+    <>
+      {status ? (
+        <View style={styles.nestedBadgeRow}>
+          <Badge label={status.label} tone={status.tone} />
+        </View>
+      ) : null}
+      {transcription?.status === 'completed' && transcription.transcript ? (
+        <Text style={styles.nestedQuoteText}>"{transcription.transcript}"</Text>
+      ) : null}
+      {transcription?.status === 'failed' && transcription.errorMessage ? (
+        <Text style={styles.nestedErrorText}>{transcription.errorMessage}</Text>
+      ) : null}
+      {checkError ? <Text style={styles.nestedErrorText}>{checkError}</Text> : null}
+
+      {transcription?.status !== 'completed' ? (
+        <Button
+          label={transcription ? 'Check again' : startLabel}
+          onPress={handleTranscribePress}
+          loading={checking}
+          variant="ghost"
+          fullWidth={false}
+        />
+      ) : (
+        renderWhenCompleted ?? null
+      )}
+    </>
+  );
+}
+
+// Playback of already-saved recordings is intentionally out of scope here
+// (record -> save -> sync -> server reference only) -- this item shows metadata
+// only, never a fake "play" affordance. (Preview during composition is a
+// different thing and does exist; see VoiceNoteComposer.)
+function VoiceItem({ item }: { item: LocalCapture }) {
+  const badge = syncBadge(item.syncStatus);
 
   return (
     <Card style={styles.item}>
@@ -266,7 +357,7 @@ function VoiceItem({ item }: { item: LocalCapture }) {
         </View>
         <Text style={styles.itemDate}>{new Date(item.createdAt).toLocaleDateString()}</Text>
       </View>
-      <Text style={styles.itemText}>{formatDuration(item.audioDurationMillis)}</Text>
+      <Text style={styles.itemText}>{formatDurationOrUnknown(item.audioDurationMillis)}</Text>
       <View style={styles.itemBadgeRow}>
         <Badge label={badge.label} tone={badge.tone} icon={badge.icon} />
       </View>
@@ -276,31 +367,12 @@ function VoiceItem({ item }: { item: LocalCapture }) {
 
       {item.serverSubmissionId ? (
         <View style={styles.nestedBlock}>
-          {transcriptionStatus ? (
-            <View style={styles.nestedBadgeRow}>
-              <Badge label={transcriptionStatus.label} tone={transcriptionStatus.tone} />
-            </View>
-          ) : null}
-          {transcription?.status === 'completed' && transcription.transcript ? (
-            <Text style={styles.nestedQuoteText}>"{transcription.transcript}"</Text>
-          ) : null}
-          {transcription?.status === 'failed' && transcription.errorMessage ? (
-            <Text style={styles.nestedErrorText}>{transcription.errorMessage}</Text>
-          ) : null}
-          {checkError ? <Text style={styles.nestedErrorText}>{checkError}</Text> : null}
-
-          {transcription?.status !== 'completed' ? (
-            <Button
-              label={transcription ? 'Check again' : 'Listen to this recording'}
-              onPress={handleTranscribePress}
-              loading={checking}
-              variant="ghost"
-              fullWidth={false}
-            />
-          ) : (
+          <TranscriptionBlock
+            submissionId={item.serverSubmissionId}
+            startLabel="Listen to this recording"
             // Extraction only makes sense once a transcript actually exists.
-            <ExtractionBlock submissionId={item.serverSubmissionId} />
-          )}
+            renderWhenCompleted={<ExtractionBlock submissionId={item.serverSubmissionId} />}
+          />
         </View>
       ) : (
         <Text style={styles.itemMeta}>Send this recording before it can be transcribed.</Text>
@@ -432,6 +504,7 @@ const styles = StyleSheet.create({
   itemType: { ...type.captionBold, color: colors.inkFaint, letterSpacing: 0.5, textTransform: 'uppercase' },
   itemDate: { ...type.caption, color: colors.inkFaint },
   itemText: { ...type.body, color: colors.ink, marginBottom: spacing.xs },
+  itemTextMuted: { ...type.body, color: colors.inkSoft, marginBottom: spacing.xs, fontStyle: 'italic' },
   itemBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: 2 },
   itemMeta: { ...type.caption, color: colors.inkFaint, marginTop: spacing.sm, fontStyle: 'italic' },
   itemMetaTop: { ...type.caption, color: colors.inkFaint, marginBottom: spacing.xs },
@@ -444,6 +517,15 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   nestedBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  nestedDivider: {
+    marginTop: spacing.xs,
+    paddingTop: spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    alignSelf: 'stretch',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
   nestedQuoteText: { ...type.small, color: colors.ink, fontStyle: 'italic' },
   nestedDetailText: { ...type.small, color: colors.ink },
   nestedErrorText: { ...type.caption, color: colors.fix },

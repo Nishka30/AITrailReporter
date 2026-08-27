@@ -44,6 +44,11 @@ function fromWire(wire: GuideResponseWire): GuideResponse {
 /**
  * POST /api/v1/guides. Idempotent on clientGuideId: calling this again with the
  * same clientGuideId returns the same server guide instead of creating another.
+ *
+ * Note that "returns the existing guide" means exactly that — the backend does
+ * NOT update name/phone from a repeat call (see backend
+ * services/guides.py:create_or_get_guide). Later edits therefore go through
+ * updateGuideProfile below, not by re-POSTing here.
  */
 export async function createOrGetGuide(req: CreateGuideRequest): Promise<GuideResponse> {
   const wire = await apiRequest<GuideResponseWire>('/api/v1/guides', {
@@ -52,6 +57,41 @@ export async function createOrGetGuide(req: CreateGuideRequest): Promise<GuideRe
       name: req.name,
       phone_number: req.phoneNumber,
       client_guide_id: req.clientGuideId,
+    },
+  });
+  return fromWire(wire);
+}
+
+export interface UpdateGuideProfileRequest {
+  /** The SERVER guide id — this endpoint edits an existing server record, so
+   * unlike createOrGetGuide it cannot be called until the guide has synced. */
+  serverGuideId: string;
+  name: string;
+  phoneNumber: string | null;
+}
+
+/**
+ * PATCH /api/v1/guides/{serverGuideId} (Step 17).
+ *
+ * Pushes locally-edited identity fields to the backend. Sends ONLY name and
+ * phone_number: the profile's "About you" text and profile photo are local to
+ * the device and are deliberately never transmitted — they are personal
+ * metadata, not field knowledge, and the backend has no column, no use, and no
+ * business holding them.
+ *
+ * Naturally idempotent (it sets absolute values rather than applying a delta),
+ * so it needs no client-generated id the way submission/answer creation does —
+ * re-running it after a lost response converges on the same state. A 404 means
+ * the server no longer has this guide, which a retry cannot fix.
+ */
+export async function updateGuideProfile(
+  req: UpdateGuideProfileRequest
+): Promise<GuideResponse> {
+  const wire = await apiRequest<GuideResponseWire>(`/api/v1/guides/${req.serverGuideId}`, {
+    method: 'PATCH',
+    body: {
+      name: req.name,
+      phone_number: req.phoneNumber,
     },
   });
   return fromWire(wire);

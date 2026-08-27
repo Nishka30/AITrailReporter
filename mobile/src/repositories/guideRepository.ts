@@ -9,6 +9,9 @@ interface LocalGuideRow {
   server_guide_id: string | null;
   name: string;
   phone_number: string | null;
+  about_text: string | null;
+  local_photo_uri: string | null;
+  profile_dirty: number;
   created_at: string;
   updated_at: string;
 }
@@ -20,6 +23,11 @@ function mapRow(row: LocalGuideRow): LocalGuide {
     serverGuideId: row.server_guide_id,
     name: row.name,
     phoneNumber: row.phone_number,
+    aboutText: row.about_text,
+    localPhotoUri: row.local_photo_uri,
+    // SQLite has no boolean type — 0/1 is the storage shape, `boolean` is the
+    // shape the rest of the app reasons about.
+    profileDirty: row.profile_dirty === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -29,20 +37,31 @@ function mapRow(row: LocalGuideRow): LocalGuide {
  * Creates the local guide profile for this device, generating its stable
  * client_guide_id once. Purely local — does not call the backend and does not
  * require connectivity.
+ *
+ * Step 17: setup can now collect a phone number, an optional profile photo and
+ * an optional "About you" note at the same time. `profile_dirty` is left at its
+ * default 0 deliberately — this guide does not exist on the server yet, and
+ * when the sync engine creates it, it sends these current values as part of
+ * creation. Marking it dirty would queue a redundant PATCH straight after.
  */
 export async function createLocalGuide(
   db: SQLiteDatabase,
   name: string,
-  phoneNumber: string | null = null
+  phoneNumber: string | null = null,
+  options: { aboutText?: string | null; localPhotoUri?: string | null } = {}
 ): Promise<LocalGuide> {
   const now = new Date().toISOString();
   const clientGuideId = generateClientId();
   const result = await db.runAsync(
-    `INSERT INTO local_guide (client_guide_id, server_guide_id, name, phone_number, created_at, updated_at)
-     VALUES (?, NULL, ?, ?, ?, ?)`,
+    `INSERT INTO local_guide
+       (client_guide_id, server_guide_id, name, phone_number, about_text, local_photo_uri,
+        profile_dirty, created_at, updated_at)
+     VALUES (?, NULL, ?, ?, ?, ?, 0, ?, ?)`,
     clientGuideId,
     name,
     phoneNumber,
+    options.aboutText ?? null,
+    options.localPhotoUri ?? null,
     now,
     now
   );
@@ -75,6 +94,80 @@ export async function updateLocalGuideName(
 ): Promise<void> {
   const now = new Date().toISOString();
   await db.runAsync('UPDATE local_guide SET name = ?, updated_at = ? WHERE id = ?', name, now, id);
+}
+
+export interface ProfileUpdate {
+  name: string;
+  phoneNumber: string | null;
+  aboutText: string | null;
+  localPhotoUri: string | null;
+}
+
+/**
+ * Saves every editable profile field at once (Step 17: the Profile screen's
+ * single "Save profile" action). Purely local and offline-safe — it writes to
+ * SQLite and returns; it never waits on the network.
+ *
+ * Sets `profile_dirty = 1` ONLY when a server-visible field actually changed.
+ * That precision matters: `aboutText` and `localPhotoUri` never leave the
+ * device, so editing only those must not queue a pointless PATCH. Comparing
+ * against the stored row (rather than trusting the caller) means the flag
+ * reflects real divergence from the server, not merely "the user pressed save".
+ *
+ * The flag is sticky — an edit made while a previous edit is still unsynced
+ * keeps it set, and only a confirmed push clears it (see markProfileSynced).
+ */
+export async function updateLocalGuideProfile(
+  db: SQLiteDatabase,
+  id: number,
+  update: ProfileUpdate
+): Promise<LocalGuide> {
+  const existing = await db.getFirstAsync<LocalGuideRow>(
+    'SELECT * FROM local_guide WHERE id = ?',
+    id
+  );
+  if (!existing) {
+    throw new Error('Cannot update a guide profile that does not exist on this device.');
+  }
+
+  const serverVisibleChanged =
+    existing.name !== update.name || existing.phone_number !== update.phoneNumber;
+  const nextDirty = existing.profile_dirty === 1 || serverVisibleChanged ? 1 : 0;
+
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `UPDATE local_guide
+     SET name = ?, phone_number = ?, about_text = ?, local_photo_uri = ?,
+         profile_dirty = ?, updated_at = ?
+     WHERE id = ?`,
+    update.name,
+    update.phoneNumber,
+    update.aboutText,
+    update.localPhotoUri,
+    nextDirty,
+    now,
+    id
+  );
+
+  const row = await db.getFirstAsync<LocalGuideRow>('SELECT * FROM local_guide WHERE id = ?', id);
+  if (!row) {
+    throw new Error('Failed to read back the updated local guide profile.');
+  }
+  return mapRow(row);
+}
+
+/**
+ * Clears the pending-profile-push flag after the backend has CONFIRMED the new
+ * name/phone. Called by the sync engine only, never optimistically — the flag
+ * staying set is what makes an interrupted push retry on the next sync.
+ */
+export async function markProfileSynced(db: SQLiteDatabase, id: number): Promise<void> {
+  const now = new Date().toISOString();
+  await db.runAsync(
+    'UPDATE local_guide SET profile_dirty = 0, updated_at = ? WHERE id = ?',
+    now,
+    id
+  );
 }
 
 /**

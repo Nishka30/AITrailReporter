@@ -144,49 +144,75 @@ export async function createVoiceCapture(
 
 /**
  * Stores an Explore discovery contribution locally with sync_status =
- * 'pending' (Step 16). Purely local — does not call the backend and does not
- * touch the photo file itself, which must already exist on disk at
- * `localPhotoUri` before this is called (the picker copies it into app
- * storage first — see src/photo/photoPickerService.ts).
+ * 'pending' (Step 16, extended in Step 17). Purely local — does not call the
+ * backend and does not touch the media files themselves, which must already
+ * exist on disk before this is called (the picker copies photos into app
+ * storage — see src/photo/photoPickerService.ts — and expo-audio records
+ * straight into the document directory).
  *
- * Always carries text: `textContent` is what becomes observations through the
- * existing extraction pipeline, so an Explore contribution is never
- * photo-only. The photo is optional durable evidence attached to the same
- * submission.
+ * A contribution must carry TEXT or a VOICE NOTE (the caller enforces this; see
+ * ExploreContributeScreen). Both become observations through the existing
+ * extraction pipeline: text directly, voice via the existing transcription
+ * step. A photo alone is never enough, because nothing in this system reads
+ * images — the photo is durable evidence attached alongside, not content.
  *
- * Generates clientSubmissionId always, and clientPhotoId ONLY when a photo is
- * actually attached — a null clientPhotoId is what tells the sync engine there
- * is no second upload step to perform for this row.
+ * Generates clientSubmissionId always, plus clientPhotoId ONLY when a photo is
+ * attached and clientAudioId ONLY when a recording is attached. Those nulls are
+ * load-bearing: they are exactly what tells the sync engine which of the
+ * optional upload stages to perform for this row.
+ *
+ * The audio columns reused here (local_audio_uri, client_audio_id,
+ * audio_duration_millis, audio_content_type) are the SAME ones voice notes have
+ * used since v4 — no Explore-specific audio columns exist, on purpose.
  */
 export async function createExploreCapture(
   db: SQLiteDatabase,
   localGuideId: number,
-  textContent: string,
+  textContent: string | null,
   options: {
     localPhotoUri?: string | null;
     photoContentType?: string | null;
+    localAudioUri?: string | null;
+    audioDurationMillis?: number | null;
+    audioContentType?: string | null;
     promptId?: string | null;
     promptTitle?: string | null;
   } = {}
 ): Promise<LocalCapture> {
+  const trimmedText = textContent?.trim() ? textContent.trim() : null;
+  const localPhotoUri = options.localPhotoUri ?? null;
+  const localAudioUri = options.localAudioUri ?? null;
+
+  if (!trimmedText && !localAudioUri) {
+    // Guarded here as well as in the UI: a contribution with neither text nor
+    // audio has nothing that could ever become knowledge, and silently storing
+    // one would create a row that syncs successfully and then dead-ends.
+    throw new Error('An Explore contribution needs either a description or a voice note.');
+  }
+
   const now = new Date().toISOString();
   const clientSubmissionId = generateClientId();
-  const localPhotoUri = options.localPhotoUri ?? null;
   const clientPhotoId = localPhotoUri ? generateClientId() : null;
+  const clientAudioId = localAudioUri ? generateClientId() : null;
 
   const result = await db.runAsync(
     `INSERT INTO local_capture
        (local_guide_id, client_submission_id, capture_type, text_content,
         local_photo_uri, client_photo_id, photo_content_type,
+        local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
         explore_prompt_id, explore_prompt_title,
         sync_status, created_at, updated_at)
-     VALUES (?, ?, 'explore', ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, 'explore', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     localGuideId,
     clientSubmissionId,
-    textContent,
+    trimmedText,
     localPhotoUri,
     clientPhotoId,
     localPhotoUri ? (options.photoContentType ?? null) : null,
+    localAudioUri,
+    clientAudioId,
+    localAudioUri ? (options.audioDurationMillis ?? null) : null,
+    localAudioUri ? (options.audioContentType ?? null) : null,
     options.promptId ?? null,
     options.promptTitle ?? null,
     now,

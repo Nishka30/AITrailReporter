@@ -32,10 +32,11 @@ def trigger_transcription(submission_id: UUID, db: Session = Depends(get_db)):
         transcription, _outcome = transcription_service.start_transcription(db, submission_id)
     except LookupError:
         raise HTTPException(status_code=404, detail="Submission not found")
-    except transcription_service.SubmissionNotVoiceError:
+    except transcription_service.SubmissionNotAudioCapableError:
         raise HTTPException(
             status_code=400,
-            detail="Transcription only applies to submissions with capture_type 'voice'",
+            detail="Transcription only applies to submissions that can carry audio "
+            "(capture_type 'voice' or 'explore')",
         )
     except transcription_service.AudioNotUploadedError:
         raise HTTPException(

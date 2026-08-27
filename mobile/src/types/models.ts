@@ -52,6 +52,33 @@ export interface LocalGuide {
   serverGuideId: string | null;
   name: string;
   phoneNumber: string | null;
+  /**
+   * Profile fields (Step 17). This device's guide profile IS the app's user
+   * identity — there is deliberately no second "user" model. `name` and
+   * `phoneNumber` above already exist on the backend Guide and are pushed to
+   * it; the two fields below are LOCAL-ONLY and never leave the device.
+   *
+   * `aboutText` is the optional "About you" note. It is personal metadata, not
+   * field knowledge: it is never sent to the backend, never becomes an
+   * Observation, never affects knowledge freshness, and is never included in
+   * any LLM or transcription request. See mobile/README.md's privacy section.
+   *
+   * `localPhotoUri` is an on-device file path for the profile picture (the
+   * image bytes are never stored in SQLite, same rule as audio and Explore
+   * photos). There is no backend endpoint for guide avatars, so this is local
+   * to this install by design rather than half-synced.
+   */
+  aboutText: string | null;
+  localPhotoUri: string | null;
+  /**
+   * True when `name`/`phoneNumber` have been edited locally and that change has
+   * not yet been pushed to the backend. Set by profile edits, cleared once the
+   * sync engine has confirmed the server accepted them — the same
+   * "local truth first, confirmed later" discipline every other outbox record
+   * in this app uses. Always false while `serverGuideId` is null, because
+   * guide creation sends the current values anyway.
+   */
+  profileDirty: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -105,6 +132,18 @@ export interface LocalCapture {
   localPhotoUri: string | null;
   clientPhotoId: string | null;
   photoContentType: string | null;
+  /**
+   * NOTE (Step 17): the audio fields above are no longer voice-only. An
+   * 'explore' capture may now populate the SAME `localAudioUri` /
+   * `clientAudioId` / `audioDurationMillis` / `audioContentType` columns to
+   * carry a voice note alongside its optional text and optional photo. No new
+   * columns were added for this — reusing them keeps one upload path, one
+   * idempotency key, and one set of sync rules for all recorded audio in the
+   * app, rather than a parallel Explore-only audio system.
+   *
+   * So the honest read of these fields is "this capture has audio", not "this
+   * capture is a voice note". Use `captureType` to distinguish the two.
+   */
   /**
    * Which Explore prompt this contribution answered. Local-only provenance —
    * the backend does not model prompts (see mobile/README.md). Null for every

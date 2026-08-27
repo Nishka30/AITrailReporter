@@ -37,7 +37,9 @@ export class NetworkError extends Error {
 }
 
 type RequestOptions = {
-  method?: 'GET' | 'POST';
+  /** PATCH added in Step 17 for the profile update endpoint — the first
+   * partial-update call in this app; everything else is a create or a read. */
+  method?: 'GET' | 'POST' | 'PATCH';
   body?: unknown;
 };
 

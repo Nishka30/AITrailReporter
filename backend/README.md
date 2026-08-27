@@ -64,6 +64,26 @@ duplicate (first call: HTTP 201). This is what the mobile sync engine uses — s
 curl http://127.0.0.1:8000/api/v1/guides/<guide_id>
 ```
 
+### Update a guide's profile (Step 17)
+
+Partial update of the two editable identity fields. Only the keys present in the
+body are written, so a name-only update never blanks the phone number. Sending
+`"phone_number": null` explicitly **clears** it.
+
+```
+curl -X PATCH http://127.0.0.1:8000/api/v1/guides/<guide_id> \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Pemba Sherpa", "phone_number": "+9779800000002"}'
+```
+
+Accepts **only** `name` and `phone_number`. The mobile Profile screen's "About
+you" note and profile photo are deliberately never sent here and have no server
+representation — see [Explore voice notes & the guide profile (Step 17)](#explore-voice-notes--the-guide-profile-step-17).
+A body with neither field is rejected with 422; an unknown guide is 404.
+
+Naturally idempotent (it sets absolute values), so unlike the creation endpoints
+it needs no client-generated id.
+
 ### Submit a GPS location
 
 `recorded_at` is when the device captured the fix and **must include a UTC offset**
@@ -1929,6 +1949,189 @@ prompt persistence, LLM-generated prompts, image understanding/vision,
 knowledge-type merging or retirement tooling, an admin UI for reviewing
 dynamically created types, reassignment, notifications, embeddings, vector
 search, RAG, or any background worker/queue.
+
+## Explore voice notes & the guide profile (Step 17)
+
+Two mobile features — a voice note on an Explore contribution, and an editable
+guide profile — reached the backend. Both were deliberately small changes.
+
+### No migration was needed
+
+`Submission` has carried `audio_*` columns since Step 7 and `photo_*` columns
+since Step 16, and they were already **independent of one another** (the model
+even noted that nothing structurally prevented a submission from having both).
+So an Explore contribution carrying text, a photo and a voice note needed **no
+new column, no new table, and no new storage path** — only permission to do what
+the schema already allowed.
+
+Likewise `Guide` already had `name` and `phone_number`, so the profile endpoint
+needed no migration either.
+
+**`alembic check` is clean — Step 17 added no revisions.**
+
+### What actually changed
+
+Four edits, all narrow:
+
+1. **`schemas/submission.py`** — added `AUDIO_CAPABLE_SUBMISSION_TYPES =
+   ("voice", "explore")` as the single shared allow-list, and made
+   `text_content` optional for `'explore'`.
+2. **`api/routes/submissions.py`** — the audio upload route now accepts any
+   submission in that allow-list instead of only `'voice'`.
+3. **`services/transcriptions.py`** — the same allow-list gates
+   `start_transcription`. `SubmissionNotVoiceError` was renamed
+   `SubmissionNotAudioCapableError` (the old name is kept as an alias), because
+   "not voice" had stopped being the real reason a request is refused.
+4. **`services/source_text.py`** — `'explore'` resolves its source text from
+   `raw_text` when the guide typed something, and otherwise falls through to the
+   **same** transcription branch `'voice'` uses.
+
+The allow-list is defined once and imported by both the upload route and the
+transcription service specifically so the two can never drift into the state
+"audio accepted, but transcription refused" — which would be a silent dead end
+for the guide rather than a visible error.
+
+### Source text resolution for 'explore'
+
+```
+explore submission
+  ├─ raw_text is non-blank        -> use it (unchanged from Step 16)
+  ├─ raw_text blank, audio present -> resolve via Transcription, exactly as 'voice':
+  │     no Transcription row  -> TranscriptionMissingError
+  │     pending / processing  -> TranscriptionNotReadyError
+  │     failed               -> TranscriptionFailedError
+  │     completed but blank  -> EmptyTranscriptError
+  │     completed            -> the transcript
+  └─ neither text nor audio  -> EmptySourceTextError
+```
+
+Every "not ready" reason keeps its own pre-existing error type rather than
+collapsing into a generic failure, so the mobile app can keep reporting exactly
+what is happening.
+
+Text wins over a transcript when both exist: it is what the guide actually
+typed, needs no provider call, and is available immediately.
+
+### Why 'explore' may now be created without text
+
+An Explore submission with no `text_content` is accepted, because audio is
+attached by a **separate later request** — the server genuinely cannot know at
+creation time whether a voice note is coming. This is precisely the same
+ordering that has always applied to `'voice'` submissions.
+
+The consequence is stated plainly rather than hidden: an `'explore'` submission
+that never receives audio and has no text simply has nothing to extract, which
+`resolve_source_text` reports as `EmptySourceTextError`. The mobile app enforces
+"text or voice" before saving; that is a **client-side product rule, not a
+server guarantee**, and it is documented as such.
+
+`'note'` still requires text, and `'voice'` still refuses it. Neither changed.
+
+### `PATCH /api/v1/guides/{guide_id}` (new)
+
+Partial update of a guide's editable identity fields.
+
+```
+PATCH /api/v1/guides/{guide_id}
+{ "name": "Tenzin", "phone_number": "+91 98765 43210" }
+```
+
+- Accepts **only** `name` and `phone_number`. Both optional; a body setting
+  neither is rejected with 422.
+- `"phone_number": null` **clears** the number. Omitting the key leaves it
+  untouched — `model_fields_set` distinguishes "not mentioned" from "set to
+  null", so a name-only update can never blank a phone number.
+- Never touches `client_guide_id`. That is the stable identity the guide is
+  resolved by, and rewriting it would orphan every local record on the device.
+- 404 if the guide does not exist.
+- Naturally **idempotent**: it sets absolute values rather than applying a
+  delta, so re-running it after a lost response converges on the same state.
+  That is why, unlike submission/answer creation, it needs no client-generated
+  id.
+
+**No row lock, deliberately.** This writes two independent scalar columns with
+no read-then-write step a concurrent update could interleave with, so it is
+safe last-write-wins. (Contrast `attach_*_to_submission`, which *does* lock,
+because it decides what to write based on what it just read.)
+
+### The privacy boundary: profile metadata is not knowledge
+
+The mobile Profile screen also holds an "About you" note and a profile photo.
+**Neither exists on the backend at all** — no column, no endpoint, no request
+carries them. That is enforced by construction, not by convention:
+
+- `GuideUpdate` has exactly two fields.
+- There is no guide-avatar upload route.
+- Profile data never enters extraction, transcription, observations,
+  embeddings, or any LLM prompt. The extraction pipeline reads submission text
+  and transcripts; it has no access path to guide profile fields.
+
+Name and phone are stored because they are operational identity — who filed a
+report and how to reach them — not because they are field knowledge. They never
+become Observations, never affect knowledge freshness, and never generate
+Questions.
+
+### Tests actually run for Step 17
+
+**Contract & regression suite — 27/27 passed** (real app, real Postgres):
+
+- An `'explore'` submission accepts an audio attachment; the response exposes
+  real audio metadata.
+- Audio attach is idempotent on `client_audio_id` (replay returns 200); a
+  *different* id on the same submission is a 409 conflict.
+- A `Transcription` row is created atomically with the first attach, status
+  `pending`.
+- An `'explore'` submission with **no text** is accepted, and audio attaches
+  to it.
+- Regressions all hold: `'note'` still requires text (422); `'voice'` still
+  refuses text (422); audio on a `'note'` is still refused (400); audio on a
+  `'voice'` submission still works; transcribing a `'note'` is still refused.
+- `resolve_source_text`: explore-with-text returns the typed text;
+  voice-only explore raises `TranscriptionNotReadyError` while pending, then
+  returns the **transcript** once completed; explore with neither raises
+  `EmptySourceTextError`.
+- `PATCH`: updates name; updates phone; name-only leaves phone untouched and
+  vice versa; explicit null clears the phone; empty body 422; missing guide
+  404; empty name 422; `client_guide_id` never rewritten; idempotent when the
+  same body is sent twice.
+
+**Mobile sync-flow replay — 17/17 passed.** The exact three-request sequence
+`syncOneExploreCapture` performs (submission, then photo, then audio), run
+**twice with the same client-generated ids** to simulate an interrupted and
+retried sync. Result: pass 1 returned 201/201/201, pass 2 returned 200/200/200,
+and the database held exactly one submission (carrying text, photo and audio
+together), one Transcription row, with `submission.status = 'received'` and
+`transcription.status = 'pending'` — never prematurely claimed as processed.
+A voice-only discovery and a Step 16 text+photo discovery were both verified
+through the same flow.
+
+**Concurrency — 9/9 passed, with real threads over real HTTP** against a live
+uvicorn server (not `TestClient`, and not sequential calls):
+
+- 8 threads attaching audio with **different** `client_audio_id`s to the same
+  Explore submission: exactly one 201, seven clean 409s. No double attachment.
+- 8 threads attaching with the **same** `client_audio_id` (a retry storm):
+  exactly one 201 and seven idempotent 200s, zero spurious conflicts, and a
+  single Transcription row afterwards.
+- 8 concurrent `PATCH`es of the same field: all 200, and the final stored value
+  is exactly one of the submitted values — never a blend, never a 500.
+- 8 concurrent `PATCH`es split across *different* fields: all 200, and both
+  fields survived — no clobbering the other column to null.
+
+### Known gaps
+
+- The **Sarvam transcription call itself was not exercised** for an Explore
+  voice note; that needs a real recording and a configured key. The
+  transcript-resolution logic was tested by setting a `Transcription` row to
+  `completed` directly, which verifies our code and is explicitly not a test of
+  the provider.
+- The **orphaned-file crash window** in `attach_audio_to_submission` (documented
+  in Step 7) is unchanged and now applies to Explore audio too.
+- An `'explore'` submission created with neither text nor audio is accepted and
+  then permanently un-extractable, for the ordering reason explained above. It
+  is reported honestly rather than prevented.
+- `create_or_get_guide` still does **not** update name/phone on a repeat POST;
+  that is what `PATCH` is for.
 
 ## Project layout
 

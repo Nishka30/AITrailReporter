@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 6;
+const DATABASE_VERSION = 7;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -242,7 +242,47 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 6;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 6) { ...; currentDbVersion = 7; }`
+  if (currentDbVersion === 6) {
+    // Step 17 (Profile): the guide profile gains an optional "About you" note
+    // and an optional profile photo, plus a flag tracking whether the
+    // server-visible identity fields have local edits still to push.
+    //
+    // Purely additive nullable columns on local_guide, exactly like the v3->v4
+    // and v5->v6 steps. NO BACKFILL, and none is needed:
+    //   - about_text / local_photo_uri: an existing guide genuinely has neither,
+    //     so NULL is the truthful value rather than a "not yet migrated" marker.
+    //   - profile_dirty defaults to 0 for every existing row, which is also the
+    //     truthful value: whatever name/phone they have was already sent at
+    //     guide-creation time (or the guide isn't on the server yet, in which
+    //     case creation will send the current values anyway). Marking existing
+    //     rows dirty would queue a pointless PATCH for every upgrading install.
+    //
+    // Note what is NOT here: no new table, and no new columns for Explore voice
+    // notes. local_capture has carried local_audio_uri / client_audio_id /
+    // audio_duration_millis / audio_content_type since v4, and an 'explore' row
+    // simply populates those same columns now. The existing
+    // ux_local_capture_client_audio_id unique index already gives Explore voice
+    // the same upload idempotency guarantee voice notes have had all along
+    // (NULLs are distinct in a SQLite UNIQUE index, so rows without audio are
+    // unaffected). Reusing them was the smallest correct change — a parallel
+    // set of explore_audio_* columns would have duplicated the schema, the sync
+    // logic, and the idempotency rules for no benefit.
+    //
+    // profile_dirty is INTEGER (0/1) because SQLite has no native boolean —
+    // matching how the rest of this schema stores flags.
+    await db.execAsync(`
+      BEGIN TRANSACTION;
+
+      ALTER TABLE local_guide ADD COLUMN about_text TEXT;
+      ALTER TABLE local_guide ADD COLUMN local_photo_uri TEXT;
+      ALTER TABLE local_guide ADD COLUMN profile_dirty INTEGER NOT NULL DEFAULT 0;
+
+      COMMIT;
+    `);
+    currentDbVersion = 7;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 7) { ...; currentDbVersion = 8; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

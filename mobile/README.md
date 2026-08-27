@@ -1666,6 +1666,257 @@ is no second upload step.
 ### Deliberately NOT implemented
 
 Editing or deleting a saved contribution, multiple photos per contribution,
-voice-based Explore contributions (voice capture remains on Home), viewing
-already-uploaded photos back from the server, offline map/tiles, background
-sync, notifications, or any automatic extraction trigger.
+viewing already-uploaded photos back from the server, offline map/tiles,
+background sync, notifications, or any automatic extraction trigger.
+
+> **Superseded in Step 17:** this list previously also included "voice-based
+> Explore contributions (voice capture remains on Home)". Explore contributions
+> can now carry a voice note — see the Step 17 section below.
+
+## Explore voice notes & the guide Profile (Step 17)
+
+Two additions: Explore contributions can now carry a **voice note**, and the
+guide's avatar opens a real **Profile** screen.
+
+### What changed, and what deliberately did not
+
+Neither feature introduced a new subsystem. Both are extensions of things this
+app already had:
+
+| Need | Reused | New |
+| --- | --- | --- |
+| Explore voice recording | `src/audio/audioRecordingService.ts` (permissions, start/stop, result shaping) | A composer UI that doesn't self-persist |
+| Explore audio storage | `local_capture`'s existing `local_audio_uri` / `client_audio_id` / `audio_duration_millis` / `audio_content_type` columns (added in v4 for voice notes) | *nothing â€” no new columns* |
+| Explore audio upload | `src/api/audio.ts` (`uploadSubmissionAudio`), the native multipart uploader | *nothing* |
+| Explore audio sync | The single `syncAll()` outbox engine | One extra stage inside `syncOneExploreCapture` |
+| Profile identity | The existing `local_guide` row and backend `Guide` | `about_text`, `local_photo_uri`, `profile_dirty` columns |
+| Profile photo | `src/photo/photoPickerService.ts` | A separate storage directory + square crop |
+
+There is still exactly **one** recording implementation, **one** audio upload
+path, **one** sync engine, and **one** identity model in this app.
+
+### The contribution rule
+
+A discovery needs **words â€” typed, spoken, or both**:
+
+| Attached | Saveable | Why |
+| --- | --- | --- |
+| Text only | Yes | Extracted directly (unchanged from Step 16) |
+| Voice only | Yes | Transcribed, then extracted from the transcript |
+| Text + voice | Yes | Text is the extraction source; voice is kept alongside |
+| Photo only | **No** | Nothing in this system reads images, so it could never become knowledge |
+| Photo + text/voice | Yes | Photo is durable evidence attached to the same submission |
+
+The photo rule is a genuine product constraint, stated plainly in the UI rather
+than allowed to fail silently.
+
+### Explore voice: the full offline to restart to sync flow
+
+1. The guide taps the microphone in the Explore composer. **Only then** is
+   microphone permission requested â€” never on mount, never speculatively.
+2. `expo-audio` records into the app's **document directory** (not cache, which
+   the OS may purge â€” see "Voice recording (Step 7)" above for why this matters).
+3. Stopping produces a file URI plus whatever duration expo-audio actually
+   reported (never fabricated; may be `null`).
+4. The recording is held in **component state only**. Nothing is written to
+   SQLite and nothing is uploaded. A recording that is replaced or removed at
+   this stage is deleted from disk immediately, because nothing can reference it.
+5. Pressing **Save discovery** writes ONE `local_capture` row with
+   `capture_type = 'explore'`, `sync_status = 'pending'`, and whichever of
+   text / photo / audio were attached. Only now does the recording become
+   durable â€” and it survives an app restart from this point on.
+6. The next **Sync now** runs `syncOneExploreCapture`, which:
+   - checks both media files still exist on disk *before* creating anything
+     server-side, so a reclaimed file fails with its own specific message rather
+     than leaving a server submission permanently missing its attachment;
+   - creates/resolves the Submission (idempotent on `clientSubmissionId`);
+   - uploads the photo, if any (idempotent on `clientPhotoId`);
+   - uploads the audio, if any (idempotent on `clientAudioId`).
+7. Only when **every** stage succeeds is the row marked `uploaded`. Any failure
+   marks it `failed`, keeps all local data, and retries the whole chain next
+   sync â€” which is safe precisely because all three stages are idempotent.
+
+Three distinct client-generated ids are involved, each generated exactly once
+and never regenerated. Rows without a photo/recording have `NULL` for the
+corresponding id, and that null is what tells the sync engine to skip that stage.
+
+Crash-stuck rows are covered by the existing retry rule: `'uploading'` is one of
+`SYNCABLE_STATUSES`, so a capture left mid-upload by an app kill is picked up by
+the next sync (see "The outbox / sync flow" above).
+
+### How Explore voice reaches the knowledge pipeline
+
+No new pipeline was created. Once the audio is attached to the Submission, every
+existing downstream stage already knows what to do:
+
+```
+Explore contribution (text and/or voice, optional photo)
+  -> saved locally, offline
+  -> synced: Submission + optional photo + optional audio
+  -> audio attach also creates a pending Transcription row, atomically
+  -> existing transcription flow (manual, on demand, from Activity)
+  -> existing extraction reads the source text:
+        raw_text if the guide typed something,
+        otherwise the transcript
+  -> existing observations -> knowledge state -> gap ranking
+```
+
+The only backend change this required was widening two guards and teaching
+`resolve_source_text` that an Explore contribution may resolve its text from a
+transcript. See the backend README's Step 17 section.
+
+**Truthful states are preserved.** Local sync state, transcription state,
+extraction state and knowledge state remain four separate things. Saving a
+recording never claims it was sent; sending never claims it was transcribed;
+transcribing never claims it became knowledge. A voice-only discovery in the
+Activity tab shows "Spoken discovery Â· 0:08" rather than a blank body, and
+offers transcription *before* extraction, because extraction genuinely has
+nothing to read until a transcript exists.
+
+### Profile architecture
+
+**The guide IS the user.** The Profile screen edits the existing `local_guide`
+row rather than introducing a parallel identity model â€” that row already holds
+the name and phone number, already carries the stable `client_guide_id` that
+makes sync idempotent, and is already what every capture, location and answer is
+attributed to. A second model would have meant two sources of truth for one
+person and a merge problem at every sync.
+
+What syncs, and what does not:
+
+| Field | Stored | Sent to the backend |
+| --- | --- | --- |
+| Name | `local_guide.name` | **Yes** â€” `Guide.name` already exists |
+| Phone number | `local_guide.phone_number` | **Yes** â€” `Guide.phone_number` already exists |
+| About you | `local_guide.about_text` | **Never** |
+| Profile photo | `local_guide.local_photo_uri` (file on disk) | **Never** |
+
+Editing is fully offline: saving writes to SQLite and returns. If a
+server-visible field (name or phone) actually changed, `profile_dirty` is set,
+and the next sync issues `PATCH /api/v1/guides/{id}` and clears the flag **only
+after the server confirms**. A failed profile push never blocks notes, voice,
+discoveries, locations or answers from syncing â€” it is reported and retried.
+
+`profile_dirty` is set only when a *server-visible* field changed, compared
+against the stored row. Editing only the About text or the photo never queues a
+pointless network request.
+
+### Privacy boundary: profile metadata is not knowledge
+
+This is enforced by construction, not by convention:
+
+- The About text and profile photo have **no backend representation at all** â€”
+  there is no column, no endpoint, and no request that carries them.
+- `PATCH /api/v1/guides/{id}` accepts **only** `name` and `phone_number`.
+- Profile fields never become Observations, never affect knowledge freshness,
+  never generate Questions, and are never included in any transcription or LLM
+  request. The extraction pipeline reads submission text and transcripts â€” it
+  has no access path to the guide profile.
+
+The Profile screen states this to the guide directly rather than burying it.
+
+### Profile photo flow
+
+Reuses `photoPickerService` with two differences from Explore photos: a separate
+`profile_photos/` directory (different lifecycle â€” one current value, replaced
+outright, versus per-contribution evidence that must survive until sync), and
+`allowsEditing` with a 1:1 aspect so the guide chooses the crop for what is
+always displayed in a circle.
+
+Old photo files are deleted **only after** the new profile has committed to
+SQLite, never before â€” deleting first would risk removing a photo the saved
+profile still points at. Removing the photo falls back to the initials avatar,
+and changing the name updates those initials, because both come from the single
+shared `Avatar` component.
+
+### Setup / first-run changes
+
+Setup now collects **name and phone (required)**, plus an optional photo and an
+optional About note (collapsed behind one tap so onboarding stays short).
+
+**Existing installs are not broken.** A guide created before Step 17 has no
+phone number, and that is treated as *incomplete, not invalid*: they keep full
+access to the app, and the Profile screen shows a gentle prompt to add it rather
+than blocking or crashing. `about_text` and `local_photo_uri` are `NULL` for
+them, which is the truthful value, and `profile_dirty` defaults to `0` because
+their name/phone were already sent when their guide was created â€” marking them
+dirty would queue a redundant PATCH for every upgrading install.
+
+Phone validation is deliberately minimal (`src/profile/phone.ts`): digit count,
+allowed characters, and the backend's 32-character column width. This project
+has no existing country/locale logic anywhere, and inventing country-code rules
+would reject legitimate numbers from regions the assumption didn't cover.
+
+### SQLite migration (v6 to v7)
+
+Three additive nullable/defaulted columns on `local_guide`:
+`about_text`, `local_photo_uri`, `profile_dirty INTEGER NOT NULL DEFAULT 0`.
+No backfill, no table rewrite, no changes to any other table.
+
+Note what is **not** in this migration: nothing for Explore voice. That needed
+no schema change at all, because `local_capture` has carried the audio columns
+and the `ux_local_capture_client_audio_id` unique index since v4.
+
+### Tests actually run for Step 17
+
+- **`npx tsc --noEmit`** â€” clean, no errors.
+- **Android bundle**: `npx expo export --platform android` â€” succeeded
+  (`index-160bc8057021adf1230f6475d00b0d74.hbc`, 2.3 MB).
+- **iOS bundle**: `npx expo export --platform ios` â€” succeeded
+  (`index-cb2348115896d36a221a3e92e3c222c2.hbc`, 2.3 MB).
+- **SQLite v6 to v7 migration**, against a realistic pre-change database built by
+  replaying migrations 0 through 6 and populating a guide, a note, a voice
+  capture, a Step 16 explore capture with a photo, a location and an answer:
+  **PASS** â€” every pre-existing value identical afterwards, new columns `NULL`
+  on the existing guide, `profile_dirty = 0` (not spuriously dirty), Explore
+  rows able to use the v4 audio columns, duplicate `client_audio_id` on an
+  explore row correctly rejected, rows without audio still coexisting, profile
+  edits persisting and the dirty flag clearing.
+- **Backend contract & regressions (27 checks)** â€” all passed. See the backend
+  README's Step 17 section.
+- **Mobile sync-flow replay (17 checks)** â€” the exact request sequence
+  `syncOneExploreCapture` performs, run twice with the same client ids to
+  simulate an interrupted-then-retried sync: one submission, one photo, one
+  audio, one Transcription row, no duplicates.
+- **Concurrency (9 checks, real threads over real HTTP)** â€” all passed.
+
+### What could NOT be tested here
+
+No emulator or physical device was available in this environment, so the
+following were verified by code inspection against the installed SDK's real type
+definitions, **not** by running them:
+
+- The actual microphone permission dialog, and a real denial / "don't ask again".
+- Real microphone capture and the resulting audio file.
+- Audio **playback** of a recorded note (the preview control), including the
+  iOS earpiece-vs-speaker routing that `restorePlaybackAudioMode()` addresses.
+- The camera and photo-library pickers, and their permission dialogs.
+- The square-crop editor for profile photos.
+- Any visual tap-through, animation timing (the recording pulse), or layout on a
+  real screen.
+- End-to-end transcription of an Explore voice note, which requires a real
+  recording **and** a configured Sarvam key. The transcript-resolution logic was
+  tested by setting a Transcription row to `completed` directly â€” that verifies
+  our resolution code, and is explicitly not a test of the provider call.
+
+### Known gaps and edge cases
+
+- **Profile edits made before the guide first syncs** are carried by guide
+  creation, not by PATCH. That is correct, but it means a name edited twice
+  offline before the first-ever sync only ever sends the final value â€” there is
+  no edit history, by design.
+- **`create_or_get_guide` still does not update** name/phone on a repeat POST.
+  Edits go through PATCH instead. If a guide row were somehow created with stale
+  values and never marked dirty, those values would persist until the next edit.
+- **A voice-only discovery whose transcription fails** keeps its audio on the
+  server but produces no knowledge until someone retries transcription. This is
+  reported honestly in Activity, not hidden.
+- **Orphaned audio on the server** remains possible in the documented crash
+  window inside `attach_audio_to_submission` (unchanged from Step 7).
+- **A discarded recording is deleted immediately**, so backgrounding the app
+  mid-composition and having the OS kill it loses an uncommitted recording. That
+  is the same trade-off the composer has always made: nothing is durable until
+  the guide presses Save.
+- **No playback of already-synced recordings** in Activity â€” preview exists only
+  during composition, where the file is known to be local.
+

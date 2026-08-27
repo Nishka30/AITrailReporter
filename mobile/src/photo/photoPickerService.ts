@@ -20,9 +20,22 @@ import { Directory, File, Paths } from 'expo-file-system';
  * restart.
  */
 
-/** Where copied Explore photos live. Inside the app's document directory, so
- * they survive restarts (unlike cache) and are removed with the app. */
-const PHOTO_DIRECTORY_NAME = 'explore_photos';
+/** Where copied photos live. Inside the app's document directory, so they
+ * survive restarts (unlike cache) and are removed with the app.
+ *
+ * Explore photos and profile photos are kept in SEPARATE directories (Step 17)
+ * rather than one shared folder. They have genuinely different lifecycles: an
+ * Explore photo belongs to one contribution and is retained because that
+ * contribution may still need to sync, whereas a profile photo is a single
+ * current value that is replaced outright when the guide picks a new one.
+ * Mixing them would make "which files are still needed?" ambiguous.
+ */
+export type PhotoKind = 'explore' | 'profile';
+
+const PHOTO_DIRECTORY_NAMES: Record<PhotoKind, string> = {
+  explore: 'explore_photos',
+  profile: 'profile_photos',
+};
 
 /** Matches the backend's ALLOWED_PHOTO_CONTENT_TYPES (see
  * backend/app/services/photo_validation.py). We request JPEG explicitly from
@@ -42,8 +55,8 @@ export type PhotoPickResult =
   | { status: 'permission-denied'; canAskAgain: boolean }
   | { status: 'error'; message: string };
 
-function photoDirectory(): Directory {
-  return new Directory(Paths.document, PHOTO_DIRECTORY_NAME);
+function photoDirectory(kind: PhotoKind): Directory {
+  return new Directory(Paths.document, PHOTO_DIRECTORY_NAMES[kind]);
 }
 
 /**
@@ -51,8 +64,8 @@ function photoDirectory(): Directory {
  * durable path. Throws on failure — callers convert that into an honest
  * 'error' result rather than pretending the photo was saved.
  */
-function persistPickedImage(sourceUri: string): string {
-  const directory = photoDirectory();
+function persistPickedImage(sourceUri: string, kind: PhotoKind): string {
+  const directory = photoDirectory(kind);
   if (!directory.exists) {
     directory.create({ intermediates: true });
   }
@@ -66,7 +79,7 @@ function persistPickedImage(sourceUri: string): string {
   return destination.uri;
 }
 
-async function pick(useCamera: boolean): Promise<PhotoPickResult> {
+async function pick(useCamera: boolean, kind: PhotoKind): Promise<PhotoPickResult> {
   try {
     const permission = useCamera
       ? await ImagePicker.requestCameraPermissionsAsync()
@@ -78,7 +91,12 @@ async function pick(useCamera: boolean): Promise<PhotoPickResult> {
 
     const options: ImagePicker.ImagePickerOptions = {
       mediaTypes: ['images'],
-      allowsEditing: false,
+      // Profile pictures are cropped to a square by the OS picker, because they
+      // are ALWAYS displayed in a circular frame — letting the guide choose the
+      // crop is far better than silently centre-cropping whatever they picked.
+      // Explore photos are never cropped: the whole scene is the evidence.
+      allowsEditing: kind === 'profile',
+      ...(kind === 'profile' ? { aspect: [1, 1] as [number, number] } : {}),
       quality: IMAGE_QUALITY,
       exif: false,
     };
@@ -98,7 +116,7 @@ async function pick(useCamera: boolean): Promise<PhotoPickResult> {
       return { status: 'error', message: 'The photo could not be read. Please try again.' };
     }
 
-    const durableUri = persistPickedImage(asset.uri);
+    const durableUri = persistPickedImage(asset.uri, kind);
     return { status: 'success', uri: durableUri, contentType: PHOTO_CONTENT_TYPE };
   } catch (err) {
     console.error('[photoPickerService] Failed to pick photo:', err);
@@ -107,11 +125,30 @@ async function pick(useCamera: boolean): Promise<PhotoPickResult> {
 }
 
 /** Opens the camera. Requests camera permission first, only from this action. */
-export function takePhoto(): Promise<PhotoPickResult> {
-  return pick(true);
+export function takePhoto(kind: PhotoKind = 'explore'): Promise<PhotoPickResult> {
+  return pick(true, kind);
 }
 
 /** Opens the photo library. Requests library permission first, only from this action. */
-export function choosePhoto(): Promise<PhotoPickResult> {
-  return pick(false);
+export function choosePhoto(kind: PhotoKind = 'explore'): Promise<PhotoPickResult> {
+  return pick(false, kind);
+}
+
+/**
+ * Best-effort deletion of a photo this app previously copied into its own
+ * storage (Step 17: replacing or removing a profile picture).
+ *
+ * Only ever called for a URI the app itself produced via persistPickedImage —
+ * never for a picker/gallery URI, which belongs to the OS and must not be
+ * touched. Failure is logged and swallowed: an orphaned file wastes a little
+ * space, whereas throwing here would fail a profile save that otherwise
+ * succeeded, which is strictly worse for the guide.
+ */
+export function deleteStoredPhoto(uri: string): void {
+  try {
+    const file = new File(uri);
+    if (file.exists) file.delete();
+  } catch (err) {
+    console.error('[photoPickerService] Failed to delete stored photo:', err);
+  }
 }

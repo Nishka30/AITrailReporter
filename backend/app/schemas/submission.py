@@ -21,6 +21,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # by app/services/question_answers.py, never ingested through this endpoint.
 SUPPORTED_CAPTURE_TYPES = ("note", "voice", "explore")
 
+# Submission types that may carry an audio attachment, and therefore a
+# Transcription. 'voice' is audio BY DEFINITION (its content is the recording);
+# 'explore' MAY carry one as primary or supplementary content alongside optional
+# text and an optional photo (Step 17).
+#
+# Defined ONCE here and imported by both the upload route
+# (api/routes/submissions.py) and the transcription service
+# (services/transcriptions.py) so the two can never drift apart into a state
+# where audio can be uploaded but then never transcribed — which would be a
+# silent dead end for the guide, not a visible error.
+#
+# Deliberately an allow-list rather than "any type": accepting audio on a 'note'
+# or 'answer' submission would create a state no flow produces or renders.
+AUDIO_CAPABLE_SUBMISSION_TYPES = ("voice", "explore")
+
 
 class SubmissionCreate(BaseModel):
     guide_id: UUID
@@ -30,9 +45,23 @@ class SubmissionCreate(BaseModel):
     # another, as long as the resubmitted payload matches the original.
     client_submission_id: str = Field(min_length=1, max_length=255)
     capture_type: Literal["note", "voice", "explore"]
-    # Required for 'note' and 'explore' (the text IS the submission). Must be
-    # omitted/null for 'voice' — a voice submission's content is the audio,
-    # attached afterwards via POST /api/v1/submissions/{submission_id}/audio.
+    # Required for 'note' (the text IS the submission). Must be omitted/null for
+    # 'voice' — a voice submission's content is the audio, attached afterwards
+    # via POST /api/v1/submissions/{submission_id}/audio.
+    #
+    # OPTIONAL for 'explore' (Step 17). Until Step 17 an Explore contribution
+    # was always text, so text was required; now it may instead (or also) carry
+    # a voice note, whose transcript becomes the source text exactly as it does
+    # for 'voice' (see services/source_text.py). The server genuinely cannot
+    # validate "text or audio" at creation time, because audio is attached by a
+    # SEPARATE later request — precisely the same ordering that has always
+    # applied to 'voice'. So an 'explore' submission with neither text nor a
+    # subsequent audio upload is accepted here and then simply has no source
+    # text to extract from, reported honestly by resolve_source_text() as
+    # EmptySourceTextError. The mobile app enforces "text or voice" before
+    # saving (see mobile/src/screens/ExploreContributeScreen.tsx); this is a
+    # client-side product rule, not a server guarantee, and is documented as
+    # such rather than pretended otherwise.
     text_content: str | None = Field(default=None, min_length=1)
     # When the device captured this, not when the server received it. Defaults to
     # server time if the client doesn't supply one.
@@ -56,10 +85,8 @@ class SubmissionCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_text_content_for_capture_type(self) -> "SubmissionCreate":
-        if self.capture_type in ("note", "explore") and not self.text_content:
-            raise ValueError(
-                f"text_content is required for capture_type {self.capture_type!r}"
-            )
+        if self.capture_type == "note" and not self.text_content:
+            raise ValueError("text_content is required for capture_type 'note'")
         if self.capture_type == "voice" and self.text_content is not None:
             raise ValueError(
                 "text_content must not be supplied for capture_type 'voice' — "
