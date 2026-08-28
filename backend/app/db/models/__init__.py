@@ -4,6 +4,7 @@ from app.db.models.guide_location import GuideLocation
 from app.db.models.knowledge_type_config import KnowledgeTypeConfig
 from app.db.models.location import Location
 from app.db.models.observation import Observation
+from app.db.models.observation_moderation import ObservationModeration
 from app.db.models.question import Question
 from app.db.models.question_answer import QuestionAnswer
 from app.db.models.question_assignment import QuestionAssignment
@@ -17,6 +18,7 @@ __all__ = [
     "KnowledgeTypeConfig",
     "Location",
     "Observation",
+    "ObservationModeration",
     "Question",
     "QuestionAnswer",
     "QuestionAssignment",

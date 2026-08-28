@@ -10,3 +10,4 @@ python-dotenv==1.0.1
 python-multipart==0.0.20
 sarvamai==0.1.30
 anthropic==1.0.0
+supabase==2.15.2

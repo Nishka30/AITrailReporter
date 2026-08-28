@@ -15,6 +15,7 @@ from app.schemas.observation import ObservationRead
 from app.services import geographic_context as geographic_context_service
 from app.services import guide_locations as guide_location_service
 from app.services import knowledge_types as knowledge_type_service
+from app.services import observation_moderation as observation_moderation_service
 from app.services import observations as observation_service
 from app.services import source_text as source_text_service
 from app.services.extraction.anthropic_provider import ExtractionProviderError, extract_observations
@@ -229,20 +230,28 @@ def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]
         )
 
     for obs in validated_observations:
-        db.add(
-            Observation(
-                submission_id=submission.id,
-                guide_id=submission.guide_id,
-                knowledge_type_id=obs.knowledge_type_id,
-                latitude=coordinates[0] if coordinates else None,
-                longitude=coordinates[1] if coordinates else None,
-                geog=make_point(*coordinates) if coordinates else None,
-                value=obs.value,
-                confidence=obs.confidence,
-                evidence=obs.evidence,
-                observed_at=submission.submitted_at,
-            )
+        observation = Observation(
+            submission_id=submission.id,
+            guide_id=submission.guide_id,
+            knowledge_type_id=obs.knowledge_type_id,
+            latitude=coordinates[0] if coordinates else None,
+            longitude=coordinates[1] if coordinates else None,
+            geog=make_point(*coordinates) if coordinates else None,
+            value=obs.value,
+            confidence=obs.confidence,
+            evidence=obs.evidence,
+            observed_at=submission.submitted_at,
         )
+        db.add(observation)
+        # Admin moderation layer: every Observation gets a 'pending_review'
+        # moderation row created atomically alongside it, in this SAME
+        # transaction -- exactly the same "created atomically with its
+        # parent event" pattern as ensure_pending_transcription on audio
+        # attach. flush() (not commit()) assigns observation.id without
+        # ending the transaction the final 'completed' flip below still needs
+        # to join.
+        db.flush()
+        observation_moderation_service.ensure_pending_moderation(db, observation.id)
 
     extraction.status = "completed"
     extraction.model = settings.anthropic_model

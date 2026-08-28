@@ -45,6 +45,12 @@ class LocalFilesystemMediaStorage(MediaStorage):
         path.write_bytes(content)
         return StoredFile(storage_key=storage_key, size_bytes=len(content))
 
+    def read_bytes(self, storage_key: str) -> bytes:
+        path = self.resolve_path(storage_key)
+        if not path.is_file():
+            raise FileNotFoundError(f"Stored file not found: {storage_key!r}")
+        return path.read_bytes()
+
     def resolve_path(self, storage_key: str) -> Path:
         path = (self._base_dir / storage_key).resolve()
         if path.parent != self._base_dir:

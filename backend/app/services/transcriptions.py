@@ -119,10 +119,10 @@ def start_transcription(db: Session, submission_id: UUID) -> tuple[Transcription
     db.refresh(transcription)
 
     storage = get_audio_storage()
-    audio_path = storage.resolve_path(submission.audio_storage_key)
-    if not audio_path.is_file():
+    try:
+        audio_bytes = storage.read_bytes(submission.audio_storage_key)
+    except FileNotFoundError:
         return _mark_failed(db, transcription, "Stored audio file is missing on the server."), "failed"
-    audio_bytes = audio_path.read_bytes()
 
     try:
         result = transcribe_audio(

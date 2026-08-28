@@ -12,7 +12,12 @@ FastAPI + SQLAlchemy + Alembic backend, backed by local PostgreSQL with PostGIS 
    9)](#llm-structured-extraction-step-9) below. Everything else in this backend
    works fine without either configured; only `POST .../transcribe` and
    `POST .../extract` need their respective key, and each reports a clean `503`
-   if its key is missing.
+   if its key is missing. To use the admin dashboard (Step 18), also set
+   `ADMIN_API_TOKEN` (any long random string) and, if the admin web app runs
+   somewhere other than `http://localhost:5173`, `ADMIN_CORS_ORIGINS` — see
+   [Admin dashboard (Step 18)](#admin-dashboard--content-curation--moderation-layer-step-18).
+   Without `ADMIN_API_TOKEN` set, every `/api/v1/admin/*` route reports a
+   clean `503` rather than being reachable unauthenticated.
 2. Create and activate a virtual environment, then install dependencies:
 
    ```
@@ -2133,6 +2138,160 @@ uvicorn server (not `TestClient`, and not sequential calls):
 - `create_or_get_guide` still does **not** update name/phone on a repeat POST;
   that is what `PATCH` is for.
 
+## Admin dashboard — content curation & moderation layer (Step 18)
+
+A new admin web app ([`admin/`](../admin/README.md)) sits between field
+collection and any future public-facing app. Its rule is simple and absolute:
+**nothing an AI extracts or a guide submits becomes publicly visible just
+because it exists.** A human decides. This step adds exactly the backend
+surface that rule requires — no second database, no parallel knowledge
+system, no change to any existing mobile-facing endpoint or workflow.
+
+### The moderation model
+
+A **sixth independent state machine**, alongside `sync_status` (mobile-local),
+`Transcription.status`, `Extraction.status`, `Question.status`, and
+`QuestionAssignment.status`. It answers a question none of those do: "has a
+human approved this piece of knowledge for eventual public visibility?"
+
+`observation_moderation` is a **new table**, one row per `Observation`
+(enforced by a `UNIQUE` foreign key) — deliberately *not* status columns
+added to `Observation` itself. Every other lifecycle in this codebase
+(Transcription, Extraction, Question, QuestionAssignment) already follows
+this same "new lifecycle = new table" convention; moderation is no
+exception. Values: `pending_review` (the default — set atomically the moment
+an `Observation` is inserted, inside the same transaction as the insert, in
+`services/extractions.py`), `approved`, `rejected`.
+
+Because one submission can produce several observations (e.g. one voice note
+→ `snow_ice` + `trail_condition`), moderation is scoped to the **observation**,
+not the submission — each is reviewed and decided independently, while the
+originating `Submission` (raw text/audio/photo) is read-only evidence, never
+duplicated or rewritten by a decision.
+
+**Approve/reject only ever act on a `pending_review` observation.** Switching
+an *already-decided* observation to the opposite decision is a deliberately
+separate action — `POST .../change-decision` — never something the same
+approve/reject buttons do silently. All three endpoints lock the moderation
+row (`SELECT ... FOR UPDATE`) for the duration of the decision, the same
+pattern used throughout this codebase (e.g. `attach_audio_to_submission`), so
+two concurrent decisions on the same observation are fully serialized rather
+than racing.
+
+Rejection records one of a small closed set of reasons — `inaccurate`,
+`unsafe`, `duplicate`, `poor_quality`, `not_useful`, `other` — plus an
+optional free-text note. Rejecting (or re-rejecting) never deletes or alters
+the source `Submission`/`Observation`.
+
+### Database changes
+
+One new table, `observation_moderation`, added by migration `13e123a398eb`
+(revises `386c20775143`). Purely additive — no existing table or column is
+touched. The migration also backfills a `pending_review` row for every
+`Observation` that existed before this step, so "every Observation has a
+moderation row" holds for old data too. Verified with `alembic check` (no
+drift) against a live database.
+
+### Authentication (development-safe, not production-grade)
+
+Nothing resembling authentication existed anywhere in this backend before
+this step — confirmed by inspection, not assumed. Every `/api/v1/admin/*`
+route is now gated by a single shared secret:
+
+```
+ADMIN_API_TOKEN=<a long random string>
+```
+
+set as a backend environment variable. Requests must send it as the
+`X-Admin-Token` header (an optional `X-Admin-Name` header supplies a
+self-reported display label, used only for `decided_by` attribution — **not**
+a verified identity). `ADMIN_API_TOKEN` unset means the admin API is
+unreachable (503), not open. See `app/core/admin_auth.py`. This is explicitly
+a placeholder for real per-admin accounts, stated as such rather than implied
+otherwise — do not expose this deployment beyond a small trusted team as-is.
+
+### CORS
+
+The mobile app was never subject to CORS (React Native's `fetch` isn't a
+browser). The admin web app is, so `CORSMiddleware` is now registered in
+`app/main.py`, scoped to an explicit allow-list:
+
+```
+ADMIN_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+```
+
+Deliberately never `*` — the admin API returns contributor phone numbers.
+
+### Endpoints
+
+All under `/api/v1/admin/`, all requiring the admin token:
+
+```
+POST /auth/verify                          Checks a token; used by the admin login screen
+GET  /overview                              Real, live counts — never fabricated
+GET  /review-queue                          Defaults to status=pending_review
+GET  /knowledge                             Same shape, all statuses by default
+GET  /reviews/{observation_id}              Full provenance: source, extraction,
+GET  /knowledge/{observation_id}            live knowledge context, related + sibling observations
+POST /reviews/{observation_id}/approve      Only from pending_review
+POST /reviews/{observation_id}/reject       Only from pending_review; body: {reason, note?}
+POST /reviews/{observation_id}/change-decision   Only from an already-decided state;
+                                             body: {status, reason?, note?}
+GET  /places                                 Reuses `locations` + PostGIS ST_DWithin — no Haversine
+GET  /places/{location_id}
+GET  /contributors                           Aggregated per Guide; phone_number never in the list view
+GET  /contributors/{guide_id}                 phone_number appears here only
+GET  /questions                              Read-only visibility into Question/QuestionAssignment —
+                                             does NOT touch or redesign that workflow (Step 12/13)
+GET  /submissions/{submission_id}/audio      Evidence playback, via MediaStorage.read_bytes()
+GET  /submissions/{submission_id}/photo      (works with either the local-filesystem or Supabase backend)
+```
+
+Example flow:
+
+```
+curl -X POST http://127.0.0.1:8000/api/v1/admin/reviews/<observation_id>/approve \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" -H "X-Admin-Name: Nishka"
+
+curl -X POST http://127.0.0.1:8000/api/v1/admin/reviews/<observation_id>/change-decision \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status": "rejected", "reason": "unsafe", "note": "conditions have since changed"}'
+```
+
+### No conflict/duplicate detection exists — and none is faked
+
+Confirmed by inspection: nothing in this codebase detects conflicting or
+duplicate observations. Rather than pretending otherwise, Review Detail's
+`related_observations` is a real, working query — other observations of the
+*same knowledge type*, within that type's own configured
+`geographic_relevance_radius_meters`, ordered by distance (or recency if the
+observation has no coordinate) — that a human reads and judges themselves.
+The backend never claims to have detected a conflict.
+
+### The future public-content boundary
+
+No public-facing endpoint is built in this step. The boundary is
+established structurally: "publicly approved content" is always exactly
+`observations JOIN observation_moderation WHERE status = 'approved'` — the
+identical join `GET /admin/knowledge` already exercises. A future public API
+would reuse this same join with internal-only fields (`decided_by`, raw
+contributor identity, etc.) simply omitted from its response schema.
+
+### Known gaps
+
+- No real per-admin identity/session — see "Authentication" above.
+- `change-decision` does not keep a full audit trail of prior decisions,
+  only the current one (`decided_by`/`decided_at`/`rejection_reason` are
+  overwritten, not appended-to). Acceptable for this step; a `moderation_history`
+  table would be the natural extension if that's ever needed.
+- Review Detail's "related observations" panel scopes by the SAME knowledge
+  type only — it does not attempt to find conceptually-related observations
+  of a *different* type (e.g. `snow_ice` vs. `trail_condition` at the same
+  spot). That is a genuinely different, harder problem, not attempted here.
+- `admin/submissions/{id}/audio` and `/photo` stream the whole file in one
+  response (no HTTP range/partial-content support) — fine for a short voice
+  note or a phone photo, not built for large media.
+
 ## Project layout
 
 ```
@@ -2144,8 +2303,9 @@ app/
   db/geo.py                       PostGIS point helper (single source of truth for lat/lon -> WKT ordering)
   db/models/                       SQLAlchemy models (guides, guide_locations, locations,
                                     knowledge_type_config, submissions, observations,
-                                    transcriptions, extractions, questions,
-                                    question_assignments, question_answers)
+                                    observation_moderation, transcriptions, extractions,
+                                    questions, question_assignments, question_answers)
+  core/admin_auth.py               Minimal dev-safe admin token dependency (Step 18)
   schemas/                         Pydantic request/response models
   services/                        Query/persistence logic used by routes
   services/storage/                 Audio storage abstraction (base.py interface,
@@ -2193,6 +2353,14 @@ app/
                                      ownership/status checks, persistence, and
                                      representing the answer as a Submission for
                                      the EXISTING extraction pipeline (Step 13)
+  services/observation_moderation.py  Moderation lifecycle: ensure/approve/reject/
+                                     change-decision, row-locked (Step 18)
+  services/admin_overview.py        Overview counts -- direct COUNT() queries (Step 18)
+  services/admin_review.py          Review Queue / Knowledge browser / Review Detail --
+                                     shared query, provenance assembly (Step 18)
+  services/admin_places.py          Places aggregation, reusing PostGIS (Step 18)
+  services/admin_contributors.py    Contributors aggregation (Step 18)
+  services/admin_questions.py       Read-only admin view of Question/QuestionAssignment (Step 18)
   api/routes/health.py              GET /health
   api/routes/guides.py               Guide create/get + nearby-guide query + guide
                                       context + guide knowledge-state +
@@ -2211,6 +2379,7 @@ app/
                                       GET /api/v1/questions/{id},
                                       POST /api/v1/questions/{id}/answers,
                                       GET /api/v1/questions/{id}/answers/{answer_id}
+  api/routes/admin.py                 /api/v1/admin/* -- see "Admin dashboard" (Step 18)
 alembic/                        Migrations (extensions, tables, seed data)
 var/audio_uploads/              Uploaded voice-note audio (local dev storage, gitignored)
 ```
@@ -2298,3 +2467,15 @@ var/audio_uploads/              Uploaded voice-note audio (local dev storage, gi
   editing/re-answering, review/approval workflows, notifications of any
   kind, embeddings, vector search, or RAG. No schema/migration changes were
   needed or made.
+- Step 18 (admin dashboard) adds moderation as a SIXTH independent state
+  machine (`observation_moderation.status`) and is careful never to conflate
+  it with any of the other five (`sync_status`, `Transcription.status`,
+  `Extraction.status`, `Question.status`, `QuestionAssignment.status`) —
+  "AI extracted it" / "transcription succeeded" / "the guide submitted it" /
+  "knowledge is fresh" are none of them the same claim as "an admin approved
+  it," and none of the existing five tables gained a column or changed
+  meaning because of this step. It deliberately does NOT implement: real
+  per-admin accounts/sessions, automatic conflict/duplicate detection, a
+  public-facing API (the boundary is established, not built), moderation
+  history/audit trail beyond the current decision, or any change to mobile
+  capture/sync/transcription/extraction/question/answer behavior.
