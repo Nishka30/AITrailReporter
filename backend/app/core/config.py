@@ -108,9 +108,21 @@ class Settings(BaseSettings):
     # from an arbitrary origin.
     admin_cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
+    # Comma-separated list of allowed browser origins for the PUBLIC
+    # traveller website (Next.js, default dev port 3000). Kept as its own
+    # setting rather than folded into admin_cors_origins: the two surfaces
+    # have very different trust levels (admin returns phone numbers; public
+    # returns only pre-filtered approved content), so their allowed origins
+    # should be able to diverge independently in production.
+    public_cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
     @property
     def admin_cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.admin_cors_origins.split(",") if origin.strip()]
+
+    @property
+    def public_cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.public_cors_origins.split(",") if origin.strip()]
 
     @property
     def database_url(self) -> str:
