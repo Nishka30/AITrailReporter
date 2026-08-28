@@ -2354,19 +2354,54 @@ have been a genuine import cycle.
   "Understand this report" button calls; it needed **zero mobile app
   changes** for this step — it still shows real status, it just usually
   shows "completed" already instead of "not started yet."
-- Transcription itself is still 100% manual/explicit (a guide must still tap
-  "Transcribe" for a voice note) — only extraction changed.
+- ~~Transcription itself is still 100% manual/explicit~~ — true when first
+  written, no longer true: see the addendum immediately below.
+
+### Addendum: automatic transcription too
+
+Immediately after the above shipped, the same request came back one step
+earlier in the pipeline: a voice/explore recording still needed a guide to
+open the app and tap "Transcribe" before anything downstream could happen —
+easy to simply never get around to. So transcription is now ALSO automatic,
+closing that last manual gap:
+
+`services/transcriptions.py::maybe_trigger_transcription(db, submission_id)`
+— same "never raises" contract as `maybe_trigger_extraction` — is called
+from `services/submissions.py::attach_audio_to_submission`, right after
+audio is durably attached (and right after that function's own Submission
+row lock is released, so it takes its own separate lock on the Transcription
+row rather than nesting under an already-held one).
+
+The result: uploading audio now runs the **entire** pipeline —
+save file → transcribe (Sarvam) → extract (Claude) → observation exists,
+ready for moderation — inside that ONE upload request, with zero taps.
+Verified live: uploaded a real audio file saying "It is raining so much
+here... raining is happening", and `GET .../transcription` +
+`GET .../extraction` showed a completed transcript and a real `weather`
+observation, both without any other request in between.
+
+**The one real tradeoff worth knowing:** that single upload request now
+chains two external network calls (Sarvam, then Claude) end to end instead
+of returning immediately after saving the file. In testing this added a
+few seconds to the upload request; on a slow trail connection it's worth
+watching against the mobile app's own `REQUEST_TIMEOUT_MS` (20s in
+`mobile/src/api/client.ts`) — if it ever gets tight, the fix is NOT to touch
+this code (no background worker/queue exists in this system, matching every
+other step's stated constraint) but to raise that mobile timeout, since the
+server-side work itself still completes and is retryable/idempotent
+regardless of whether the client is still waiting for it.
 
 ### Known gaps
 
-- No minimum-content guard: a two-word test note now spends a real Claude
-  API call automatically, same as a substantive field report. This was a
-  deliberate, explicit product decision (accepting the cost/volume
-  tradeoff), not an oversight.
+- No minimum-content guard: a two-word test note (or a two-second test
+  recording) now spends real Sarvam/Claude API calls automatically, same as
+  a substantive field report. This was a deliberate, explicit product
+  decision (accepting the cost/volume tradeoff), not an oversight.
 - No retroactive sweep: submissions created before this step (with source
-  text already available but no Extraction row) are not automatically
-  extracted by this change — they still need one manual `POST .../extract`
-  each, same as before. Nothing re-scans historical data.
+  text/audio already available but no Transcription/Extraction row reflecting
+  it) are not automatically processed by this change — they still need one
+  manual `POST .../transcribe` and/or `POST .../extract` each, same as
+  before. Nothing re-scans historical data.
 
 ## Project layout
 

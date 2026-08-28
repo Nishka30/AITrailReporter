@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -9,6 +10,8 @@ from app.db.models.transcription import Transcription
 from app.schemas.submission import AUDIO_CAPABLE_SUBMISSION_TYPES
 from app.services.storage import get_audio_storage
 from app.services.transcription.sarvam import TranscriptionProviderError, transcribe_audio
+
+logger = logging.getLogger(__name__)
 
 
 class SubmissionNotAudioCapableError(Exception):
@@ -158,3 +161,29 @@ def start_transcription(db: Session, submission_id: UUID) -> tuple[Transcription
     extraction_service.maybe_trigger_extraction(db, submission_id)
 
     return transcription, "completed"
+
+
+def maybe_trigger_transcription(db: Session, submission_id: UUID) -> None:
+    """Best-effort AUTOMATIC transcription trigger, called right after audio
+    is durably attached to a submission (see
+    services/submissions.py:attach_audio_to_submission). Mirrors
+    extractions.py:maybe_trigger_extraction's contract exactly: NEVER raises,
+    so an audio upload always succeeds regardless of whether Sarvam can be
+    reached right now -- a human can still manually retry via
+    POST .../transcribe (unchanged, still fully idempotent).
+
+    Combined with the auto-extraction trigger already at the end of
+    start_transcription above, this closes the last manual gap: a voice or
+    voice-bearing explore submission now flows all the way from "audio
+    uploaded" to "observations exist for review" with ZERO taps, exactly
+    like a text note already does (see extractions.py:maybe_trigger_extraction,
+    called from services/submissions.py at note-creation time) -- unless
+    something in the chain genuinely fails, in which case it's reported
+    honestly as a failed/retryable state, never silently.
+    """
+    try:
+        start_transcription(db, submission_id)
+    except Exception:
+        logger.warning(
+            "Automatic transcription trigger failed for submission %s", submission_id, exc_info=True
+        )

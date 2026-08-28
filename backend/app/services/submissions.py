@@ -169,6 +169,15 @@ def attach_audio_to_submission(
     transcription_service.ensure_pending_transcription(db, submission_id)
     db.commit()
     db.refresh(submission)
+    # Automatic transcription (see transcriptions.py:maybe_trigger_transcription)
+    # -- called AFTER the commit above, so the Submission row lock held since
+    # entry to this function has already been released before Sarvam is ever
+    # called; start_transcription takes its own separate lock on the
+    # Transcription row. Chains into automatic extraction on its own once
+    # transcription completes (see the end of start_transcription) -- so a
+    # voice/explore recording now goes from "uploaded" to "observations exist"
+    # with zero taps, same as a text note already does above.
+    transcription_service.maybe_trigger_transcription(db, submission_id)
     return submission, True
 
 
