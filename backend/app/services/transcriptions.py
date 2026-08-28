@@ -144,4 +144,17 @@ def start_transcription(db: Session, submission_id: UUID) -> tuple[Transcription
     transcription.completed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(transcription)
+
+    # Automatic extraction (see extractions.py:maybe_trigger_extraction) --
+    # a voice/explore submission's source text only becomes available once
+    # transcription completes, so this is where it triggers for those types
+    # (mirrors the trigger at creation time for 'note'/'answer'/explore-with-
+    # text in services/submissions.py and question_answers.py). Imported here
+    # rather than at module level: extractions.py -> source_text.py ->
+    # transcriptions.py already forms one direction of this dependency, so a
+    # top-level import here would be a circular import.
+    from app.services import extractions as extraction_service
+
+    extraction_service.maybe_trigger_extraction(db, submission_id)
+
     return transcription, "completed"

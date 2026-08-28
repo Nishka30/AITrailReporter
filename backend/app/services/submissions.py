@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models.submission import Submission
 from app.schemas.submission import SubmissionCreate
+from app.services import extractions as extraction_service
 from app.services import transcriptions as transcription_service
 from app.services.storage.base import AudioStorage, MediaStorage
 
@@ -101,6 +102,11 @@ def create_or_get_submission(db: Session, data: SubmissionCreate) -> tuple[Submi
             return existing, False
         raise
     db.refresh(submission)
+    # Automatic extraction (see extractions.py:maybe_trigger_extraction):
+    # a 'note' always has text immediately; an 'explore' submission MAY --
+    # resolve_source_text handles both, and a voice-only 'explore' (no text
+    # yet) simply isn't ready, so this is a safe no-op for it. Never raises.
+    extraction_service.maybe_trigger_extraction(db, submission.id)
     return submission, True
 
 

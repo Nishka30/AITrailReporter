@@ -19,6 +19,7 @@ from app.db.models.question import Question
 from app.db.models.question_answer import QuestionAnswer
 from app.db.models.question_assignment import QuestionAssignment
 from app.db.models.submission import Submission
+from app.services import extractions as extraction_service
 
 
 class QuestionNotFoundError(Exception):
@@ -233,4 +234,7 @@ def submit_answer(
 
     db.commit()
     db.refresh(answer)
+    # Automatic extraction (see extractions.py:maybe_trigger_extraction) --
+    # an answer's text is available immediately, exactly like a note.
+    extraction_service.maybe_trigger_extraction(db, submission.id)
     return answer, True

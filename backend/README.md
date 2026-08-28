@@ -2292,6 +2292,82 @@ contributor identity, etc.) simply omitted from its response schema.
   response (no HTTP range/partial-content support) — fine for a short voice
   note or a phone photo, not built for large media.
 
+## Automatic extraction triggering (Step 19)
+
+Every step through Step 18 deliberately made extraction (and transcription)
+**explicit-only**: a human/UI action had to call `POST .../extract` for
+anything to happen — "no polling, no auto-trigger, backend truth over UI
+guesswork" (see `mobile/src/screens/PendingItemsScreen.tsx`). Step 19
+reverses that specific decision, by product request: extraction now runs
+**automatically**, the moment a submission's source text first becomes
+available, with no explicit trigger required.
+
+### Where it hooks in
+
+`app/services/extractions.py::maybe_trigger_extraction(db, submission_id)` is
+the one place this policy lives — it resolves the submission's source text
+(reusing `source_text.py` unchanged) and, if text is actually available,
+calls the existing `start_extraction` unchanged. If text isn't available yet
+(e.g. a voice-only submission whose transcription hasn't completed), it's a
+silent, harmless no-op — nothing failed, it just isn't time yet. It is called
+from exactly three places, matching the three ways source text can newly
+become available:
+
+- `services/submissions.py::create_or_get_submission` — right after creating
+  a **new** `'note'` submission, or an `'explore'` submission that already
+  carries text. (Never called on an idempotent replay of an
+  already-existing submission — that would just re-check a state that was
+  already triggered once.)
+- `services/question_answers.py::submit_answer` — right after creating the
+  `Submission` that represents a guide's answer (its text is available
+  immediately, exactly like a note).
+- `services/transcriptions.py::start_transcription` — right after a
+  `'voice'` or voice-bearing `'explore'` submission's transcription
+  **freshly** completes (not on an already-completed early return, which
+  would have already triggered this the first time it completed).
+
+### Why this is safe
+
+`maybe_trigger_extraction` **never raises** — the action that triggered it
+(submission creation, answer submission, transcription completion) must
+always succeed regardless of whether extraction itself can run right now.
+Every failure mode is swallowed and logged rather than propagated: no source
+text yet, no `ANTHROPIC_API_KEY` configured, a transient provider error, or
+any other unexpected exception. This required one deferred (function-local,
+not module-level) import in `transcriptions.py`, to avoid a real circular
+import: `extractions.py` → `source_text.py` → `transcriptions.py` already
+existed in that direction, so a module-level import the other way back would
+have been a genuine import cycle.
+
+### What did NOT change
+
+- `start_extraction` itself, its idempotency (`pending`/`processing`/
+  `completed`/`failed`), its concurrency handling (claim/lock/finalize), and
+  the atomic `ObservationModeration` row creation from Step 18 — all reused
+  completely unchanged. Automatic triggering is purely an additional CALLER
+  of the exact same function; the function has no idea whether a human or an
+  automatic hook invoked it.
+- `POST /api/v1/submissions/{id}/extract` still exists and still works
+  exactly as before — calling it now almost always just reports the already-
+  completed (or already-failed, retryable) result immediately, since
+  automatic triggering already ran. This is what the mobile app's existing
+  "Understand this report" button calls; it needed **zero mobile app
+  changes** for this step — it still shows real status, it just usually
+  shows "completed" already instead of "not started yet."
+- Transcription itself is still 100% manual/explicit (a guide must still tap
+  "Transcribe" for a voice note) — only extraction changed.
+
+### Known gaps
+
+- No minimum-content guard: a two-word test note now spends a real Claude
+  API call automatically, same as a substantive field report. This was a
+  deliberate, explicit product decision (accepting the cost/volume
+  tradeoff), not an oversight.
+- No retroactive sweep: submissions created before this step (with source
+  text already available but no Extraction row) are not automatically
+  extracted by this change — they still need one manual `POST .../extract`
+  each, same as before. Nothing re-scans historical data.
+
 ## Project layout
 
 ```
@@ -2417,7 +2493,11 @@ var/audio_uploads/              Uploaded voice-note audio (local dev storage, gi
   `knowledge_type_config`'s freshness/relevance policy at all — that's Step 10.
   Extraction also never automatically triggers on transcription completion or
   submission creation — always an explicit `POST .../extract`, matching Step
-  8's transcription trigger discipline.
+  8's transcription trigger discipline. **Since Step 19 this is no longer
+  true** — extraction is now triggered automatically; see
+  [Automatic extraction triggering (Step 19)](#automatic-extraction-triggering-step-19).
+  Left here unedited otherwise as an accurate record of Step 9's own scope
+  at the time it was written.
 - Step 10 (knowledge state) reads `freshness_window_hours` and
   `geographic_relevance_radius_meters` for the first time, but deliberately
   does NOT implement: gap ranking/prioritization, natural-language question

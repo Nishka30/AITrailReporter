@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -24,6 +25,8 @@ from app.services.extraction.validation import (
     ValidatedObservation,
     validate_llm_output,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_extraction_by_submission_id(db: Session, submission_id: UUID) -> Extraction | None:
@@ -260,3 +263,43 @@ def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]
     db.commit()
     db.refresh(extraction)
     return extraction, "completed"
+
+
+def maybe_trigger_extraction(db: Session, submission_id: UUID) -> None:
+    """Best-effort AUTOMATIC extraction trigger. Extraction used to be purely
+    explicit (POST .../extract only, called by a human/UI action) -- this is
+    now called right at the moment a submission's source text FIRST becomes
+    available, so a guide/admin no longer has to separately ask for it to be
+    "understood":
+      - services/submissions.py: right after creating a 'note', or an
+        'explore' submission that already carries text.
+      - services/question_answers.py: right after creating the Submission
+        that represents a guide's answer.
+      - services/transcriptions.py: right after a 'voice' or voice-bearing
+        'explore' submission's transcription completes.
+
+    Deliberately swallows every failure rather than propagating: the action
+    that triggered this (submission creation, answer submission, transcription
+    completion) must ALWAYS succeed regardless of whether automatic extraction
+    itself could run right now (no source text yet, no ANTHROPIC_API_KEY
+    configured, a transient provider error, ...). A human can still always
+    manually trigger/retry via POST .../extract -- see start_extraction's own
+    idempotency, which this reuses unchanged.
+    """
+    submission = db.get(Submission, submission_id)
+    if submission is None:
+        return
+
+    try:
+        source_text_service.resolve_source_text(db, submission)
+    except source_text_service.SourceTextError:
+        # Nothing to extract yet (e.g. an 'explore' submission with neither
+        # text nor a completed transcription) -- not an error, just not ready.
+        return
+
+    try:
+        start_extraction(db, submission_id)
+    except Exception:
+        logger.warning(
+            "Automatic extraction trigger failed for submission %s", submission_id, exc_info=True
+        )
