@@ -10,6 +10,7 @@ import { captureCurrentLocation } from '../location/locationService';
 import { countCapturesByStatus } from '../repositories/captureRepository';
 import { countLocationsByStatus, createLocation, getLatestLocation } from '../repositories/locationRepository';
 import { isAutoSyncEnabled, setAutoSyncEnabled } from '../repositories/settingsRepository';
+import { attemptAutoSync } from '../sync/autoSync';
 import { syncAll, type SyncResult } from '../sync/syncService';
 import { colors, spacing, type } from '../theme/theme';
 import type { LocalGuide, LocalLocation } from '../types/models';
@@ -194,6 +195,11 @@ export default function HomeScreen({
     }
   }
 
+  async function handleVoiceSaved() {
+    await sync.refresh();
+    attemptAutoSync(db);
+  }
+
   async function handleCaptureLocation() {
     if (capturingLocation) return;
     setCapturingLocation(true);
@@ -211,6 +217,7 @@ export default function HomeScreen({
         );
         setLocationMessage('Saved on this device — not yet sent to the server.');
         await sync.refresh();
+        attemptAutoSync(db);
       } else if (result.status === 'permission-denied') {
         setLocationMessage(
           result.canAskAgain
@@ -365,7 +372,7 @@ export default function HomeScreen({
       </View>
 
       <View style={styles.voiceCardWrap}>
-        <VoiceRecorderCard guide={guide} onSaved={sync.refresh} />
+        <VoiceRecorderCard guide={guide} onSaved={handleVoiceSaved} />
       </View>
 
       {locationMessage ? (

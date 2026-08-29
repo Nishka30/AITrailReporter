@@ -25,7 +25,7 @@ import ProfileScreen from './screens/ProfileScreen';
 import QuestionsScreen from './screens/QuestionsScreen';
 import RewardsScreen from './screens/RewardsScreen';
 import SetupScreen from './screens/SetupScreen';
-import { useAutoSync } from './sync/autoSync';
+import { attemptAutoSync, useAutoSync } from './sync/autoSync';
 import type { LocalGuide } from './types/models';
 
 type PushedScreen =
@@ -106,7 +106,12 @@ export default function RootNavigator() {
     setSelectedPrompt(null);
     if (returnTo) setActiveTab(returnTo);
     setRefreshKey((k) => k + 1);
-  }, []);
+    // Closing a pushed screen (note/voice/explore/memory/answer) is the
+    // moment right after a local save — the natural trigger for "auto sync
+    // means I don't have to think about it" while already online, not only
+    // on the next Wi-Fi reconnect (see attemptAutoSync's own doc).
+    attemptAutoSync(db);
+  }, [db]);
 
   if (loading) {
     return (

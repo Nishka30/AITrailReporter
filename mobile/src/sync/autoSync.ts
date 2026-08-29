@@ -6,6 +6,29 @@ import { isAutoSyncEnabled } from '../repositories/settingsRepository';
 import { syncAll } from './syncService';
 
 /**
+ * Fires the existing syncAll(db) if (and only if) the guide has opted in AND
+ * the device is currently online — otherwise a no-op. Best-effort and never
+ * throws: callers fire this after any local save (see RootNavigator's
+ * closePushed and HomeScreen's capture/location handlers) without needing to
+ * await or handle its result — the existing pending/failed statuses already
+ * carry a skipped or failed attempt forward to the next trigger.
+ *
+ * This is what makes "auto sync" actually mean "syncs on its own" rather
+ * than only "syncs on the next Wi-Fi reconnect": useAutoSync below covers
+ * the reconnect case, and every call site that just wrote new local data
+ * covers the equally common case of already being online when it happened.
+ */
+export async function attemptAutoSync(db: SQLiteDatabase): Promise<void> {
+  const enabled = await isAutoSyncEnabled(db);
+  if (!enabled) return;
+  const state = await Network.getNetworkStateAsync().catch(() => null);
+  if (!state?.isConnected) return;
+  await syncAll(db).catch((err) => {
+    console.warn('[autoSync] Opportunistic sync attempt failed:', err);
+  });
+}
+
+/**
  * Auto-sync: when the guide has opted in (see HomeScreen's toggle, backed by
  * settingsRepository), attempts the EXISTING syncAll(db) as soon as this
  * device transitions from disconnected to connected. No new sync engine, no
