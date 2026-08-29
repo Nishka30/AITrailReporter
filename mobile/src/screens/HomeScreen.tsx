@@ -155,6 +155,16 @@ export default function HomeScreen({
     // in this app.
     setAutoSyncEnabledState(next);
     await setAutoSyncEnabled(db, next);
+
+    // useAutoSync only fires on a disconnected->connected TRANSITION (see
+    // sync/autoSync.ts) — flipping this on while already online, the common
+    // case of a guide turning it on mid-session, would otherwise wait for
+    // the next real reconnect before doing anything, which reads as "auto
+    // sync is on and nothing is happening." Turning it on is itself a signal
+    // to try right now, same as the guide having tapped "Sync now."
+    if (next && !syncing) {
+      handleSyncNow();
+    }
   }
 
   async function handleSyncNow() {
