@@ -70,6 +70,31 @@ def get_discovery(db: Session, cell_key: str) -> PoiDiscovery | None:
     return db.execute(stmt).scalar_one_or_none()
 
 
+def is_abandoned(discovery: PoiDiscovery) -> bool:
+    """True when a run claims to be 'processing' but cannot still be running.
+
+    WHY THIS IS NECESSARY: the claim below refuses to start a second run while
+    one is already 'processing', which is correct -- it stops two guides in the
+    same neighbourhood both paying for the same web searches. But nothing
+    resets that flag if the process holding it dies: a crash, a container
+    restart, a deploy mid-run, or an OOM kill all leave the row stuck. Without
+    recovery, that cell is locked out of discovery PERMANENTLY, and the failure
+    is invisible -- the app just quietly never gets places there again.
+
+    The cutoff is the provider timeout plus a margin. Past that point the
+    original attempt has either finished (and would have moved the status) or
+    can no longer be alive, so reclaiming is safe rather than a race.
+    """
+    if discovery.status != "processing":
+        return False
+    started = discovery.started_at
+    if started is None:
+        # 'processing' with no start time is incoherent state; reclaim it.
+        return True
+    age = datetime.now(timezone.utc) - started
+    return age.total_seconds() > settings.place_question_research_timeout_seconds + 120
+
+
 def is_discovery_stale(discovery: PoiDiscovery | None) -> bool:
     """True when a (re)discovery is due: never run, or the last SUCCESSFUL run
     is older than the configured window. A row stuck in 'failed' with no
@@ -214,11 +239,21 @@ def ensure_discovered(db: Session, latitude: float, longitude: float, force: boo
         select(PoiDiscovery).where(PoiDiscovery.id == discovery.id).with_for_update()
     ).scalar_one()
 
-    if locked.status == "processing":
-        # Another request is already researching this cell. Don't duplicate the
-        # web spend; the caller serves whatever exists meanwhile.
+    if locked.status == "processing" and not is_abandoned(locked):
+        # Another request is genuinely still researching this cell. Don't
+        # duplicate the web spend; the caller serves whatever exists meanwhile.
         db.commit()
         return locked
+
+    if is_abandoned(locked):
+        # A previous attempt died holding the claim (crash, restart, deploy).
+        # Logged rather than silently reclaimed: repeated reclaims of the same
+        # cell mean runs are dying, which is worth noticing.
+        logger.warning(
+            "Reclaiming abandoned POI discovery for cell %s (started %s).",
+            cell_key,
+            locked.started_at,
+        )
 
     if not force and not is_discovery_stale(locked):
         db.commit()

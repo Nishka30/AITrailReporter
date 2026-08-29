@@ -70,6 +70,29 @@ def get_place_question(db: Session, place_question_id: UUID) -> PlaceQuestion | 
     return db.get(PlaceQuestion, place_question_id)
 
 
+def is_abandoned(research: PlaceQuestionResearch) -> bool:
+    """True when a run claims to be 'processing' but cannot still be running.
+
+    The claim in ensure_researched refuses to start a second run while one is
+    'processing' -- correct, it prevents paying twice for the same web search.
+    But nothing resets that flag if the process holding it dies: a crash, a
+    container restart, or a deploy mid-run leaves the row stuck, and that place
+    is then locked out of research PERMANENTLY. The failure is invisible: the
+    app simply never gets invitations there and looks generic forever.
+
+    The cutoff is the provider timeout plus a margin, past which the original
+    attempt has either finished (and would have moved the status) or can no
+    longer be alive.
+    """
+    if research.status != "processing":
+        return False
+    started = research.started_at
+    if started is None:
+        return True
+    age = datetime.now(timezone.utc) - started
+    return age.total_seconds() > settings.place_question_research_timeout_seconds + 120
+
+
 def is_research_stale(research: PlaceQuestionResearch | None) -> bool:
     """True when a (re)search is due: never researched, or the last SUCCESSFUL
     run is older than the configured window. A row stuck in 'failed' with no
@@ -189,11 +212,21 @@ def ensure_researched(db: Session, location_id: UUID, force: bool = False) -> Pl
         .with_for_update()
     ).scalar_one()
 
-    if locked.status == "processing":
-        # Another request is already researching this place. Don't duplicate
-        # the web spend; the caller serves existing questions meanwhile.
+    if locked.status == "processing" and not is_abandoned(locked):
+        # Another request is genuinely still researching this place. Don't
+        # duplicate the web spend; the caller serves existing questions.
         db.commit()
         return locked
+
+    if is_abandoned(locked):
+        # A previous attempt died holding the claim. Reclaimed rather than
+        # left stuck forever; logged because repeated reclaims mean runs are
+        # dying and that is worth noticing.
+        logger.warning(
+            "Reclaiming abandoned place-question research for %s (started %s).",
+            location_id,
+            locked.started_at,
+        )
 
     if not force and not is_research_stale(locked):
         db.commit()
