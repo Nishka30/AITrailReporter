@@ -2,10 +2,10 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.schemas.geographic_context import GuideContext
 from app.schemas.guide import GuideCreate, GuideRead, GuideUpdate
 from app.schemas.guide_location import NearbyGuideResult
@@ -20,10 +20,46 @@ from app.services import guides as guide_service
 from app.services import knowledge_decisions as knowledge_decision_service
 from app.services import knowledge_state as knowledge_state_service
 from app.services import place_questions as place_question_service
+from app.services import poi_discovery as poi_discovery_service
 from app.services import questions as question_service
 from app.services import rewards as reward_service
 
 router = APIRouter(prefix="/api/v1/guides", tags=["guides"])
+
+
+# --- background jobs -------------------------------------------------------
+#
+# Both web-research steps below run for MINUTES (several real web searches,
+# then generation -- see place_question_research_timeout_seconds). They used to
+# be awaited inline, which meant the very first guide to arrive somewhere new
+# had the mobile app hang until research finished or timed out. Since both are
+# cached for weeks afterwards, that cost fell entirely on one unlucky request
+# for a benefit every LATER request collects.
+#
+# So they are scheduled instead: the endpoint answers immediately with whatever
+# is known right now, and the work lands before the next refresh. That makes
+# "nothing here yet" a normal, momentary state rather than a stall, which is
+# also how the app already renders it.
+#
+# Each job opens its OWN session: the request's session is closed by the
+# get_db dependency as soon as the response is sent, so reusing it here would
+# operate on a dead connection.
+
+
+def _discover_places_job(latitude: float, longitude: float) -> None:
+    db = SessionLocal()
+    try:
+        poi_discovery_service.maybe_ensure_discovered(db, latitude, longitude)
+    finally:
+        db.close()
+
+
+def _research_place_questions_job(location_id: UUID) -> None:
+    db = SessionLocal()
+    try:
+        place_question_service.maybe_ensure_researched(db, location_id)
+    finally:
+        db.close()
 
 
 @router.post("", response_model=GuideRead, status_code=201)
@@ -204,6 +240,7 @@ def get_guide_questions(
 @router.get("/{guide_id}/popular-questions", response_model=GuidePlaceQuestions)
 def get_guide_popular_questions(
     guide_id: UUID,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """Popular questions about the place the guide is currently at (Step 18).
@@ -232,16 +269,31 @@ def get_guide_popular_questions(
     if location is None:
         return empty
 
-    context = geographic_context_service.resolve_geographic_context(
-        db, float(location.latitude), float(location.longitude)
-    )
+    latitude, longitude = float(location.latitude), float(location.longitude)
+    context = geographic_context_service.resolve_geographic_context(db, latitude, longitude)
     place = context.nearest_known_place
     if place is None:
+        # No known place within range. Historically this was simply the end of
+        # the road -- and with an empty `locations` table it was the end of the
+        # road EVERYWHERE, which is why production served nothing but generic
+        # prompts however good the research prompts were.
+        #
+        # Now it schedules discovery for this part of the map instead. This
+        # request still returns empty (honestly -- we genuinely don't know where
+        # they are yet), but the next one has real places to work with. Cached
+        # per grid cell, so a whole neighbourhood costs one run, not one per
+        # guide and not one per GPS reading.
+        background.add_task(_discover_places_job, latitude, longitude)
         return empty
 
-    # Best-effort: a research failure must never break the question list, so
-    # this swallows errors and we serve whatever is already stored.
-    place_question_service.maybe_ensure_researched(db, place.id)
+    # Scheduled rather than awaited: research takes minutes and is cached for
+    # 30 days afterwards, so blocking this request would stall the app for one
+    # guide to benefit all the later ones. is_research_stale is re-checked
+    # inside the job, so scheduling on every request costs nothing once fresh.
+    if place_question_service.is_research_stale(
+        place_question_service.get_research(db, place.id)
+    ):
+        background.add_task(_research_place_questions_job, place.id)
 
     questions = place_question_service.list_place_questions(db, place.id)
 

@@ -1,0 +1,281 @@
+"""POI discovery: turning a bare coordinate into real, named Locations.
+
+WHY THIS EXISTS
+Everything place-specific in this system hangs off the `locations` table. A
+guide's GPS only becomes "you're at Hillary Bridge" because a Location row sits
+within `geographic_context_radius_meters` of them. With an empty table --
+which is exactly what production had -- `geographic_context` resolves nothing,
+place research never runs, no "you're here" invitations exist, and Explore
+falls back to generic prompts however good the downstream prompts are. The
+pipeline was never broken; it was starving.
+
+This module feeds it, from real web research rather than curation.
+
+Concurrency follows the established pattern from extractions.py /
+place_questions.py: the discovery row is claimed under SELECT ... FOR UPDATE
+and the lock is RELEASED BEFORE the external call -- a multi-minute web search
+must never hold a database row lock.
+
+Nothing here touches the knowledge-gap pipeline. It creates Locations; the
+existing services take it from there entirely unmodified.
+"""
+
+import logging
+import math
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.db.geo import make_point
+from app.db.models.location import Location
+from app.db.models.poi_discovery import PoiDiscovery
+from app.services.poi_discovery_research import anthropic_provider, validation
+
+logger = logging.getLogger(__name__)
+
+
+def cell_key_for(latitude: float, longitude: float) -> str:
+    """The discovery grid cell containing this coordinate.
+
+    Rounding to `poi_discovery_cell_degrees` (0.01 deg, ~1.1km) is what makes
+    discovery cacheable at all. Keyed on raw coordinates, the metre-scale
+    jitter of a stationary phone would look like an endless stream of new
+    places to research, re-paying for the same web searches forever. Keyed on a
+    cell, a neighbourhood is researched once and every guide who passes through
+    afterwards is served from that one run.
+
+    Deterministic and dependency-free: the same coordinate always yields the
+    same key, which is what the UNIQUE constraint on the table relies on.
+    """
+    step = settings.poi_discovery_cell_degrees
+    lat_cell = math.floor(latitude / step) * step
+    lon_cell = math.floor(longitude / step) * step
+    return f"{lat_cell:.4f},{lon_cell:.4f}"
+
+
+def cell_center(cell_key: str) -> tuple[float, float]:
+    """The centre of a cell, which is what actually gets searched -- never the
+    guide's exact position. This keeps a person's precise location out of an
+    outbound request and out of this table."""
+    lat_s, lon_s = cell_key.split(",")
+    step = settings.poi_discovery_cell_degrees
+    return float(lat_s) + step / 2, float(lon_s) + step / 2
+
+
+def get_discovery(db: Session, cell_key: str) -> PoiDiscovery | None:
+    stmt = select(PoiDiscovery).where(PoiDiscovery.cell_key == cell_key)
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def is_discovery_stale(discovery: PoiDiscovery | None) -> bool:
+    """True when a (re)discovery is due: never run, or the last SUCCESSFUL run
+    is older than the configured window. A row stuck in 'failed' with no
+    discovered_at is stale, so retries remain possible -- but a row currently
+    'processing' is NOT restarted here (see ensure_discovered)."""
+    if discovery is None or discovery.discovered_at is None:
+        return True
+    age = datetime.now(timezone.utc) - discovery.discovered_at
+    return age > timedelta(days=settings.poi_discovery_refresh_days)
+
+
+def _ensure_discovery_row(db: Session, cell_key: str) -> PoiDiscovery:
+    """Get-or-create, race-safe via the UNIQUE constraint on cell_key -- the
+    same IntegrityError-catch-and-refetch pattern used elsewhere, because an
+    INSERT race cannot be solved with SELECT FOR UPDATE (there is no row to
+    lock yet)."""
+    existing = get_discovery(db, cell_key)
+    if existing is not None:
+        return existing
+    lat, lon = cell_center(cell_key)
+    discovery = PoiDiscovery(
+        cell_key=cell_key, center_latitude=lat, center_longitude=lon, status="pending"
+    )
+    db.add(discovery)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = get_discovery(db, cell_key)
+        if existing is None:
+            raise
+        return existing
+    return discovery
+
+
+def _distance_meters(db: Session, lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> float:
+    """Great-circle distance via PostGIS, not Python trigonometry -- the same
+    geography type and the same ST_Distance the rest of the system uses, so
+    'near' means exactly the same thing here as it does everywhere else."""
+    return float(
+        db.execute(
+            select(func.ST_Distance(make_point(lat_a, lon_a), make_point(lat_b, lon_b)))
+        ).scalar_one()
+    )
+
+
+def _existing_nearby_place(db: Session, latitude: float, longitude: float) -> Location | None:
+    """An already-known place within the dedup radius, if any.
+
+    Dedup is GEOGRAPHIC, not by name: the same bridge legitimately appears as
+    "Hillary Bridge", "Hillary Suspension Bridge" and "Edmund Hillary Bridge"
+    across different sources, and string matching would store three anchors for
+    one physical thing. Two places within a few tens of metres are treated as
+    one, which is also how a guide standing there would see it.
+    """
+    target = make_point(latitude, longitude)
+    stmt = (
+        select(Location)
+        .where(func.ST_DWithin(Location.geog, target, settings.poi_discovery_dedup_radius_meters))
+        .order_by(func.ST_Distance(Location.geog, target))
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()
+
+
+def _persist_places(
+    db: Session,
+    cell_key: str,
+    center_lat: float,
+    center_lon: float,
+    places: list[validation.DiscoveredPlace],
+) -> int:
+    """Creates Location rows for genuinely new, plausibly-located places.
+
+    THE COORDINATE SANITY CHECK IS THE REAL ANTI-HALLUCINATION GUARD. A model
+    asked "what is near 12.93, 77.63" can invent a convincing cafe with a
+    convincing name and a convincing citation, but an invented latitude/longitude
+    is rarely near the query point by luck. Anything outside the accept radius
+    is rejected outright rather than clamped or stored "close enough" -- a
+    Location in the wrong spot is worse than no Location, because everything
+    downstream (research, invitations, observations, rewards) anchors to it and
+    it is indistinguishable from a real row once written.
+    """
+    kept = 0
+    for place in places:
+        if kept >= settings.poi_discovery_max_places:
+            break
+
+        distance = _distance_meters(
+            db, center_lat, center_lon, place.latitude, place.longitude
+        )
+        if distance > settings.poi_discovery_accept_radius_meters:
+            logger.info(
+                "Rejected discovered place %r: %.0fm from cell centre (max %dm).",
+                place.name,
+                distance,
+                settings.poi_discovery_accept_radius_meters,
+            )
+            continue
+
+        duplicate = _existing_nearby_place(db, place.latitude, place.longitude)
+        if duplicate is not None:
+            logger.info(
+                "Skipped discovered place %r: already known as %r.", place.name, duplicate.name
+            )
+            continue
+
+        db.add(
+            Location(
+                name=place.name,
+                description=place.description or None,
+                latitude=place.latitude,
+                longitude=place.longitude,
+                geog=make_point(place.latitude, place.longitude),
+                source="discovered",
+                place_kind=place.place_kind or None,
+                source_urls=place.source_urls,
+                discovery_cell_key=cell_key,
+            )
+        )
+        # Flushed per place so the NEXT iteration's dedup query can see it --
+        # otherwise one batch could insert the same place twice under two names.
+        db.flush()
+        kept += 1
+    return kept
+
+
+def ensure_discovered(db: Session, latitude: float, longitude: float, force: bool = False) -> PoiDiscovery:
+    """Discovers real places around a coordinate if due (or if forced).
+
+    Returns the discovery row in its resulting state. A 'failed' outcome is a
+    legitimate, honest result -- callers should carry on with whatever places
+    already exist rather than erroring.
+    """
+    cell_key = cell_key_for(latitude, longitude)
+    center_lat, center_lon = cell_center(cell_key)
+
+    discovery = _ensure_discovery_row(db, cell_key)
+    db.commit()
+
+    locked = db.execute(
+        select(PoiDiscovery).where(PoiDiscovery.id == discovery.id).with_for_update()
+    ).scalar_one()
+
+    if locked.status == "processing":
+        # Another request is already researching this cell. Don't duplicate the
+        # web spend; the caller serves whatever exists meanwhile.
+        db.commit()
+        return locked
+
+    if not force and not is_discovery_stale(locked):
+        db.commit()
+        return locked
+
+    locked.status = "processing"
+    locked.attempt_count += 1
+    locked.started_at = datetime.now(timezone.utc)
+    locked.error_message = None
+    locked.model = settings.anthropic_model
+    # Releases the row lock BEFORE the external call.
+    db.commit()
+
+    try:
+        raw = anthropic_provider.discover_places(
+            center_lat, center_lon, settings.poi_discovery_search_radius_meters
+        )
+        places = validation.validate_discovery_output(raw)
+    except (
+        anthropic_provider.PoiDiscoveryProviderError,
+        validation.DiscoveryValidationError,
+    ) as exc:
+        failed = db.get(PoiDiscovery, discovery.id)
+        failed.status = "failed"
+        failed.error_message = str(getattr(exc, "message", exc))[:500]
+        failed.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        logger.warning("POI discovery failed for cell %s: %s", cell_key, type(exc).__name__)
+        return failed
+
+    kept = _persist_places(db, cell_key, center_lat, center_lon, places)
+
+    done = db.get(PoiDiscovery, discovery.id)
+    done.status = "completed"
+    done.error_message = None
+    completed_at = datetime.now(timezone.utc)
+    done.completed_at = completed_at
+    # Only a SUCCESSFUL run moves discovered_at, so repeated failures can never
+    # masquerade as fresh coverage and suppress future attempts.
+    done.discovered_at = completed_at
+    done.discovered_count = kept
+    db.commit()
+
+    logger.info("Discovered %d place(s) for cell %s.", kept, cell_key)
+    return done
+
+
+def maybe_ensure_discovered(db: Session, latitude: float, longitude: float) -> None:
+    """Best-effort trigger. Never raises: a discovery failure must not break
+    whatever the caller was actually doing. Mirrors
+    place_questions.maybe_ensure_researched's swallow-everything contract."""
+    try:
+        ensure_discovered(db, latitude, longitude)
+    except Exception as exc:  # noqa: BLE001 -- deliberate best-effort boundary
+        logger.warning(
+            "Best-effort POI discovery failed for %.5f,%.5f: %s",
+            latitude,
+            longitude,
+            type(exc).__name__,
+        )

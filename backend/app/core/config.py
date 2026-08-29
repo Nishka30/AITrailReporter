@@ -106,6 +106,36 @@ class Settings(BaseSettings):
     # error.
     place_question_research_timeout_seconds: float = 300.0
 
+    # --- POI discovery (app/services/poi_discovery.py) --------------------
+    # Discovery is what fills the `locations` table from web research, so the
+    # system can be place-specific somewhere nobody curated by hand.
+    #
+    # Grid cell size for caching a discovery run. 0.01 deg is ~1.1km of
+    # latitude. Small enough that one run's results are genuinely "around
+    # here", large enough that a stationary phone's GPS jitter never crosses a
+    # cell boundary and re-triggers a paid web search.
+    poi_discovery_cell_degrees: float = 0.01
+    # How far around the cell centre research is asked to look.
+    poi_discovery_search_radius_meters: int = 1500
+    # A discovered place whose coordinates fall further than this from the cell
+    # centre is REJECTED, not clamped. This is the primary defence against
+    # invented coordinates: a hallucinated lat/lon is rarely near the query
+    # point by luck. Deliberately a little wider than the search radius so a
+    # genuine place near the edge isn't discarded for rounding.
+    poi_discovery_accept_radius_meters: int = 2500
+    # Two places closer together than this are treated as the same physical
+    # thing. Dedup is geographic rather than by name because the same bridge
+    # appears under several names across sources.
+    poi_discovery_dedup_radius_meters: int = 60
+    # Hard cap on Locations created by ONE discovery run. Blast-radius control,
+    # the same reasoning as MAX_NEW_TYPES_PER_EXTRACTION: structure can be
+    # validated, genuine local significance cannot, so one over-eager run can
+    # add at most this many anchors.
+    poi_discovery_max_places: int = 8
+    # How long a successful run stays valid. Named places appear and close
+    # slowly, and every refresh costs real web searches.
+    poi_discovery_refresh_days: int = 60
+
     # Step 18: reward points -> money. `10` means 10 points = 1.00 of
     # reward_currency_code. Configured here rather than in the mobile app so
     # the rate can change without an app release -- the app only ever DISPLAYS
