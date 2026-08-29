@@ -155,6 +155,23 @@ class Settings(BaseSettings):
     # its locality attached returns the right temple. One call per place, then
     # stored on the Location forever.
     osm_nominatim_url: str = "https://nominatim.openstreetmap.org/reverse"
+    # Forward geocoding ("Kedarnath" -> coordinates), for the place-autocomplete
+    # feature. A separate URL/setting from the reverse endpoint above because
+    # Nominatim exposes them as distinct paths and a self-hosted deployment
+    # could reasonably run one without the other.
+    osm_nominatim_search_url: str = "https://nominatim.openstreetmap.org/search"
+
+    # How far apart (in hours) a GuideLocation sample may be from a
+    # submission's occurred_at and still be trusted as that submission's
+    # location. This is the ENTIRE safeguard against the failure this feature
+    # exists to prevent: a photo taken weeks ago being assigned wherever the
+    # guide happened to be standing today. Deliberately tight -- a guide moves
+    # kilometres in a few hours, so "close in time" is the only honest
+    # definition of "close" available here (there is no independent distance
+    # signal to cross-check against). Beyond this window, location stays
+    # "unknown" rather than guessing from a stale or future sample; see
+    # app/services/extractions.py:_resolve_observation_coordinates.
+    historical_location_max_gap_hours: float = 6.0
 
     # --- Perplexity (web research) ---------------------------------------
     # The WEB RESEARCH layer: given a place this system already knows exists

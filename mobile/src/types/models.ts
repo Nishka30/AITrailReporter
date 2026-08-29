@@ -24,12 +24,39 @@ export type SyncStatus =
  *               unprompted; an Explore contribution answers a discovery prompt
  *               the app surfaced) — and the backend models it the same way, as
  *               submission_type 'explore'.
+ * - 'memory'  — a contribution not tied to a live moment or verified place: an
+ *               old photo, a recalled story. Structurally identical to
+ *               'explore' (same composer, same optional text/photo/voice) —
+ *               the entire difference is that its location/date provenance is
+ *               determined rather than assumed to be "here and now" (see the
+ *               location.../occurredAt... fields on LocalCapture below, and
+ *               src/location/photoLocationResolver.ts).
  * - 'photo'/'mixed' — reserved, still not produced by any flow. A photo is
- *               attached to an 'explore' capture, NOT stored as a standalone
- *               'photo' capture, so that a contribution is always one
- *               submission with one extractable text body.
+ *               attached to an 'explore'/'memory' capture, NOT stored as a
+ *               standalone 'photo' capture, so that a contribution is always
+ *               one submission with one extractable text body.
  */
-export type CaptureType = 'note' | 'voice' | 'explore' | 'photo' | 'mixed';
+export type CaptureType = 'note' | 'voice' | 'explore' | 'memory' | 'photo' | 'mixed';
+
+/**
+ * How a capture's latitude/longitude came to be, in decreasing order of
+ * trustworthiness. Mirrors the backend's SUBMISSION_LOCATION_SOURCES exactly
+ * (app/db/models/submission.py) — kept as the same set of string values on
+ * both sides so nothing is translated or re-interpreted crossing the wire.
+ */
+export type LocationSource =
+  | 'photo_exif'
+  | 'gps_live'
+  | 'historical_inferred'
+  | 'user_selected'
+  | 'approximate'
+  | 'unknown';
+
+/** Mirrors the backend's DATE_PRECISIONS exactly. */
+export type DatePrecision = 'exact' | 'month' | 'year' | 'approximate' | 'unknown';
+
+/** Mirrors the backend's DATE_SOURCES exactly. */
+export type DateSource = 'device' | 'exif' | 'user_entered' | 'inferred' | 'unknown';
 
 /**
  * Which of the two question sources a local answer belongs to (Step 18).
@@ -176,6 +203,49 @@ export interface LocalCapture {
    * existed.
    */
   rewardPoints: number | null;
+  /**
+   * Location/date provenance — HOW this capture's coordinate and event time
+   * were determined, not just WHAT they are. Mirrors the backend's
+   * Submission columns exactly (app/db/models/submission.py) and is sent
+   * verbatim on sync (see src/sync/syncService.ts) — the backend is the one
+   * place these values are interpreted, so the mobile side never needs its
+   * own copy of that logic.
+   *
+   * All are set at capture time by src/location/photoLocationResolver.ts (for
+   * photo-bearing captures) or by the repository directly (for a plain
+   * live GPS-tagged note/voice) — never edited afterwards.
+   *
+   * `latitude`/`longitude` reuse this row's existing... there is no existing
+   * lat/lon column on LocalCapture (unlike LocalLocation), because until this
+   * feature no capture type needed to carry its own coordinate — Explore's
+   * location always came from the guide's live GuideLocation pings. These are
+   * the first capture-level coordinates in this table.
+   */
+  latitude: number | null;
+  longitude: number | null;
+  locationSource: LocationSource;
+  locationAccuracyMeters: number | null;
+  /** ISO-8601 — when the COORDINATE was established (a GPS/EXIF timestamp),
+   * distinct from `occurredAt` below (when the CONTENT is about) and from
+   * `createdAt` (this local row's own bookkeeping time). */
+  locationCapturedAt: string | null;
+  /** Human-readable place name, from a geocoder selection or left null when
+   * the coordinate came from GPS/EXIF (which already displays as a real
+   * place via reverse lookup on the backend, not duplicated here). */
+  locationLabel: string | null;
+  /** Short factual note on why this location was assigned — mirrors the
+   * backend's Submission.location_evidence exactly, e.g. "Matched to a GPS
+   * sample 40 min after the photo's timestamp". Populated only for
+   * historical-inference results the backend reports back; never fabricated
+   * on-device. */
+  locationEvidence: string | null;
+  /** ISO-8601 — when the CONTENT is about, which may be long before
+   * `createdAt` for an uploaded-later photo or memory. Null means "let the
+   * backend default this to submitted-at", exactly like omitting it from the
+   * API request (see app/services/submissions.py). */
+  occurredAt: string | null;
+  occurredAtPrecision: DatePrecision;
+  dateSource: DateSource;
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;
@@ -268,3 +338,12 @@ export interface LocalAnswer {
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * Device-level app preferences — NOT guide identity data, which is why this
+ * is its own tiny key/value table rather than more columns on LocalGuide (see
+ * src/db/database.ts's `local_settings` table). Reinstalling the app or
+ * switching guides on the same device does not carry these over; they are a
+ * property of this install, not of a person.
+ */
+export type AppSettingKey = 'auto_sync_enabled';

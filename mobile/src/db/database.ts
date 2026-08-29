@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 9;
+const DATABASE_VERSION = 10;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -352,7 +352,53 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 9;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 9) { ...; currentDbVersion = 10; }`
+  if (currentDbVersion === 9) {
+    // v9 -> v10: location/date provenance for contributions, the new
+    // 'memory' capture type, and a device-preferences table.
+    //
+    // Mirrors the backend's Submission columns exactly (see
+    // backend/app/db/models/submission.py's SUBMISSION_LOCATION_SOURCES /
+    // DATE_PRECISIONS / DATE_SOURCES) so syncService can pass these straight
+    // through on POST /api/v1/submissions with no local re-interpretation.
+    //
+    // `latitude`/`longitude` are new HERE on local_capture: until this
+    // release no capture type carried its own coordinate at all (Explore's
+    // "you're here" context always came from the separate live GuideLocation
+    // pings in local_location, never from the capture row itself). A photo's
+    // EXIF GPS or a live-captured note's device GPS now can.
+    //
+    // Existing rows get the honest defaults ('unknown'/NULL) rather than a
+    // backfilled guess — a capture made before this column existed genuinely
+    // has no recorded provenance, and pretending otherwise would be exactly
+    // the kind of fabricated confidence this feature exists to prevent.
+    await db.execAsync(`
+      BEGIN TRANSACTION;
+
+      ALTER TABLE local_capture ADD COLUMN latitude REAL;
+      ALTER TABLE local_capture ADD COLUMN longitude REAL;
+      ALTER TABLE local_capture ADD COLUMN location_source TEXT NOT NULL DEFAULT 'unknown';
+      ALTER TABLE local_capture ADD COLUMN location_accuracy_meters REAL;
+      ALTER TABLE local_capture ADD COLUMN location_captured_at TEXT;
+      ALTER TABLE local_capture ADD COLUMN location_label TEXT;
+      ALTER TABLE local_capture ADD COLUMN location_evidence TEXT;
+      ALTER TABLE local_capture ADD COLUMN occurred_at TEXT;
+      ALTER TABLE local_capture ADD COLUMN occurred_at_precision TEXT NOT NULL DEFAULT 'unknown';
+      ALTER TABLE local_capture ADD COLUMN date_source TEXT NOT NULL DEFAULT 'unknown';
+
+      -- Device-level preferences (e.g. auto-sync). Deliberately NOT a column
+      -- on local_guide: this is a property of the install, not of a person,
+      -- and switching the active guide on one device should not reset it.
+      CREATE TABLE IF NOT EXISTS local_settings (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT NOT NULL
+      );
+
+      COMMIT;
+    `);
+    currentDbVersion = 10;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 10) { ...; currentDbVersion = 11; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

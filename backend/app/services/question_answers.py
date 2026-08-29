@@ -210,6 +210,14 @@ def submit_answer(
         raw_text=answer_text,
         latitude=question.target_latitude,
         longitude=question.target_longitude,
+        # Not a device reading of any kind -- a real, reasonable coordinate
+        # (the gap's own target) rather than a precise capture-time position,
+        # which "approximate" communicates honestly.
+        location_source="approximate",
+        location_evidence="Target coordinates of the knowledge gap this question was generated to fill.",
+        occurred_at=answered_at,
+        occurred_at_precision="exact",
+        date_source="device",
         submitted_at=answered_at,
         status="received",
         source_question_id=question.id,

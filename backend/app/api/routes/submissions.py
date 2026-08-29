@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.submission import (
     AUDIO_CAPABLE_SUBMISSION_TYPES,
+    PHOTO_CAPABLE_SUBMISSION_TYPES,
     SubmissionCreate,
     SubmissionRead,
 )
@@ -138,9 +139,10 @@ async def upload_submission_photo(
     duplicate file; the same submission with a DIFFERENT client_photo_id is
     rejected with 409.
 
-    Restricted to 'explore' submissions on purpose: photos are an Explore
-    capability in this step, and silently accepting one on a 'note' or 'voice'
-    submission would create a state no existing flow produces or renders."""
+    Restricted to PHOTO_CAPABLE_SUBMISSION_TYPES on purpose: photos are an
+    Explore/memory capability, and silently accepting one on a 'note' or
+    'voice' submission would create a state no existing flow produces or
+    renders."""
     try:
         uuid_module.UUID(client_photo_id)
     except ValueError:
@@ -149,10 +151,13 @@ async def upload_submission_photo(
     submission = submission_service.get_submission(db, submission_id)
     if submission is None:
         raise HTTPException(status_code=404, detail="Submission not found")
-    if submission.submission_type != "explore":
+    if submission.submission_type not in PHOTO_CAPABLE_SUBMISSION_TYPES:
         raise HTTPException(
             status_code=400,
-            detail="Photos can only be attached to a submission with capture_type 'explore'",
+            detail=(
+                "Photos can only be attached to a submission with capture_type "
+                f"in {PHOTO_CAPABLE_SUBMISSION_TYPES!r}"
+            ),
         )
 
     # Read at most one byte past the configured cap: enough to detect an oversized

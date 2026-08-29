@@ -1,15 +1,16 @@
+import type { DatePrecision, DateSource, LocationSource } from '../types/models';
 import { apiRequest } from './client';
 
 export interface CreateSubmissionRequest {
   guideId: string;
   /** Makes this call idempotent — see backend Submission.client_submission_id. */
   clientSubmissionId: string;
-  captureType: 'note' | 'voice' | 'explore';
+  captureType: 'note' | 'voice' | 'explore' | 'memory';
   /** Required for 'note' and 'explore'. Must be null for 'voice' — the backend
    * rejects a 'voice' submission that supplies text_content (its content is the
-   * audio, uploaded separately — see api/audio.ts). An 'explore' contribution's
-   * photo, when present, is likewise uploaded separately (see api/photos.ts),
-   * but its text is always carried here. */
+   * audio, uploaded separately — see api/audio.ts). An 'explore'/'memory'
+   * contribution's photo, when present, is likewise uploaded separately (see
+   * api/photos.ts), but its text is always carried here. */
   textContent: string | null;
   /** ISO-8601, timezone-aware — when the device captured this, not when it's sent. */
   submittedAt: string;
@@ -24,6 +25,23 @@ export interface CreateSubmissionRequest {
    * question was answered.
    */
   sourcePlaceQuestionId?: string | null;
+
+  // --- Location/date provenance -----------------------------------------
+  // All optional and independent — sent as-is, whatever
+  // src/location/photoLocationResolver.ts (or a plain live GPS read)
+  // determined on-device. Never fabricated here to fill a gap; see
+  // backend/app/schemas/submission.py for how an absent field is defaulted
+  // server-side instead.
+  latitude?: number | null;
+  longitude?: number | null;
+  locationSource?: LocationSource;
+  locationAccuracyMeters?: number | null;
+  locationCapturedAt?: string | null;
+  locationLabel?: string | null;
+  locationEvidence?: string | null;
+  occurredAt?: string | null;
+  occurredAtPrecision?: DatePrecision;
+  dateSource?: DateSource;
 }
 
 export interface SubmissionAudioResponse {
@@ -136,6 +154,16 @@ export async function createOrGetSubmission(
       text_content: req.textContent,
       submitted_at: req.submittedAt,
       source_place_question_id: req.sourcePlaceQuestionId ?? null,
+      latitude: req.latitude ?? null,
+      longitude: req.longitude ?? null,
+      location_source: req.locationSource ?? null,
+      location_accuracy_meters: req.locationAccuracyMeters ?? null,
+      location_captured_at: req.locationCapturedAt ?? null,
+      location_label: req.locationLabel ?? null,
+      location_evidence: req.locationEvidence ?? null,
+      occurred_at: req.occurredAt ?? null,
+      occurred_at_precision: req.occurredAtPrecision ?? null,
+      date_source: req.dateSource ?? null,
     },
   });
   return submissionFromWire(wire);

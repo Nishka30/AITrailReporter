@@ -50,7 +50,30 @@ export const PHOTO_CONTENT_TYPE = 'image/jpeg';
 const IMAGE_QUALITY = 0.6;
 
 export type PhotoPickResult =
-  | { status: 'success'; uri: string; contentType: string }
+  | {
+      status: 'success';
+      uri: string;
+      contentType: string;
+      /** Raw EXIF tags from the picker, or null if none were readable.
+       * Interpretation (GPS decoding, capture time) is deliberately NOT done
+       * here — see src/location/photoLocationResolver.ts, which is the only
+       * place that turns these raw tags into location/date provenance. This
+       * keeps "how do we pick a photo" and "what does this photo's metadata
+       * mean" as separate concerns.
+       *
+       * KNOWN PLATFORM GAP: per Expo's own docs, iOS never includes GPS tags
+       * in EXIF for a photo taken with the in-app camera (library picks and
+       * Android are unaffected) — this is exactly why a LIVE capture must
+       * also fall back to device GPS rather than relying on EXIF alone (see
+       * the resolver). */
+      exif: Record<string, unknown> | null;
+      /** Whether this came from the camera (a live, right-now capture) or
+       * the library (possibly an old photo). The resolver needs this: a
+       * live camera photo with no EXIF GPS should fall back to CURRENT
+       * device GPS, while a library photo with no EXIF GPS must NOT — it
+       * could be from anywhere, any time. */
+      source: 'camera' | 'library';
+    }
   | { status: 'cancelled' }
   | { status: 'permission-denied'; canAskAgain: boolean }
   | { status: 'error'; message: string };
@@ -98,7 +121,11 @@ async function pick(useCamera: boolean, kind: PhotoKind): Promise<PhotoPickResul
       allowsEditing: kind === 'profile',
       ...(kind === 'profile' ? { aspect: [1, 1] as [number, number] } : {}),
       quality: IMAGE_QUALITY,
-      exif: false,
+      // Read, never rely on: absent on iOS camera captures by platform
+      // design, and not guaranteed present anywhere else either. See
+      // PhotoPickResult's `exif` field and photoLocationResolver.ts, which
+      // treat every EXIF field as independently-possibly-missing.
+      exif: true,
     };
 
     const result = useCamera
@@ -117,7 +144,13 @@ async function pick(useCamera: boolean, kind: PhotoKind): Promise<PhotoPickResul
     }
 
     const durableUri = persistPickedImage(asset.uri, kind);
-    return { status: 'success', uri: durableUri, contentType: PHOTO_CONTENT_TYPE };
+    return {
+      status: 'success',
+      uri: durableUri,
+      contentType: PHOTO_CONTENT_TYPE,
+      exif: (asset.exif as Record<string, unknown> | undefined) ?? null,
+      source: useCamera ? 'camera' : 'library',
+    };
   } catch (err) {
     console.error('[photoPickerService] Failed to pick photo:', err);
     return { status: 'error', message: 'Could not open the photo. Please try again.' };

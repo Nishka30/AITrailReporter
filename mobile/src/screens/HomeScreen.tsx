@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -9,6 +9,7 @@ import { Avatar, Badge, Button, Card, QuickActionTile, Screen, SectionHeader } f
 import { captureCurrentLocation } from '../location/locationService';
 import { countCapturesByStatus } from '../repositories/captureRepository';
 import { countLocationsByStatus, createLocation, getLatestLocation } from '../repositories/locationRepository';
+import { isAutoSyncEnabled, setAutoSyncEnabled } from '../repositories/settingsRepository';
 import { syncAll, type SyncResult } from '../sync/syncService';
 import { colors, spacing, type } from '../theme/theme';
 import type { LocalGuide, LocalLocation } from '../types/models';
@@ -134,6 +135,27 @@ export default function HomeScreen({
   const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
   const [capturingLocation, setCapturingLocation] = useState(false);
   const [locationMessage, setLocationMessage] = useState<string | null>(null);
+  // null while loading, so the toggle never flashes an incorrect state before
+  // the real stored preference is read.
+  const [autoSyncEnabled, setAutoSyncEnabledState] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    isAutoSyncEnabled(db).then((enabled) => {
+      if (!cancelled) setAutoSyncEnabledState(enabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [db]);
+
+  async function handleToggleAutoSync(next: boolean) {
+    // Optimistic: this is a local, instantly-reversible preference — no
+    // network round-trip to wait on, unlike every other toggle-shaped action
+    // in this app.
+    setAutoSyncEnabledState(next);
+    await setAutoSyncEnabled(db, next);
+  }
 
   async function handleSyncNow() {
     if (syncing) return;
@@ -152,6 +174,7 @@ export default function HomeScreen({
         notes: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         voice: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         explore: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
+        memories: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         locations: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         answers: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         message: 'Sync failed unexpectedly. Your local data is safe and unchanged.',
@@ -383,6 +406,24 @@ export default function HomeScreen({
         </View>
 
         {syncMessage ? <Text style={styles.syncResultText}>{syncMessage}</Text> : null}
+
+        {/* Manual "Sync now" above always works regardless of this setting.
+            This only controls whether the app ALSO tries on its own the
+            moment connectivity returns — Wi-Fi or mobile data, since a guide
+            in the field is often on cellular for days at a stretch. */}
+        <View style={styles.autoSyncRow}>
+          <View style={styles.autoSyncTextWrap}>
+            <Text style={styles.autoSyncTitle}>Sync automatically when online</Text>
+            <Text style={styles.autoSyncSubtitle}>Sends waiting items on their own once you have a connection</Text>
+          </View>
+          <Switch
+            value={autoSyncEnabled ?? false}
+            onValueChange={handleToggleAutoSync}
+            disabled={autoSyncEnabled === null}
+            trackColor={{ false: colors.border, true: colors.marigoldDeep }}
+            thumbColor={colors.paper}
+          />
+        </View>
       </Card>
 
       <SectionHeader title="More" />
@@ -458,6 +499,18 @@ const styles = StyleSheet.create({
   syncHint: { ...type.caption, color: colors.inkFaint, marginBottom: spacing.md },
   syncButtonWrap: { marginBottom: spacing.xs },
   syncResultText: { ...type.small, color: colors.inkSoft, marginTop: spacing.sm, lineHeight: 19 },
+  autoSyncRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  autoSyncTextWrap: { flex: 1 },
+  autoSyncTitle: { ...type.smallBold, color: colors.ink },
+  autoSyncSubtitle: { ...type.caption, color: colors.inkFaint, marginTop: 1 },
 
   linkRow: { flexDirection: 'row', alignItems: 'center' },
   linkRowText: { flex: 1 },

@@ -58,18 +58,22 @@ def resolve_source_text(db: Session, submission: Submission) -> str:
             raise EmptySourceTextError()
         return text
 
-    # 'explore' (Step 16, extended in Step 17) carries its content in raw_text
-    # like a note, AND/OR in a voice note like a 'voice' submission. Text wins
-    # when present: it is what the guide actually typed, needs no provider call,
-    # and is available immediately.
+    # 'explore' (Step 16, extended in Step 17) and 'memory' both carry their
+    # content in raw_text like a note, AND/OR in a voice note like a 'voice'
+    # submission. Text wins when present: it is what the guide actually typed,
+    # needs no provider call, and is available immediately. A memory is
+    # structurally identical here to an Explore contribution -- the only
+    # difference between the two is location/date provenance, resolved
+    # elsewhere (see extractions.py), never in how its text is found.
     #
-    # A voice-only Explore contribution falls through to the SAME transcription
-    # branch a 'voice' submission uses -- not a parallel path. That is the whole
-    # reason Explore voice needed no new extraction pipeline: once the audio is
-    # on a Submission, every existing downstream stage already knows what to do
-    # with it, and each "not ready yet" reason keeps its own honest, pre-existing
-    # error type rather than collapsing into a generic failure.
-    if submission.submission_type == "explore":
+    # A voice-only contribution falls through to the SAME transcription branch
+    # a 'voice' submission uses -- not a parallel path. That is the whole
+    # reason Explore/memory voice needed no new extraction pipeline: once the
+    # audio is on a Submission, every existing downstream stage already knows
+    # what to do with it, and each "not ready yet" reason keeps its own
+    # honest, pre-existing error type rather than collapsing into a generic
+    # failure.
+    if submission.submission_type in ("explore", "memory"):
         text = (submission.raw_text or "").strip()
         if text:
             return text
@@ -80,7 +84,7 @@ def resolve_source_text(db: Session, submission: Submission) -> str:
             raise EmptySourceTextError()
         # Falls through to the shared transcription resolution below.
 
-    if submission.submission_type in ("voice", "explore"):
+    if submission.submission_type in ("voice", "explore", "memory"):
         transcription = transcription_service.get_transcription_by_submission_id(
             db, submission.id
         )

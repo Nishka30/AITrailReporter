@@ -19,17 +19,20 @@ import CreateNoteScreen from './screens/CreateNoteScreen';
 import ExploreContributeScreen from './screens/ExploreContributeScreen';
 import ExploreScreen from './screens/ExploreScreen';
 import HomeScreen from './screens/HomeScreen';
+import MemoryContributeScreen from './screens/MemoryContributeScreen';
 import PendingItemsScreen from './screens/PendingItemsScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import QuestionsScreen from './screens/QuestionsScreen';
 import RewardsScreen from './screens/RewardsScreen';
 import SetupScreen from './screens/SetupScreen';
+import { useAutoSync } from './sync/autoSync';
 import type { LocalGuide } from './types/models';
 
 type PushedScreen =
   | 'createNote'
   | 'answerQuestion'
   | 'exploreContribute'
+  | 'memoryContribute'
   | 'profile'
   | 'rewards'
   | null;
@@ -68,6 +71,12 @@ export default function RootNavigator() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const activityCount = useLocalActivityCount(db, guide?.id ?? null, refreshKey);
+
+  // Best-effort background sync on reconnect, gated on the guide's own
+  // preference (see HomeScreen's toggle). Runs for the whole app session,
+  // not just while Home is mounted — a guide should not have to be looking
+  // at the Home tab for auto-sync to fire.
+  useAutoSync(db);
 
   const reloadGuide = useCallback(async () => {
     try {
@@ -164,6 +173,10 @@ export default function RootNavigator() {
     );
   }
 
+  if (pushed === 'memoryContribute') {
+    return <MemoryContributeScreen guide={guide} onDone={() => closePushed('explore')} />;
+  }
+
   return (
     <View style={styles.shell}>
       <View style={styles.content}>
@@ -185,6 +198,7 @@ export default function RootNavigator() {
               setExplorePromptOrigin('explore');
               setPushed('exploreContribute');
             }}
+            onStartMemory={() => setPushed('memoryContribute')}
             refreshKey={refreshKey}
           />
         ) : activeTab === 'questions' ? (

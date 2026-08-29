@@ -1,7 +1,14 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { generateClientId } from '../db/uuid';
-import type { CaptureType, LocalCapture, SyncStatus } from '../types/models';
+import type {
+  CaptureType,
+  DatePrecision,
+  DateSource,
+  LocalCapture,
+  LocationSource,
+  SyncStatus,
+} from '../types/models';
 
 interface LocalCaptureRow {
   id: number;
@@ -21,11 +28,39 @@ interface LocalCaptureRow {
   explore_prompt_title: string | null;
   place_question_id: string | null;
   reward_points: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  location_source: string;
+  location_accuracy_meters: number | null;
+  location_captured_at: string | null;
+  location_label: string | null;
+  location_evidence: string | null;
+  occurred_at: string | null;
+  occurred_at_precision: string;
+  date_source: string;
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Location/date provenance fields shared by createExploreCapture and
+ * createMemoryCapture — see LocalCapture in types/models.ts for what each
+ * one means. All optional: a caller supplies whatever
+ * src/location/photoLocationResolver.ts (or a plain live GPS read) actually
+ * determined, never a guess to fill a gap. */
+export interface CaptureProvenanceInput {
+  latitude?: number | null;
+  longitude?: number | null;
+  locationSource?: LocationSource;
+  locationAccuracyMeters?: number | null;
+  locationCapturedAt?: string | null;
+  locationLabel?: string | null;
+  locationEvidence?: string | null;
+  occurredAt?: string | null;
+  occurredAtPrecision?: DatePrecision;
+  dateSource?: DateSource;
 }
 
 // Statuses eligible for a sync attempt: never-yet-sent, previously-failed
@@ -58,6 +93,16 @@ function mapRow(row: LocalCaptureRow): LocalCapture {
     explorePromptTitle: row.explore_prompt_title,
     placeQuestionId: row.place_question_id,
     rewardPoints: row.reward_points,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    locationSource: row.location_source as LocationSource,
+    locationAccuracyMeters: row.location_accuracy_meters,
+    locationCapturedAt: row.location_captured_at,
+    locationLabel: row.location_label,
+    locationEvidence: row.location_evidence,
+    occurredAt: row.occurred_at,
+    occurredAtPrecision: row.occurred_at_precision as DatePrecision,
+    dateSource: row.date_source as DateSource,
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
@@ -169,39 +214,44 @@ export async function createVoiceCapture(
  * audio_duration_millis, audio_content_type) are the SAME ones voice notes have
  * used since v4 — no Explore-specific audio columns exist, on purpose.
  */
-export async function createExploreCapture(
+interface ExploreLikeOptions extends CaptureProvenanceInput {
+  localPhotoUri?: string | null;
+  photoContentType?: string | null;
+  localAudioUri?: string | null;
+  audioDurationMillis?: number | null;
+  audioContentType?: string | null;
+  promptId?: string | null;
+  promptTitle?: string | null;
+  /** Set when this contribution answers a backend-researched place question.
+   * Unlike promptId/promptTitle (which are local-only provenance for
+   * device-built Explore prompts), this IS sent to the server — it is what
+   * makes the contribution pay at that question's own rate. Never set for a
+   * 'memory' capture — a memory is never tied to a specific place question. */
+  placeQuestionId?: string | null;
+  /** What the BACKEND said this contribution was worth at the moment it was
+   * composed. Snapshotted so an offline guide sees a real server-issued
+   * number rather than a device guess; the server remains authoritative. */
+  rewardPoints?: number | null;
+}
+
+/**
+ * Shared insert for 'explore' and 'memory' captures — identical shape on both
+ * sides (same optional text/photo/voice, same idempotency-id generation),
+ * differing only in `captureType` and in which public wrapper enforces which
+ * "must have SOMETHING" rule (see createExploreCapture/createMemoryCapture
+ * below). Kept private: callers use the two named wrappers so that rule is
+ * never accidentally skipped.
+ */
+async function insertExploreLikeCapture(
   db: SQLiteDatabase,
   localGuideId: number,
+  captureType: 'explore' | 'memory',
   textContent: string | null,
-  options: {
-    localPhotoUri?: string | null;
-    photoContentType?: string | null;
-    localAudioUri?: string | null;
-    audioDurationMillis?: number | null;
-    audioContentType?: string | null;
-    promptId?: string | null;
-    promptTitle?: string | null;
-    /** Set when this contribution answers a backend-researched place question.
-     * Unlike promptId/promptTitle (which are local-only provenance for
-     * device-built Explore prompts), this IS sent to the server — it is what
-     * makes the contribution pay at that question's own rate. */
-    placeQuestionId?: string | null;
-    /** What the BACKEND said this contribution was worth at the moment it was
-     * composed. Snapshotted so an offline guide sees a real server-issued
-     * number rather than a device guess; the server remains authoritative. */
-    rewardPoints?: number | null;
-  } = {}
+  options: ExploreLikeOptions
 ): Promise<LocalCapture> {
   const trimmedText = textContent?.trim() ? textContent.trim() : null;
   const localPhotoUri = options.localPhotoUri ?? null;
   const localAudioUri = options.localAudioUri ?? null;
-
-  if (!trimmedText && !localAudioUri) {
-    // Guarded here as well as in the UI: a contribution with neither text nor
-    // audio has nothing that could ever become knowledge, and silently storing
-    // one would create a row that syncs successfully and then dead-ends.
-    throw new Error('An Explore contribution needs either a description or a voice note.');
-  }
 
   const now = new Date().toISOString();
   const clientSubmissionId = generateClientId();
@@ -215,10 +265,16 @@ export async function createExploreCapture(
         local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
         explore_prompt_id, explore_prompt_title,
         place_question_id, reward_points,
+        latitude, longitude, location_source, location_accuracy_meters,
+        location_captured_at, location_label, location_evidence,
+        occurred_at, occurred_at_precision, date_source,
         sync_status, created_at, updated_at)
-     VALUES (?, ?, 'explore', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             'pending', ?, ?)`,
     localGuideId,
     clientSubmissionId,
+    captureType,
     trimmedText,
     localPhotoUri,
     clientPhotoId,
@@ -231,6 +287,16 @@ export async function createExploreCapture(
     options.promptTitle ?? null,
     options.placeQuestionId ?? null,
     options.rewardPoints ?? null,
+    options.latitude ?? null,
+    options.longitude ?? null,
+    options.locationSource ?? 'unknown',
+    options.locationAccuracyMeters ?? null,
+    options.locationCapturedAt ?? null,
+    options.locationLabel ?? null,
+    options.locationEvidence ?? null,
+    options.occurredAt ?? null,
+    options.occurredAtPrecision ?? 'unknown',
+    options.dateSource ?? 'unknown',
     now,
     now
   );
@@ -240,9 +306,52 @@ export async function createExploreCapture(
     result.lastInsertRowId
   );
   if (!row) {
-    throw new Error('Failed to read back the newly created Explore contribution.');
+    throw new Error(`Failed to read back the newly created ${captureType} contribution.`);
   }
   return mapRow(row);
+}
+
+export async function createExploreCapture(
+  db: SQLiteDatabase,
+  localGuideId: number,
+  textContent: string | null,
+  options: ExploreLikeOptions = {}
+): Promise<LocalCapture> {
+  const trimmedText = textContent?.trim();
+  if (!trimmedText && !options.localAudioUri) {
+    // Guarded here as well as in the UI: a contribution with neither text nor
+    // audio has nothing that could ever become knowledge, and silently storing
+    // one would create a row that syncs successfully and then dead-ends.
+    throw new Error('An Explore contribution needs either a description or a voice note.');
+  }
+  return insertExploreLikeCapture(db, localGuideId, 'explore', textContent, options);
+}
+
+/**
+ * Stores a "memory" contribution locally — the same shape as an Explore
+ * contribution, but not tied to a live moment or a verified place (an old
+ * photo, a recalled story). See LocalCapture's location.../occurredAt... fields
+ * and src/screens/MemoryContributeScreen.tsx for how provenance is actually
+ * determined before this is called.
+ *
+ * Deliberately a LOOSER "must have something" rule than Explore: a memory
+ * that is JUST an old photo with no caption is still a meaningful
+ * contribution — the photo is durable evidence even if nothing here becomes
+ * an Observation (extraction needs text; see
+ * backend/app/services/submissions.py's photo-attach docstring). Explore
+ * keeps its stricter text-or-voice rule unchanged.
+ */
+export async function createMemoryCapture(
+  db: SQLiteDatabase,
+  localGuideId: number,
+  textContent: string | null,
+  options: ExploreLikeOptions = {}
+): Promise<LocalCapture> {
+  const trimmedText = textContent?.trim();
+  if (!trimmedText && !options.localAudioUri && !options.localPhotoUri) {
+    throw new Error('A memory needs a photo, a voice note, or a description.');
+  }
+  return insertExploreLikeCapture(db, localGuideId, 'memory', textContent, options);
 }
 
 export async function listCaptures(

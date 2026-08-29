@@ -6,7 +6,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models.place_question import PlaceQuestion
-from app.db.models.submission import Submission
+from app.db.models.submission import (
+    DEFAULT_DATE_SOURCE,
+    DEFAULT_LOCATION_SOURCE,
+    Submission,
+)
 from app.schemas.submission import SubmissionCreate
 from app.services import extractions as extraction_service
 from app.services import rewards as reward_service
@@ -63,16 +67,21 @@ def _award_media_bonus(db: Session, submission: Submission) -> None:
     pays the bonus once, deliberately: the bonus is for enriching a
     contribution with media, not per file.
 
-    Only 'explore' submissions qualify -- a plain voice note is not an Explore
-    contribution and never received the base award either.
+    Only 'explore' and 'memory' submissions qualify -- a plain voice note is
+    not an Explore contribution and never received the base award either.
+    Memories are paid at the SAME rate as a generic Explore contribution
+    (there is no separate memory reward rule to invent or maintain); only the
+    ledger's `source_type` distinguishes the two afterwards for Admin.
 
     A place-question contribution is EXCLUDED even though it is an 'explore'
-    submission. It was already paid at its own kind-specific rate, and a photo
-    request is paid the photo rate precisely because it asks for a photo --
-    adding the generic media bonus on top would pay twice for the one thing the
-    question asked for.
+    submission (never applies to 'memory' -- see schemas/submission.py's
+    validator, which forbids source_place_question_id outside 'explore'). It
+    was already paid at its own kind-specific rate, and a photo request is
+    paid the photo rate precisely because it asks for a photo -- adding the
+    generic media bonus on top would pay twice for the one thing the question
+    asked for.
     """
-    if submission.submission_type != "explore" or submission.client_submission_id is None:
+    if submission.submission_type not in ("explore", "memory") or submission.client_submission_id is None:
         return
     if submission.source_place_question_id is not None:
         return
@@ -81,7 +90,9 @@ def _award_media_bonus(db: Session, submission: Submission) -> None:
         guide_id=submission.guide_id,
         rule_key="explore_contribution_media_bonus",
         idempotency_key=f"{submission.client_submission_id}:media",
-        source_type="explore_submission",
+        source_type=(
+            "memory_submission" if submission.submission_type == "memory" else "explore_submission"
+        ),
         source_id=submission.id,
     )
 
@@ -123,12 +134,39 @@ def create_or_get_submission(db: Session, data: SubmissionCreate) -> tuple[Submi
         _ensure_compatible(existing, data)
         return existing, False
 
+    submitted_at = data.submitted_at or datetime.now(timezone.utc)
+
+    # When occurred_at is absent, a LIVE capture's event time IS its submit
+    # time -- that is what "live" means, not a guess. This default is only
+    # applied here, at creation, for whatever moment this specific request
+    # actually represents; it is never applied retroactively and never
+    # overwrites a client-supplied value.
+    #
+    # Precision defaults to "exact" either way: a concrete instant is known in
+    # both branches (either the client gave one, or it genuinely is this
+    # request's submit time). Only the SOURCE of that instant is ambiguous
+    # when the client didn't say -- "device" for the true live-capture default,
+    # "unknown" when a specific timestamp arrived with no stated origin.
+    occurred_at = data.occurred_at or submitted_at
+    occurred_at_precision = data.occurred_at_precision or "exact"
+    date_source = data.date_source or ("device" if data.occurred_at is None else DEFAULT_DATE_SOURCE)
+
     submission = Submission(
         guide_id=data.guide_id,
         client_submission_id=data.client_submission_id,
         submission_type=data.capture_type,
         raw_text=data.text_content,
-        submitted_at=data.submitted_at or datetime.now(timezone.utc),
+        latitude=data.latitude,
+        longitude=data.longitude,
+        location_source=data.location_source or DEFAULT_LOCATION_SOURCE,
+        location_accuracy_meters=data.location_accuracy_meters,
+        location_captured_at=data.location_captured_at,
+        location_label=data.location_label,
+        location_evidence=data.location_evidence,
+        occurred_at=occurred_at,
+        occurred_at_precision=occurred_at_precision,
+        date_source=date_source,
+        submitted_at=submitted_at,
         status="received",
         # Null for an ordinary discovery; set when this answers a
         # location-specific place question. Coordinates are deliberately NOT
@@ -140,24 +178,28 @@ def create_or_get_submission(db: Session, data: SubmissionCreate) -> tuple[Submi
         source_place_question_id=data.source_place_question_id,
     )
     db.add(submission)
-    # Reward (Step 18) for an Explore contribution, in the SAME transaction as
-    # the submission itself. Only 'explore' earns here: a 'note' is an
-    # unprompted field report and 'voice' has no prompt provenance, while an
-    # Explore contribution answers something the app actually asked for.
+    # Reward (Step 18) for an Explore or memory contribution, in the SAME
+    # transaction as the submission itself. A 'note' is an unprompted field
+    # report and 'voice' has no prompt provenance, so neither earns here; an
+    # Explore contribution answers something the app actually asked for, and a
+    # memory is the same kind of proactive field contribution without a live
+    # prompt behind it -- paid at the identical base rate, distinguished only
+    # by `source_type` in the ledger (see _award_media_bonus above).
     #
     # Awarded at the base rate now, because media is attached by a SEPARATE
     # later request -- attach_audio/photo_to_submission top this up to the
     # with-media rate once media genuinely arrives (see those functions). The
     # alternative, guessing up-front that media is coming, would credit a
     # richer contribution than the guide actually made.
-    if data.capture_type == "explore":
+    if data.capture_type in ("explore", "memory"):
         db.flush()
         if data.source_place_question_id is not None:
             # A place-question contribution is paid at the rate for that
             # question's own contribution kind (photo/voice/status/...), because
             # the app asked for something specific and the kinds differ in
             # effort. Resolved from the stored question, never from the request
-            # -- the device does not get to choose what it is paid.
+            # -- the device does not get to choose what it is paid. Never
+            # reachable for 'memory': the schema forbids the combination.
             place_question = db.get(PlaceQuestion, data.source_place_question_id)
             rule_key = reward_service.place_question_rule_key(
                 db, place_question.contribution_kind if place_question is not None else None
@@ -165,7 +207,7 @@ def create_or_get_submission(db: Session, data: SubmissionCreate) -> tuple[Submi
             source_type = "place_question_answer"
         else:
             rule_key = "explore_contribution"
-            source_type = "explore_submission"
+            source_type = "memory_submission" if data.capture_type == "memory" else "explore_submission"
         reward_service.award(
             db,
             guide_id=data.guide_id,
@@ -273,7 +315,8 @@ def attach_photo_to_submission(
     original_filename: str,
     storage: MediaStorage,
 ) -> tuple[Submission, bool]:
-    """Attaches a durably-stored photo to an 'explore' submission (Step 16).
+    """Attaches a durably-stored photo to an 'explore' or 'memory' submission
+    (Step 16, extended to 'memory' -- see PHOTO_CAPABLE_SUBMISSION_TYPES).
 
     Structurally identical to attach_audio_to_submission above — same
     idempotency contract on client_photo_id, same SELECT ... FOR UPDATE row

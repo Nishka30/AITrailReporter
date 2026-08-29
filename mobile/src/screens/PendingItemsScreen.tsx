@@ -164,18 +164,33 @@ function NoteItem({ item }: { item: LocalCapture }) {
  * device. It never claims the photo was understood — this step does no image
  * analysis, and the extraction block below reflects the TEXT only.
  */
-function ExploreItem({ item }: { item: LocalCapture }) {
+/**
+ * Renders one Explore-shaped capture (text/photo/voice + sync status). Shared
+ * verbatim by 'explore' and 'memory' rows — they are the identical shape on
+ * disk (see captureRepository.ts's insertExploreLikeCapture) and differ only
+ * in how the section header labels them, via `kindLabel`/`kindIcon`.
+ */
+function ExploreItem({
+  item,
+  kindLabel = 'Discovery',
+  kindIcon = 'compass-outline',
+}: {
+  item: LocalCapture;
+  kindLabel?: string;
+  kindIcon?: keyof typeof Ionicons.glyphMap;
+}) {
   const badge = syncBadge(item.syncStatus);
   const uploaded = item.syncStatus === 'uploaded';
   const hasVoice = Boolean(item.localAudioUri);
   const hasText = Boolean(item.textContent?.trim());
+  const hasPhoto = Boolean(item.localPhotoUri);
 
   return (
     <Card style={styles.item}>
       <View style={styles.itemHeaderRow}>
         <View style={styles.itemTypeRow}>
-          <Ionicons name="compass-outline" size={13} color={colors.inkFaint} />
-          <Text style={styles.itemType}>Discovery</Text>
+          <Ionicons name={kindIcon} size={13} color={colors.inkFaint} />
+          <Text style={styles.itemType}>{kindLabel}</Text>
         </View>
         <Text style={styles.itemDate}>{new Date(item.createdAt).toLocaleDateString()}</Text>
       </View>
@@ -183,18 +198,24 @@ function ExploreItem({ item }: { item: LocalCapture }) {
       {item.explorePromptTitle ? (
         <Text style={styles.itemMetaTop}>In response to: {item.explorePromptTitle}</Text>
       ) : null}
+      {item.locationLabel ? (
+        <Text style={styles.itemMetaTop}>Where: {item.locationLabel}</Text>
+      ) : null}
 
-      {/* A voice-only discovery genuinely has no text to show. Saying so is
-          more honest than rendering an empty line that looks like a bug. */}
+      {/* A voice-only (or, for a memory, photo-only) item genuinely has no
+          text to show. Saying so is more honest than rendering an empty line
+          that looks like a bug. */}
       {hasText ? (
         <Text style={styles.itemText} numberOfLines={4}>
           {item.textContent}
         </Text>
-      ) : (
+      ) : hasVoice ? (
         <Text style={styles.itemTextMuted}>
-          Spoken discovery · {formatDurationOrUnknown(item.audioDurationMillis)}
+          Spoken {kindLabel.toLowerCase()} · {formatDurationOrUnknown(item.audioDurationMillis)}
         </Text>
-      )}
+      ) : hasPhoto ? (
+        <Text style={styles.itemTextMuted}>Photo only — no description added.</Text>
+      ) : null}
 
       <View style={styles.itemBadgeRow}>
         <Badge label={badge.label} tone={badge.tone} icon={badge.icon} />
@@ -211,6 +232,11 @@ function ExploreItem({ item }: { item: LocalCapture }) {
             tone={uploaded ? 'success' : 'info'}
             icon="image-outline"
           />
+        ) : null}
+        {item.locationSource === 'photo_exif' || item.locationSource === 'gps_live' ? (
+          <Badge label="Location verified" tone="success" icon="location" />
+        ) : item.locationSource === 'user_selected' ? (
+          <Badge label="Place selected" tone="neutral" icon="location-outline" />
         ) : null}
       </View>
 
@@ -440,11 +466,13 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
   const notes = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'note'));
   const voiceCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'voice'));
   const exploreCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'explore'));
+  const memoryCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'memory'));
   const sortedLocations = byNeedsAttentionFirst(locations);
   const isEmpty =
     notes.length === 0 &&
     voiceCaptures.length === 0 &&
     exploreCaptures.length === 0 &&
+    memoryCaptures.length === 0 &&
     sortedLocations.length === 0;
 
   return (
@@ -460,7 +488,7 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
         <EmptyState
           icon="file-tray-outline"
           title="Nothing captured yet"
-          message="Notes, voice updates, discoveries, and locations you save will show up here."
+          message="Notes, voice updates, discoveries, memories, and locations you save will show up here."
         />
       ) : (
         <>
@@ -483,6 +511,15 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
             <Text style={styles.emptyText}>Nothing shared from Explore yet.</Text>
           ) : (
             exploreCaptures.map((item) => <ExploreItem key={item.id} item={item} />)
+          )}
+
+          <SectionHeader title="Memories" meta={String(memoryCaptures.length)} />
+          {memoryCaptures.length === 0 ? (
+            <Text style={styles.emptyText}>No memories shared yet.</Text>
+          ) : (
+            memoryCaptures.map((item) => (
+              <ExploreItem key={item.id} item={item} kindLabel="Memory" kindIcon="images-outline" />
+            ))
           )}
 
           <SectionHeader title="Locations" meta={String(sortedLocations.length)} />

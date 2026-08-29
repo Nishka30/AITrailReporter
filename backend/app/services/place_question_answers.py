@@ -115,6 +115,15 @@ def submit_place_question_answer(
         # change there.
         latitude=location.latitude if location is not None else None,
         longitude=location.longitude if location is not None else None,
+        location_source="approximate" if location is not None else "unknown",
+        location_evidence=(
+            f"Coordinates of {location.name!r}, the place this question asked about."
+            if location is not None
+            else None
+        ),
+        occurred_at=answered_at,
+        occurred_at_precision="exact",
+        date_source="device",
         submitted_at=answered_at,
         status="received",
         source_place_question_id=place_question.id,

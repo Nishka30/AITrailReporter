@@ -35,6 +35,10 @@ import type { LocalGuide } from '../types/models';
 type Props = {
   guide: LocalGuide;
   onStartContribution: (prompt: ExplorePrompt) => void;
+  /** Opens the "Share a Memory" composer — a distinct flow from
+   * onStartContribution because a memory carries its own location/date
+   * provenance workflow, not a device-built or backend-researched prompt. */
+  onStartMemory: () => void;
   refreshKey: number;
 };
 
@@ -123,7 +127,7 @@ function PromptCard({
  *   - context available   -> grounded prompts naming the real place/gaps
  *   - request failed      -> ErrorState with retry, never a silent empty deck
  */
-export default function ExploreScreen({ guide, onStartContribution, refreshKey }: Props) {
+export default function ExploreScreen({ guide, onStartContribution, onStartMemory, refreshKey }: Props) {
   const db = useSQLiteContext();
   const [context, setContext] = useState<GuideContext | null>(null);
   const [knowledgeStates, setKnowledgeStates] = useState<KnowledgeTypeState[] | null>(null);
@@ -340,6 +344,27 @@ export default function ExploreScreen({ guide, onStartContribution, refreshKey }
           <Text style={styles.freeFormBody}>
             Seen something we didn't think to ask about?
           </Text>
+        </View>
+        <Ionicons name="arrow-forward" size={18} color={colors.paper} />
+      </Pressable>
+
+      {/* Also permanent and always available, and deliberately using the SAME
+          visual treatment as "Share anything" above — a memory is the same
+          kind of proactive, no-prompt-needed contribution, just one that
+          might be about a different time and place than right now (see
+          MemoryContributeScreen for how location/date are figured out). */}
+      <Pressable
+        onPress={onStartMemory}
+        accessibilityRole="button"
+        accessibilityLabel="Share a memory"
+        style={({ pressed }) => [styles.freeForm, pressed && styles.freeFormPressed]}
+      >
+        <View style={styles.freeFormIcon}>
+          <Ionicons name="images-outline" size={20} color={colors.paper} />
+        </View>
+        <View style={styles.freeFormText}>
+          <Text style={styles.freeFormTitle}>Share a memory</Text>
+          <Text style={styles.freeFormBody}>An old photo, or a story from another trip</Text>
         </View>
         <Ionicons name="arrow-forward" size={18} color={colors.paper} />
       </Pressable>

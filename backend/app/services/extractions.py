@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -106,23 +106,115 @@ def _mark_failed(db: Session, extraction: Extraction, message: str) -> Extractio
     return extraction
 
 
-def _resolve_observation_coordinates(db: Session, submission: Submission) -> tuple[float, float] | None:
+# date_source values that mean "occurred_at is a genuinely known, independent
+# moment in time" -- established from the content itself (EXIF) or a human who
+# actually knows (user_entered/inferred) -- as opposed to "device"/"unknown",
+# which mean occurred_at is just standing in for "approximately now" (see
+# submissions.create_or_get_submission's defaulting). Only the former justifies
+# looking for a GuideLocation sample that arrived AFTER occurred_at; the latter
+# preserves this function's original backward-only behaviour exactly, so every
+# existing live-capture flow is completely unaffected by this change.
+_INDEPENDENT_DATE_SOURCES = ("exif", "user_entered", "inferred")
+
+
+def _resolve_observation_coordinates(
+    db: Session, submission: Submission
+) -> tuple[float, float, str | None, str | None] | None:
     """The coordinate to attach to this submission's observations, or None if
-    nothing is known -- never fabricated. Prefers the submission's own
-    latitude/longitude if the client supplied them; otherwise falls back to the
-    guide's latest known GuideLocation AT OR BEFORE submitted_at (the location
-    the guide was actually at when they made this report, not wherever they are
-    by the time extraction happens to run)."""
+    nothing is known -- never fabricated. Returns (latitude, longitude,
+    location_source, location_evidence); the latter two are copied onto the
+    Observation being built so provenance survives past this one function.
+
+    Three tiers, in order:
+
+    1. The submission's OWN latitude/longitude, if the client supplied them
+       (live GPS, photo EXIF GPS, or a user-selected place -- whichever it is,
+       it is already recorded on submission.location_source and trusted as-is).
+
+    2. HISTORICAL INFERENCE, only when occurred_at is a genuinely independent,
+       known moment (see _INDEPENDENT_DATE_SOURCES) rather than a stand-in for
+       "now": the guide's own GuideLocation sample closest in time to
+       occurred_at, from either side, but ONLY within
+       settings.historical_location_max_gap_hours. This is written back onto
+       the Submission itself (not just returned) -- a memory/old-photo upload
+       that gets a location this way should show that provenance on the row
+       from then on, not just on the Observation it happened to produce first.
+
+    3. The old, exact pre-existing behaviour for everything else (a live
+       report with no coordinate of its own): the guide's latest known
+       GuideLocation AT OR BEFORE submitted_at, never after -- a ping recorded
+       later might reflect the guide having already moved on, which would be
+       wrong for "where were they when they made THIS report right now".
+    """
     if submission.latitude is not None and submission.longitude is not None:
-        return float(submission.latitude), float(submission.longitude)
+        return (
+            float(submission.latitude),
+            float(submission.longitude),
+            submission.location_source,
+            submission.location_evidence,
+        )
+
+    if submission.date_source in _INDEPENDENT_DATE_SOURCES and submission.occurred_at is not None:
+        match = guide_location_service.find_nearest_location_in_time(
+            db,
+            submission.guide_id,
+            submission.occurred_at,
+            max_gap=timedelta(hours=settings.historical_location_max_gap_hours),
+        )
+        if match is not None:
+            guide_location, gap = match
+            direction = "before" if guide_location.recorded_at <= submission.occurred_at else "after"
+            evidence = (
+                f"Matched to a recorded GPS sample {_format_gap(gap)} {direction} "
+                "the estimated time this content is about."
+            )
+            # Written back onto the Submission itself, not just returned --
+            # this is what makes the inference visible to Admin on the row
+            # going forward, per "don't let extraction discard where the
+            # observation came from". Committed together with the rest of
+            # start_extraction's single final transaction.
+            submission.latitude = guide_location.latitude
+            submission.longitude = guide_location.longitude
+            submission.location_source = "historical_inferred"
+            submission.location_evidence = evidence
+            return (
+                float(guide_location.latitude),
+                float(guide_location.longitude),
+                "historical_inferred",
+                evidence,
+            )
+        # No sample close enough in time -- stays honestly unresolved rather
+        # than falling through to tier 3, which would silently use whatever
+        # the guide's CURRENT/live location happens to be for content that is
+        # explicitly about a different, known moment in the past.
+        return None
 
     guide_location = guide_location_service.get_latest_location_at_or_before(
         db, submission.guide_id, submission.submitted_at
     )
     if guide_location is not None:
-        return float(guide_location.latitude), float(guide_location.longitude)
+        # Not written back onto the Submission itself, unlike tier 2 above:
+        # this path exists for "now"-ish content (no independently-known
+        # occurred_at), so the coordinate genuinely IS "wherever the guide's
+        # GPS last said they were" for THIS submission specifically, not a
+        # durable fact worth persisting back onto the row the way an old
+        # photo's inferred location is.
+        return (
+            float(guide_location.latitude),
+            float(guide_location.longitude),
+            "historical_inferred",
+            "Matched to the guide's most recent recorded GPS sample at the time of this report.",
+        )
 
     return None
+
+
+def _format_gap(gap: timedelta) -> str:
+    total_minutes = round(gap.total_seconds() / 60)
+    if total_minutes < 60:
+        return f"{total_minutes} min"
+    hours = total_minutes / 60
+    return f"{hours:.1f}h"
 
 
 def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]:
@@ -191,7 +283,10 @@ def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]
             "failed",
         )
 
-    coordinates = _resolve_observation_coordinates(db, submission)
+    resolved = _resolve_observation_coordinates(db, submission)
+    coordinates = resolved[:2] if resolved is not None else None
+    location_source = resolved[2] if resolved is not None else None
+    location_evidence = resolved[3] if resolved is not None else None
     nearest_known_place = None
     if coordinates is not None:
         context = geographic_context_service.resolve_geographic_context(db, *coordinates)
@@ -240,10 +335,20 @@ def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]
             latitude=coordinates[0] if coordinates else None,
             longitude=coordinates[1] if coordinates else None,
             geog=make_point(*coordinates) if coordinates else None,
+            location_source=location_source,
+            location_evidence=location_evidence,
             value=obs.value,
             confidence=obs.confidence,
             evidence=obs.evidence,
-            observed_at=submission.submitted_at,
+            # When the FACT was true, not when the backend received it -- for
+            # a live capture these are the same instant (occurred_at defaults
+            # to submitted_at, see submissions.create_or_get_submission), but
+            # for an old photo or a recalled memory they can be weeks apart.
+            # Getting this right matters beyond display: knowledge staleness
+            # (Step 10's missing/stale/aging gap states) is computed from
+            # observed_at, and crediting an old photo as "freshly observed"
+            # would hide a real gap rather than reveal one.
+            observed_at=submission.occurred_at or submission.submitted_at,
         )
         db.add(observation)
         # Admin moderation layer: every Observation gets a 'pending_review'

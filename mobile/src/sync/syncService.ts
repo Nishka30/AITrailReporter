@@ -92,6 +92,11 @@ export interface SyncResult {
    * `notes` for the same reason voice is: they are a distinct thing the guide
    * did, and folding them into "notes uploaded" would misdescribe the work. */
   explore: CaptureSyncSummary;
+  /** Memory contributions — reported separately from `explore` for the same
+   * reason explore is separate from notes: a distinct thing the guide did,
+   * even though it shares the exact same upload mechanics (see
+   * syncOneExploreLikeCapture). */
+  memories: CaptureSyncSummary;
   locations: LocationSyncSummary;
   /** Answers to assigned questions (Step 13) — synced independently of
    * notes/voice/locations; one failed answer never blocks the others. */
@@ -120,6 +125,7 @@ function emptyResult(message: string): SyncResult {
     notes: emptySummary<CaptureSyncOutcome>(),
     voice: emptySummary<CaptureSyncOutcome>(),
     explore: emptySummary<CaptureSyncOutcome>(),
+    memories: emptySummary<CaptureSyncOutcome>(),
     locations: emptySummary<LocationSyncOutcome>(),
     answers: emptySummary<AnswerSyncOutcome>(),
     message,
@@ -195,8 +201,31 @@ async function syncOneNote(serverGuideId: string, capture: LocalCapture): Promis
     captureType: 'note',
     textContent: capture.textContent ?? '',
     submittedAt: capture.createdAt,
+    ...provenanceFields(capture),
   });
   return submission.id;
+}
+
+/** Provenance fields shared by every capture type's sync call — read
+ * straight off the local row and sent verbatim (see LocalCapture's
+ * location.../occurredAt... fields). A plain note/voice capture that never went
+ * through the location-capture flow simply has the honest 'unknown'/null
+ * defaults, which round-trip to exactly the same backend defaulting as
+ * omitting these fields entirely (see
+ * backend/app/services/submissions.py:create_or_get_submission). */
+function provenanceFields(capture: LocalCapture) {
+  return {
+    latitude: capture.latitude,
+    longitude: capture.longitude,
+    locationSource: capture.locationSource,
+    locationAccuracyMeters: capture.locationAccuracyMeters,
+    locationCapturedAt: capture.locationCapturedAt,
+    locationLabel: capture.locationLabel,
+    locationEvidence: capture.locationEvidence,
+    occurredAt: capture.occurredAt,
+    occurredAtPrecision: capture.occurredAtPrecision,
+    dateSource: capture.dateSource,
+  };
 }
 
 /**
@@ -246,6 +275,7 @@ async function syncOneVoiceCapture(serverGuideId: string, capture: LocalCapture)
     captureType: 'voice',
     textContent: null,
     submittedAt: capture.createdAt,
+    ...provenanceFields(capture),
   });
   await uploadSubmissionAudio({
     submissionId: submission.id,
@@ -259,33 +289,41 @@ async function syncOneVoiceCapture(serverGuideId: string, capture: LocalCapture)
 }
 
 /**
- * Sync an Explore contribution (Step 16): ONE request if it's text-only, TWO
- * if it carries a photo — deliberately the same two-stage, both-idempotent
- * shape as syncOneVoiceCapture above, for the same reasons:
+ * Sync an Explore OR memory contribution (Step 16, extended to 'memory'):
+ * ONE request if it's text-only, more if it carries a photo and/or voice
+ * note — deliberately the same two-stage, both-idempotent shape as
+ * syncOneVoiceCapture above, for the same reasons:
  *
  *   1. Create/resolve the server Submission (idempotent on
  *      clientSubmissionId). Its text_content is what the existing extraction
- *      pipeline will later turn into observations.
- *   2. If and only if a photo is attached, upload it against the SEPARATE
- *      clientPhotoId. If step 1 succeeds and step 2 throws, the capture is
- *      marked 'failed' and retried from step 1 next sync — safe and cheap,
- *      because step 1 just returns the existing submission on replay.
+ *      pipeline will later turn into observations, and it now also carries
+ *      this row's location/date provenance (see provenanceFields above).
+ *   2. If and only if a photo/audio is attached, upload it against its own
+ *      SEPARATE client id. If step 1 succeeds and a later step throws, the
+ *      capture is marked 'failed' and retried from step 1 next sync — safe
+ *      and cheap, because step 1 just returns the existing submission on
+ *      replay.
  *
- * The photo is genuinely optional here, which is the one structural difference
+ * Media is genuinely optional here, which is the one structural difference
  * from voice: a voice capture without audio is meaningless, whereas a
- * text-only Explore contribution is complete and useful on its own.
+ * text-only (or, for a memory, photo-only) contribution is complete and
+ * useful on its own.
  */
-async function syncOneExploreCapture(
+async function syncOneExploreLikeCapture(
   serverGuideId: string,
   capture: LocalCapture
 ): Promise<string> {
   const text = (capture.textContent ?? '').trim();
   const hasAudio = Boolean(capture.localAudioUri && capture.clientAudioId);
-  if (!text && !hasAudio) {
-    // Should be unreachable — createExploreCapture rejects this — but this is
-    // local data, not a network response, so fail loudly rather than sending a
+  const hasPhoto = Boolean(capture.localPhotoUri && capture.clientPhotoId);
+  if (!text && !hasAudio && !(capture.captureType === 'memory' && hasPhoto)) {
+    // Mirrors each repository function's own "must have something" rule
+    // (createExploreCapture vs. createMemoryCapture) — should be unreachable
+    // since both already enforce this at write time, but this is local data,
+    // not a network response, so fail loudly rather than sending a
     // submission that could never produce knowledge.
-    throw new Error('This Explore contribution has no description and no voice note.');
+    const kind = capture.captureType === 'memory' ? 'memory' : 'Explore contribution';
+    throw new Error(`This ${kind} has no description, photo, or voice note.`);
   }
 
   // Both media files are checked for existence BEFORE the submission is
@@ -310,16 +348,22 @@ async function syncOneExploreCapture(
   const submission = await createOrGetSubmission({
     guideId: serverGuideId,
     clientSubmissionId: capture.clientSubmissionId,
-    // A voice-only contribution genuinely has no text. Sending null (rather
-    // than "") is what the backend expects, and its transcript becomes the
-    // source text instead (see backend services/source_text.py).
-    captureType: 'explore',
+    // A voice-only (or, for a memory, photo-only) contribution genuinely has
+    // no text. Sending null (rather than "") is what the backend expects,
+    // and its transcript becomes the source text instead when audio is
+    // present (see backend services/source_text.py).
+    captureType: capture.captureType === 'memory' ? 'memory' : 'explore',
     textContent: text || null,
     submittedAt: capture.createdAt,
     // When set, this is what makes the backend pay this contribution at its
     // place question's own kind-specific rate rather than the generic Explore
-    // rate — see backend/app/services/submissions.py.
-    sourcePlaceQuestionId: capture.placeQuestionId,
+    // rate — see backend/app/services/submissions.py. Never set for a
+    // memory: the backend rejects that combination (a memory is never tied
+    // to a specific place question) — capture.placeQuestionId is always null
+    // for a 'memory' row regardless, since createMemoryCapture never accepts
+    // one, but this is explicit rather than relying on that alone.
+    sourcePlaceQuestionId: capture.captureType === 'memory' ? null : capture.placeQuestionId,
+    ...provenanceFields(capture),
   });
 
   // Each attachment is its own idempotent request keyed on its own client id,
@@ -367,8 +411,8 @@ async function syncOneCapture(
       serverSubmissionId = await syncOneNote(serverGuideId, capture);
     } else if (capture.captureType === 'voice') {
       serverSubmissionId = await syncOneVoiceCapture(serverGuideId, capture);
-    } else if (capture.captureType === 'explore') {
-      serverSubmissionId = await syncOneExploreCapture(serverGuideId, capture);
+    } else if (capture.captureType === 'explore' || capture.captureType === 'memory') {
+      serverSubmissionId = await syncOneExploreLikeCapture(serverGuideId, capture);
     } else {
       // Step 7 only ingests notes and voice — a future capture type reaching
       // here means this build genuinely can't sync it yet, not a transient
@@ -464,13 +508,20 @@ function buildSummaryMessage(
   notes: CaptureSyncSummary,
   voice: CaptureSyncSummary,
   explore: CaptureSyncSummary,
+  memories: CaptureSyncSummary,
   locations: LocationSyncSummary,
   answers: AnswerSyncSummary,
   profileError: string | null
 ): string {
   const uploaded =
-    notes.uploaded + voice.uploaded + explore.uploaded + locations.uploaded + answers.uploaded;
-  const failed = notes.failed + voice.failed + explore.failed + locations.failed + answers.failed;
+    notes.uploaded +
+    voice.uploaded +
+    explore.uploaded +
+    memories.uploaded +
+    locations.uploaded +
+    answers.uploaded;
+  const failed =
+    notes.failed + voice.failed + explore.failed + memories.failed + locations.failed + answers.failed;
   if (uploaded === 0 && failed === 0) {
     return profileError
       ? 'Nothing to sync — but your profile changes could not be sent, and are still saved here.'
@@ -485,6 +536,9 @@ function buildSummaryMessage(
   }
   if (explore.uploaded > 0) {
     parts.push(`${explore.uploaded} discovery${explore.uploaded === 1 ? '' : ' items'} uploaded`);
+  }
+  if (memories.uploaded > 0) {
+    parts.push(`${memories.uploaded} memor${memories.uploaded === 1 ? 'y' : 'ies'} uploaded`);
   }
   if (locations.uploaded > 0) {
     parts.push(`${locations.uploaded} location${locations.uploaded === 1 ? '' : 's'} uploaded`);
@@ -544,6 +598,7 @@ async function performSync(db: SQLiteDatabase): Promise<SyncResult> {
   const notes = summarize(captureOutcomes.filter((o) => o.captureType === 'note'));
   const voice = summarize(captureOutcomes.filter((o) => o.captureType === 'voice'));
   const explore = summarize(captureOutcomes.filter((o) => o.captureType === 'explore'));
+  const memories = summarize(captureOutcomes.filter((o) => o.captureType === 'memory'));
 
   // GPS locations — same eligibility/ordering/independence rules as captures, just
   // against the GuideLocation endpoint instead of submissions.
@@ -581,9 +636,10 @@ async function performSync(db: SQLiteDatabase): Promise<SyncResult> {
     notes,
     voice,
     explore,
+    memories,
     locations,
     answers,
-    message: buildSummaryMessage(notes, voice, explore, locations, answers, profileError),
+    message: buildSummaryMessage(notes, voice, explore, memories, locations, answers, profileError),
   };
 }
 

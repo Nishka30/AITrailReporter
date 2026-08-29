@@ -8,6 +8,51 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
+# How a Submission's latitude/longitude came to be, in decreasing order of
+# trustworthiness. Follows the same tuple-constant convention as
+# app/db/models/location.py's LOCATION_SOURCES.
+#
+# WHY THIS EXISTS: before this, a Submission's coordinate was either present or
+# absent -- nothing recorded WHY it was there, so an old photo uploaded weeks
+# later could silently inherit the guide's location at upload time, and an
+# Observation built from it would look exactly as trustworthy as one from a
+# live GPS-verified capture. This makes that distinction a first-class fact
+# instead of something only inferable from context that has since been lost.
+SUBMISSION_LOCATION_SOURCES = (
+    # From the photo file's own embedded GPS tag -- tied to the pixels
+    # themselves, the strongest evidence this system can have.
+    "photo_exif",
+    # Device GPS read at the moment of capture, for content created here-and-now.
+    "gps_live",
+    # No direct evidence on the content itself; matched to the guide's own
+    # recorded GPS history close in time to when the content actually happened
+    # (see app/services/extractions.py:_resolve_observation_coordinates).
+    "historical_inferred",
+    # The guide picked a real place from a geocoding search -- a human
+    # judgement, not a sensor reading.
+    "user_selected",
+    # A usable but weak signal (e.g. a wide historical match). Deliberately
+    # rare: most cases that would otherwise land here are left "unknown"
+    # instead -- see historical_location_max_gap_hours.
+    "approximate",
+    # No usable evidence. The default. Never a fabricated coordinate.
+    "unknown",
+)
+DEFAULT_LOCATION_SOURCE = "unknown"
+
+# How precisely `occurred_at` is actually known -- independent of how
+# CONFIDENT the location is, because a guide can be certain of the month a
+# memory happened while having no idea exactly where, or vice versa.
+DATE_PRECISIONS = ("exact", "month", "year", "approximate", "unknown")
+DEFAULT_DATE_PRECISION = "unknown"
+
+# Where `occurred_at` itself came from. "device" means it was taken directly
+# from the device clock at capture time (submitted_at), which is exact only
+# for a LIVE capture -- for an uploaded-later photo with no EXIF timestamp,
+# there is no honest way to know when it happened at all.
+DATE_SOURCES = ("device", "exif", "user_entered", "inferred", "unknown")
+DEFAULT_DATE_SOURCE = "unknown"
+
 
 @dataclass
 class SubmissionAudioMetadata:
@@ -80,6 +125,47 @@ class Submission(Base):
     )
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
+    # One of SUBMISSION_LOCATION_SOURCES. NOT NULL with a default of "unknown"
+    # rather than nullable: "we don't know how this coordinate was obtained" is
+    # a real, queryable state (and the common one for every submission that
+    # predates this column), distinct from "there is no coordinate at all"
+    # (latitude/longitude both null).
+    location_source: Mapped[str] = mapped_column(
+        String(30), nullable=False, server_default=DEFAULT_LOCATION_SOURCE
+    )
+    # GPS accuracy in metres, ONLY when a real device/EXIF reading supplied one.
+    # Null for historical_inferred/user_selected/approximate -- those have no
+    # sensor accuracy figure, and inventing one would overstate precision.
+    location_accuracy_meters: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # When the COORDINATE ITSELF was established -- a device GPS timestamp or
+    # an EXIF capture time. Distinct from submitted_at (when it reached the
+    # backend) and from occurred_at below (when the CONTENT is about). Null for
+    # user_selected/approximate/unknown, which have no such moment.
+    location_captured_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # A human-readable place name for admin display without a join -- from a
+    # geocoder selection ("Kedarnath Temple") or a reverse-geocode of an
+    # inferred point. Never treated as authoritative; the coordinate is.
+    location_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # A short, factual note on WHY this location was assigned, e.g. "Matched to
+    # a GPS sample 40 min after the photo's timestamp" -- mirrors
+    # PlaceQuestion.context_note. Exists so a non-"unknown" location_source is
+    # never just an assertion; there is always a stated reason an admin can
+    # check.
+    location_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When the CONTENT is about -- may differ hugely from submitted_at for a
+    # photo uploaded long after it was taken. Null means genuinely unknown, not
+    # "assume submitted_at" (see occurred_at_precision/date_source).
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # One of DATE_PRECISIONS.
+    occurred_at_precision: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=DEFAULT_DATE_PRECISION
+    )
+    # One of DATE_SOURCES.
+    date_source: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=DEFAULT_DATE_SOURCE
+    )
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     submission_type: Mapped[str] = mapped_column(String(100), nullable=False)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)

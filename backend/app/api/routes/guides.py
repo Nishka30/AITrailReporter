@@ -12,8 +12,10 @@ from app.schemas.guide_location import NearbyGuideResult
 from app.schemas.knowledge_decision import KnowledgeDecisionResult
 from app.schemas.knowledge_state import GuideKnowledgeStateResult
 from app.schemas.place_question import GuidePlaceQuestions, PlaceQuestionRead
+from app.schemas.place_search import PlaceSearchResponse, PlaceSearchResult
 from app.schemas.question import QuestionRead
 from app.schemas.reward import GuideRewardSummary
+from app.services import geocoding as geocoding_service
 from app.services import geographic_context as geographic_context_service
 from app.services import guide_locations as guide_location_service
 from app.services import guides as guide_service
@@ -319,6 +321,41 @@ def get_guide_popular_questions(
             )
             for q in questions
         ],
+    )
+
+
+@router.get("/{guide_id}/place-search", response_model=PlaceSearchResponse)
+def search_places_for_guide(
+    guide_id: UUID,
+    q: str = Query(min_length=1, max_length=200),
+    db: Session = Depends(get_db),
+):
+    """Place-name autocomplete for describing a memory/old photo without
+    exact coordinates (see app/services/geocoding.py). Read-only and
+    stateless -- selecting a result is entirely a mobile-side concern; this
+    endpoint just answers "what real places could this guide mean?".
+
+    Biased (never restricted) toward wherever this guide has actually
+    recorded GPS history, so "pang" surfaces Pangong first for a guide with a
+    Ladakh trip in their history rather than an unrelated namesake elsewhere.
+    A guide with no location history yet gets an unbiased search -- never an
+    error, and never empty just because history doesn't exist.
+    """
+    guide = guide_service.get_guide(db, guide_id)
+    if guide is None:
+        raise HTTPException(status_code=404, detail="Guide not found")
+
+    bounding_box = guide_location_service.bounding_box_for_guide(db, guide_id)
+    try:
+        candidates = geocoding_service.search_places(q, bounding_box=bounding_box)
+    except geocoding_service.GeocodingProviderError as exc:
+        raise HTTPException(status_code=503, detail=exc.message)
+
+    return PlaceSearchResponse(
+        results=[
+            PlaceSearchResult(label=c.label, latitude=c.latitude, longitude=c.longitude)
+            for c in candidates
+        ]
     )
 
 

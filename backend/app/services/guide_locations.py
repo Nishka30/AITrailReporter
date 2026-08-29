@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -111,6 +111,54 @@ def get_latest_location_at_or_before(
     return db.execute(stmt).scalar_one_or_none()
 
 
+def find_nearest_location_in_time(
+    db: Session, guide_id: UUID, at: datetime, max_gap: timedelta
+) -> tuple[GuideLocation, timedelta] | None:
+    """The guide's own recorded GPS sample closest in TIME to `at`, from either
+    side, or None if the closest one is further than `max_gap` away.
+
+    WHY BOTH DIRECTIONS, UNLIKE get_latest_location_at_or_before ABOVE: that
+    function answers "where was the guide when they made this live report",
+    which must never look into the future relative to the report -- a ping
+    recorded after submission tells you nothing about where they were AT
+    submission. This function answers a different question: "where does the
+    guide's OWN GPS history say they probably were at some past moment", for
+    content (an old photo, a recalled memory) discovered well after the fact.
+    A ping 10 minutes after that moment is exactly as good evidence as one 10
+    minutes before -- there is no "future" to protect against once the event
+    itself is already in the past relative to now.
+
+    The gap cutoff is the entire safeguard against a wrong answer: a sample
+    3 weeks away is not "the guide's location, approximately" -- it is a
+    different day's location. Returning None past the cutoff, rather than the
+    nearest sample regardless of distance, is what keeps a stale/wrong
+    coordinate from ever being asserted as fact (see
+    settings.historical_location_max_gap_hours).
+    """
+    before = db.execute(
+        select(GuideLocation)
+        .where(GuideLocation.guide_id == guide_id, GuideLocation.recorded_at <= at)
+        .order_by(GuideLocation.recorded_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    after = db.execute(
+        select(GuideLocation)
+        .where(GuideLocation.guide_id == guide_id, GuideLocation.recorded_at > at)
+        .order_by(GuideLocation.recorded_at.asc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+    candidates = [loc for loc in (before, after) if loc is not None]
+    if not candidates:
+        return None
+
+    best = min(candidates, key=lambda loc: abs(loc.recorded_at - at))
+    gap = abs(best.recorded_at - at)
+    if gap > max_gap:
+        return None
+    return best, gap
+
+
 def list_locations(
     db: Session, guide_id: UUID, limit: int, offset: int
 ) -> list[GuideLocation]:
@@ -122,6 +170,31 @@ def list_locations(
         .offset(offset)
     )
     return list(db.execute(stmt).scalars().all())
+
+
+def bounding_box_for_guide(db: Session, guide_id: UUID) -> tuple[float, float, float, float] | None:
+    """The (min_lat, min_lon, max_lat, max_lon) extent of a guide's own
+    recorded GPS history, or None if they have none.
+
+    Used ONLY to bias place-autocomplete search results (see
+    app/services/geocoding.py) toward where this guide has actually been --
+    typing "pang" after a Ladakh trip should surface Pangong before some
+    unrelated "Pang" on the other side of the world. This is a SOFT bias
+    (Nominatim's `bounded=0`), never a hard filter: a guide is always allowed
+    to describe a memory from somewhere they've never recorded a GPS ping.
+    """
+    row = db.execute(
+        select(
+            func.min(GuideLocation.latitude),
+            func.min(GuideLocation.longitude),
+            func.max(GuideLocation.latitude),
+            func.max(GuideLocation.longitude),
+        ).where(GuideLocation.guide_id == guide_id)
+    ).one()
+    min_lat, min_lon, max_lat, max_lon = row
+    if min_lat is None:
+        return None
+    return float(min_lat), float(min_lon), float(max_lat), float(max_lon)
 
 
 def find_nearby_guides(
