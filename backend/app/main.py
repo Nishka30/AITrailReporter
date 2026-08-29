@@ -10,8 +10,10 @@ from app.api.routes.health import router as health_router
 from app.api.routes.knowledge_decisions import router as knowledge_decisions_router
 from app.api.routes.knowledge_state import router as knowledge_state_router
 from app.api.routes.locations import router as locations_router
+from app.api.routes.place_questions import router as place_questions_router
 from app.api.routes.public import router as public_router
 from app.api.routes.questions import router as questions_router
+from app.api.routes.rewards import router as rewards_router
 from app.api.routes.submissions import router as submissions_router
 from app.api.routes.transcriptions import router as transcriptions_router
 from app.core.config import settings
@@ -46,5 +48,7 @@ app.include_router(extractions_router)
 app.include_router(knowledge_state_router)
 app.include_router(knowledge_decisions_router)
 app.include_router(questions_router)
+app.include_router(place_questions_router)
+app.include_router(rewards_router)
 app.include_router(admin_router)
 app.include_router(public_router)

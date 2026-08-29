@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 7;
+const DATABASE_VERSION = 9;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -282,7 +282,77 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 7;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 7) { ...; currentDbVersion = 8; }`
+  if (currentDbVersion === 7) {
+    // Step 18: popular questions (a SECOND question source) and reward points.
+    //
+    // Purely additive nullable/defaulted columns, exactly like v5->v6 and
+    // v6->v7. NO BACKFILL, and none is needed:
+    //   - question_kind defaults to 'dynamic', which is the TRUTHFUL value for
+    //     every pre-existing local answer: before this version the only
+    //     questions that existed were knowledge-gap ones. It is not a "not yet
+    //     migrated" placeholder.
+    //   - reward_points stays NULL on existing rows because those answers/
+    //     contributions genuinely earned nothing — rewards did not exist when
+    //     they were made. Inventing a retroactive number would show the guide
+    //     points the backend will never actually award them.
+    //
+    // Note what is NOT here: no new table for popular-question answers. A
+    // local answer is a local answer; `server_question_id` holds either kind
+    // of id and `question_kind` says which endpoint syncService should POST
+    // to. A parallel table would have duplicated the entire outbox shape, its
+    // sync logic, and its idempotency rules for no benefit — the same
+    // reasoning that made Explore reuse local_capture's audio columns in
+    // v6->v7.
+    //
+    // The existing ux_local_answer_question_id unique index keeps its meaning
+    // ("one local answer per question on this device") for both kinds: the two
+    // id spaces are distinct server-side UUIDs.
+    await db.execAsync(`
+      BEGIN TRANSACTION;
+
+      ALTER TABLE local_answer ADD COLUMN question_kind TEXT NOT NULL DEFAULT 'dynamic';
+      ALTER TABLE local_answer ADD COLUMN reward_points INTEGER;
+      ALTER TABLE local_capture ADD COLUMN reward_points INTEGER;
+
+      COMMIT;
+    `);
+    currentDbVersion = 8;
+  }
+
+  if (currentDbVersion === 8) {
+    // v8 -> v9: place-specific contribution invitations.
+    //
+    // Records WHICH place question an Explore contribution is answering, so the
+    // backend can pay it at that question's own kind-specific rate (a photo
+    // request is worth more than a status check) and so provenance survives the
+    // offline queue.
+    //
+    // Deliberately reuses local_capture rather than adding a table. A
+    // place-question contribution IS an Explore contribution — same composer,
+    // same photo/voice attachments, same two-stage idempotent upload, same
+    // extraction path. The only difference is which invitation prompted it,
+    // which is exactly one nullable column. This is the same reasoning that put
+    // Explore's audio on local_capture in v6->v7 rather than forking the outbox.
+    //
+    // NULL on every existing row is the truthful value: those contributions were
+    // genuinely not answering a place question.
+    //
+    // No column is added for the contribution KIND or its point value. Both are
+    // backend-owned and travel with the question itself; storing a copy here
+    // would let a stale device disagree with the server about what something is
+    // worth. `reward_points` (added in v8) still snapshots what the backend said
+    // at the moment of answering, which is a server-issued number, not a guess.
+    await db.execAsync(`
+      BEGIN TRANSACTION;
+
+      ALTER TABLE local_capture ADD COLUMN place_question_id TEXT;
+
+      COMMIT;
+    `);
+    currentDbVersion = 9;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 9) { ...; currentDbVersion = 10; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

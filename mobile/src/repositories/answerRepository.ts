@@ -1,16 +1,18 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { generateClientId } from '../db/uuid';
-import type { LocalAnswer, SyncStatus } from '../types/models';
+import type { LocalAnswer, QuestionKind, SyncStatus } from '../types/models';
 
 interface LocalAnswerRow {
   id: number;
   local_guide_id: number;
   server_question_id: string;
+  question_kind: string;
   client_answer_id: string;
   server_answer_id: string | null;
   answer_text: string;
   answered_at: string;
+  reward_points: number | null;
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
@@ -29,10 +31,12 @@ function mapRow(row: LocalAnswerRow): LocalAnswer {
     id: row.id,
     localGuideId: row.local_guide_id,
     serverQuestionId: row.server_question_id,
+    questionKind: (row.question_kind as QuestionKind) ?? 'dynamic',
     clientAnswerId: row.client_answer_id,
     serverAnswerId: row.server_answer_id,
     answerText: row.answer_text,
     answeredAt: row.answered_at,
+    rewardPoints: row.reward_points,
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
@@ -57,19 +61,29 @@ export async function createAnswer(
   localGuideId: number,
   serverQuestionId: string,
   answerText: string,
-  answeredAt: string
+  answeredAt: string,
+  /** Which question source this answers — determines the sync endpoint.
+   * Defaults to 'dynamic' so every existing caller keeps its exact behaviour. */
+  questionKind: QuestionKind = 'dynamic',
+  /** What the backend said this question was worth, snapshotted so an offline
+   * guide sees a real server-issued number rather than a guess. Null when the
+   * reward wasn't known (e.g. the question list was served from cache before
+   * rewards existed). */
+  rewardPoints: number | null = null
 ): Promise<LocalAnswer> {
   const now = new Date().toISOString();
   const clientAnswerId = generateClientId();
   const result = await db.runAsync(
     `INSERT INTO local_answer
-       (local_guide_id, server_question_id, client_answer_id, answer_text, answered_at, sync_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+       (local_guide_id, server_question_id, question_kind, client_answer_id, answer_text, answered_at, reward_points, sync_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     localGuideId,
     serverQuestionId,
+    questionKind,
     clientAnswerId,
     answerText,
     answeredAt,
+    rewardPoints,
     now,
     now
   );
@@ -144,6 +158,29 @@ export async function listSyncableAnswers(
     ...SYNCABLE_STATUSES
   );
   return rows.map(mapRow);
+}
+
+/**
+ * Points the guide has earned on this device that the SERVER has not confirmed
+ * yet — i.e. answers still waiting to sync (Step 18).
+ *
+ * Deliberately excludes 'uploaded' rows: once the backend has confirmed an
+ * answer, its points are already inside the authoritative total from
+ * GET /guides/{id}/rewards, and counting them here too would double-display
+ * them. This number is only ever shown as a separate "pending" line, never
+ * added into the confirmed balance by the app.
+ */
+export async function sumPendingRewardPoints(
+  db: SQLiteDatabase,
+  localGuideId: number
+): Promise<number> {
+  const row = await db.getFirstAsync<{ total: number | null }>(
+    `SELECT SUM(reward_points) as total FROM local_answer
+     WHERE local_guide_id = ? AND reward_points IS NOT NULL
+       AND sync_status NOT IN ('uploaded', 'synced')`,
+    localGuideId
+  );
+  return row?.total ?? 0;
 }
 
 /** Marks an answer as actively being sent, and counts this as a sync attempt. */

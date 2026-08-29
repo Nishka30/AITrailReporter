@@ -15,11 +15,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.db.models.knowledge_type_config import KnowledgeTypeConfig
 from app.db.models.question import Question
 from app.db.models.question_answer import QuestionAnswer
 from app.db.models.question_assignment import QuestionAssignment
 from app.db.models.submission import Submission
 from app.services import extractions as extraction_service
+from app.services import rewards as reward_service
 
 
 class QuestionNotFoundError(Exception):
@@ -81,6 +83,18 @@ class AnswerConflictError(Exception):
             f"client_answer_id {existing.client_answer_id!r} was already used "
             "with different answer data"
         )
+
+
+def reward_rule_key_for_question(db: Session, question: Question) -> str:
+    """Which reward rule applies to answering this question. Safety-critical
+    knowledge is worth more because it is the knowledge the system most needs
+    kept current -- the two rules are separate ROWS in reward_rules, so that
+    difference is operationally tunable rather than encoded as an amount
+    here."""
+    kt = db.get(KnowledgeTypeConfig, question.knowledge_type_id)
+    if kt is not None and kt.safety_critical:
+        return "question_answer_safety_critical"
+    return "question_answer"
 
 
 def get_answer(db: Session, answer_id: UUID) -> QuestionAnswer | None:
@@ -231,6 +245,24 @@ def submit_answer(
     # never on the mere existence of locally-typed text on the mobile device.
     assignment.status = "completed"
     assignment.answered_at = answered_at
+
+    # Flush so the answer's server-generated id exists before it is referenced
+    # as the reward's source_id below (the id column's default is applied at
+    # INSERT time, not at object construction).
+    db.flush()
+
+    # Reward (Step 18), in this SAME transaction so the answer and its award
+    # commit together. Keyed on client_answer_id -- the id that already makes
+    # this whole function idempotent -- so a retried offline sync credits the
+    # guide exactly once (see app/services/rewards.py:award).
+    reward_service.award(
+        db,
+        guide_id=guide_id,
+        rule_key=reward_rule_key_for_question(db, question),
+        idempotency_key=client_answer_id,
+        source_type="question_answer",
+        source_id=answer.id,
+    )
 
     db.commit()
     db.refresh(answer)

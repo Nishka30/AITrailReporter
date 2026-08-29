@@ -38,6 +38,7 @@ class Submission(Base):
     __tablename__ = "submissions"
     __table_args__ = (
         Index("ix_submissions_source_question_id", "source_question_id"),
+        Index("ix_submissions_source_place_question_id", "source_place_question_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -54,6 +55,21 @@ class Submission(Base):
     # records, not be destroyed along with it.
     source_question_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("questions.id", ondelete="SET NULL"), nullable=True
+    )
+    # Provenance (Step 18): the popular/researched question this submission
+    # answers, when it came from that SECOND question source rather than the
+    # knowledge-gap queue. Mutually exclusive with source_question_id in
+    # practice -- a submission answers one or the other, never both -- but that
+    # is an application-level truth, not a DB constraint, matching how the rest
+    # of this schema treats mutually-exclusive optional provenance.
+    #
+    # SET NULL (not CASCADE) for the same reason as source_question_id above:
+    # if a place question were ever deleted, the historical submission and the
+    # observations it produced must survive as orphaned-but-intact records.
+    # (In practice a superseded place question is deactivated, never deleted --
+    # see app/db/models/place_question.py.)
+    source_place_question_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("place_questions.id", ondelete="SET NULL"), nullable=True
     )
     # Stable client-generated id (e.g. a mobile app's local UUID) used to make
     # submission ingestion idempotent. Nullable for the same reason as

@@ -24,6 +24,7 @@ from app.services import geographic_context as geographic_context_service
 from app.services import knowledge_decisions as knowledge_decision_service
 from app.services import knowledge_types as knowledge_type_service
 from app.services import question_answers as question_answer_service
+from app.services import rewards as reward_service
 from app.services.question_generation.anthropic_provider import (
     QuestionGenerationProviderError,
     generate_question_text,
@@ -131,6 +132,14 @@ def build_question_read(db: Session, question: Question) -> QuestionRead:
         updated_at=question.updated_at,
         assignment=assignment,
         answer=answer,
+        # Resolved live from reward_rules (Step 18) rather than snapshotted on
+        # the Question row: this is "what answering it is worth right now", and
+        # a rule change should be reflected immediately in what the app offers.
+        # What was actually PAID is separately immutable in reward_ledger, so
+        # changing a rule never rewrites history.
+        reward_points=reward_service.resolve_points(
+            db, question_answer_service.reward_rule_key_for_question(db, question)
+        ),
     )
 
 

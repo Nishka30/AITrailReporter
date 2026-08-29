@@ -66,6 +66,22 @@ class SubmissionCreate(BaseModel):
     # When the device captured this, not when the server received it. Defaults to
     # server time if the client doesn't supply one.
     submitted_at: datetime | None = None
+    # Set when this contribution answers a location-specific place question --
+    # the "you're here right now, tell us about this place" invitations the
+    # backend researched for a known Location.
+    #
+    # Only meaningful with capture_type 'explore', and validated as such below.
+    # A place-question contribution IS an Explore contribution: it uses the same
+    # composer, the same offline capture outbox, the same two-stage media upload
+    # and the same extraction pipeline. This field is the ONLY difference, and it
+    # exists so provenance stays queryable and so the reward can be paid at the
+    # question's own kind-specific rate rather than the generic Explore rate
+    # (see app/services/submissions.py).
+    #
+    # Deliberately not a separate endpoint: routing media through a second
+    # answer path would mean duplicating audio attach, photo attach,
+    # transcription triggering and their idempotency contracts.
+    source_place_question_id: UUID | None = None
 
     @field_validator("client_submission_id")
     @classmethod
@@ -91,6 +107,10 @@ class SubmissionCreate(BaseModel):
             raise ValueError(
                 "text_content must not be supplied for capture_type 'voice' — "
                 "upload the audio separately via POST /api/v1/submissions/{id}/audio"
+            )
+        if self.source_place_question_id is not None and self.capture_type != "explore":
+            raise ValueError(
+                "source_place_question_id is only valid for capture_type 'explore'"
             )
         return self
 

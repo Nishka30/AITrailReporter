@@ -13,6 +13,17 @@ export interface CreateSubmissionRequest {
   textContent: string | null;
   /** ISO-8601, timezone-aware — when the device captured this, not when it's sent. */
   submittedAt: string;
+  /**
+   * Set when this contribution answers a location-specific place question —
+   * the "you're here right now" invitations the backend researched for the
+   * place the guide is standing at. Only valid with captureType 'explore'.
+   *
+   * It is what makes the backend pay this at the question's own kind-specific
+   * rate (a photo request is worth more than a status check) instead of the
+   * generic Explore rate. The app never sends a point value — only which
+   * question was answered.
+   */
+  sourcePlaceQuestionId?: string | null;
 }
 
 export interface SubmissionAudioResponse {
@@ -124,6 +135,7 @@ export async function createOrGetSubmission(
       capture_type: req.captureType,
       text_content: req.textContent,
       submitted_at: req.submittedAt,
+      source_place_question_id: req.sourcePlaceQuestionId ?? null,
     },
   });
   return submissionFromWire(wire);

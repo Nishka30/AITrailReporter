@@ -32,6 +32,12 @@ export type SyncStatus =
 export type CaptureType = 'note' | 'voice' | 'explore' | 'photo' | 'mixed';
 
 /**
+ * Which of the two question sources a local answer belongs to (Step 18).
+ * See LocalAnswer.questionKind for what each one syncs to.
+ */
+export type QuestionKind = 'dynamic' | 'popular';
+
+/**
  * A guide profile stored on this device.
  *
  * `id` is the local SQLite row id — it is NOT a backend identifier and must never be
@@ -152,6 +158,24 @@ export interface LocalCapture {
    */
   explorePromptId: string | null;
   explorePromptTitle: string | null;
+  /**
+   * Which backend-researched place question this contribution answers — the
+   * "you're here right now" invitations tied to a known Location. UNLIKE
+   * explorePromptId, this IS sent to the server (see api/submissions.ts): it is
+   * what makes the contribution pay at that question's own kind-specific rate
+   * instead of the generic Explore rate. Null for a free-form contribution or
+   * one answering a device-built prompt.
+   */
+  placeQuestionId: string | null;
+  /**
+   * Provisional reward for an Explore contribution (Step 18), snapshotted from
+   * the backend's reward config at capture time. Same contract as
+   * LocalAnswer.rewardPoints: a display value for the offline case only, always
+   * superseded by the server's authoritative total after sync. Null for
+   * note/voice/location captures and for anything created before rewards
+   * existed.
+   */
+  rewardPoints: number | null;
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;
@@ -207,10 +231,37 @@ export interface LocalAnswer {
   id: number;
   localGuideId: number;
   serverQuestionId: string;
+  /**
+   * Which question source this answers (Step 18), and therefore which backend
+   * endpoint syncService must POST to:
+   *
+   * - 'dynamic' — a knowledge-gap question from the priority queue.
+   *   `serverQuestionId` is a backend Question id; syncs to
+   *   POST /api/v1/questions/{id}/answers.
+   * - 'popular' — a researched question about the guide's current place.
+   *   `serverQuestionId` is a backend PlaceQuestion id; syncs to
+   *   POST /api/v1/place-questions/{id}/answers.
+   *
+   * The two id spaces are distinct server-side, so one column holds either
+   * safely and the existing "one local answer per question" unique index keeps
+   * its meaning for both.
+   */
+  questionKind: QuestionKind;
   clientAnswerId: string;
   serverAnswerId: string | null;
   answerText: string;
   answeredAt: string;
+  /**
+   * What the BACKEND said this answer was worth, snapshotted at answer time
+   * from the question the guide was looking at. Never computed on the device.
+   *
+   * Its only job is to let an offline guide see "+25 points, pending sync"
+   * backed by a real server-issued number instead of a guess. It is a
+   * PROVISIONAL display value: once synced, `GET /guides/{id}/rewards` is the
+   * authoritative total and supersedes any local arithmetic. Null for answers
+   * created before rewards existed.
+   */
+  rewardPoints: number | null;
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;

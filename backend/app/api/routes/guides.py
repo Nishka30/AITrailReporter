@@ -11,13 +11,17 @@ from app.schemas.guide import GuideCreate, GuideRead, GuideUpdate
 from app.schemas.guide_location import NearbyGuideResult
 from app.schemas.knowledge_decision import KnowledgeDecisionResult
 from app.schemas.knowledge_state import GuideKnowledgeStateResult
+from app.schemas.place_question import GuidePlaceQuestions, PlaceQuestionRead
 from app.schemas.question import QuestionRead
+from app.schemas.reward import GuideRewardSummary
 from app.services import geographic_context as geographic_context_service
 from app.services import guide_locations as guide_location_service
 from app.services import guides as guide_service
 from app.services import knowledge_decisions as knowledge_decision_service
 from app.services import knowledge_state as knowledge_state_service
+from app.services import place_questions as place_question_service
 from app.services import questions as question_service
+from app.services import rewards as reward_service
 
 router = APIRouter(prefix="/api/v1/guides", tags=["guides"])
 
@@ -195,3 +199,84 @@ def get_guide_questions(
 
     questions = question_service.list_questions_for_guide(db, guide_id, status)
     return [question_service.build_question_read(db, q) for q in questions]
+
+
+@router.get("/{guide_id}/popular-questions", response_model=GuidePlaceQuestions)
+def get_guide_popular_questions(
+    guide_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Popular questions about the place the guide is currently at (Step 18).
+
+    This is the SECONDARY question source and is deliberately separate from
+    `/questions` above -- it does not touch gap ranking, and an empty result
+    here never affects the priority queue.
+
+    Resolves the guide's place with the EXISTING geographic-context rule
+    (nearest known Location within `geographic_context_radius_meters`,
+    unchanged), then best-effort refreshes research if it is stale. Never
+    404s on a missing location or an out-of-range position: those are ordinary
+    situations for a guide in the field, reported as an empty list with null
+    location fields so the app can say "we don't know where you are" rather
+    than showing questions about somewhere they aren't.
+    """
+    guide = guide_service.get_guide(db, guide_id)
+    if guide is None:
+        raise HTTPException(status_code=404, detail="Guide not found")
+
+    empty = GuidePlaceQuestions(
+        location_id=None, location_name=None, distance_meters=None, questions=[]
+    )
+
+    location = guide_location_service.get_latest_location(db, guide_id)
+    if location is None:
+        return empty
+
+    context = geographic_context_service.resolve_geographic_context(
+        db, float(location.latitude), float(location.longitude)
+    )
+    place = context.nearest_known_place
+    if place is None:
+        return empty
+
+    # Best-effort: a research failure must never break the question list, so
+    # this swallows errors and we serve whatever is already stored.
+    place_question_service.maybe_ensure_researched(db, place.id)
+
+    questions = place_question_service.list_place_questions(db, place.id)
+
+    return GuidePlaceQuestions(
+        location_id=place.id,
+        location_name=place.name,
+        distance_meters=place.distance_meters,
+        questions=[
+            PlaceQuestionRead(
+                id=q.id,
+                location_id=q.location_id,
+                question_text=q.question_text,
+                contribution_kind=q.contribution_kind,
+                context_note=q.context_note,
+                display_order=q.display_order,
+                source_urls=q.source_urls,
+                created_at=q.created_at,
+                # Resolved PER question from its own contribution kind, so a
+                # photo request and a status check are not paid the same.
+                reward_points=place_question_service.place_question_reward_points(
+                    db, q.contribution_kind
+                ),
+            )
+            for q in questions
+        ],
+    )
+
+
+@router.get("/{guide_id}/rewards", response_model=GuideRewardSummary)
+def get_guide_rewards(guide_id: UUID, db: Session = Depends(get_db)):
+    """This guide's authoritative reward state (Step 18). Every figure is
+    computed from the append-only ledger at request time -- the backend is the
+    source of truth, and the app's offline provisional total is superseded by
+    whatever this returns."""
+    guide = guide_service.get_guide(db, guide_id)
+    if guide is None:
+        raise HTTPException(status_code=404, detail="Guide not found")
+    return reward_service.get_guide_rewards(db, guide_id)

@@ -63,6 +63,24 @@ export interface ExplorePrompt {
    * backend reported. Rendered as a small explanatory line so the guide can
    * see why they're being asked — never invented. */
   reason: string | null;
+  /**
+   * Set only when this prompt IS a backend-researched place question (see
+   * explore/placeQuestionPrompts.ts) — carried through to
+   * ExploreContributeScreen and sent to the server as
+   * source_place_question_id, so the contribution is paid at that question's
+   * own rate and its provenance is queryable. Undefined for every
+   * device-built prompt (gap or template), which is the honest value: those
+   * were never backed by a stored question.
+   */
+  placeQuestionId?: string;
+  /**
+   * The backend's OWN resolved reward for this specific place question,
+   * already correct for its contribution kind. When present, this is used
+   * INSTEAD OF the generic rewardConfig-derived estimate ExploreScreen
+   * computes for template prompts — a place question's reward is a real,
+   * specific number, not an estimate.
+   */
+  resolvedRewardPoints?: number;
 }
 
 /** Copy templates. `place` is pre-resolved to either a real place name or a
@@ -187,10 +205,24 @@ function describeGap(state: KnowledgeTypeState): string | null {
  *
  * Returns an empty array only when there is genuinely nothing to offer, which
  * the UI renders as its own honest state rather than a fake card.
+ *
+ * `hasResearchedPlaceContent` (set when the backend's own place-question
+ * research — see explore/placeQuestionPrompts.ts — has real, sourced
+ * invitations for the guide's exact spot) SKIPS the rotating template deck
+ * below. Those templates can only ever insert the place's NAME into a fixed
+ * sentence ("What's the weather like at Hillary Bridge?") — they have no
+ * actual knowledge of the place. That was a reasonable always-available
+ * fallback before research existed; once real, sourced, place-specific
+ * invitations ARE available for this exact spot, showing generic filler
+ * alongside them is what makes Explore read as "not really contextual" even
+ * though a good card is right there. The grounded gap prompts above are
+ * UNAFFECTED by this flag — they come from real backend knowledge state, not
+ * a template, and stay regardless.
  */
 export function buildPrompts(
   context: GuideContext | null,
-  knowledgeStates: KnowledgeTypeState[] | null
+  knowledgeStates: KnowledgeTypeState[] | null,
+  hasResearchedPlaceContent: boolean = false
 ): ExplorePrompt[] {
   const place = context?.nearestKnownPlace?.name ?? null;
   const hasRealPlace = place !== null;
@@ -228,10 +260,12 @@ export function buildPrompts(
     });
   }
 
-  // 2. Open discovery prompts, rotated deterministically.
+  // 2. Open discovery prompts, rotated deterministically. Skipped entirely
+  //    when real researched content already exists for this exact spot — see
+  //    the flag's doc comment above.
   const seed = rotationSeed(context);
   const offset = ((seed % TEMPLATES.length) + TEMPLATES.length) % TEMPLATES.length;
-  const rotated = [...TEMPLATES.slice(offset), ...TEMPLATES.slice(0, offset)];
+  const rotated = hasResearchedPlaceContent ? [] : [...TEMPLATES.slice(offset), ...TEMPLATES.slice(0, offset)];
 
   for (const template of rotated) {
     // Skip a generic 'conditions' card when grounded gap cards already asked

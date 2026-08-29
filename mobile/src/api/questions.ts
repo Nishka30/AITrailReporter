@@ -61,6 +61,11 @@ export interface Question {
   errorMessage: string | null;
   assignment: QuestionAssignment | null;
   answer: QuestionAnswer | null;
+  /** What the BACKEND says answering this is worth (Step 18) -- higher for
+   * safety-critical knowledge types. Resolved server-side from the reward
+   * rules table; this app never computes or defaults a reward value. 0 means
+   * no active rule, and the UI then shows no reward at all. */
+  rewardPoints: number;
 }
 
 interface QuestionAssignmentWire {
@@ -101,6 +106,7 @@ interface QuestionWire {
   error_message: string | null;
   assignment: QuestionAssignmentWire | null;
   answer: QuestionAnswerWire | null;
+  reward_points: number;
 }
 
 /** Exported so api/questionAnswers.ts can map the same QuestionRead shape
@@ -133,6 +139,7 @@ export function questionFromWire(wire: QuestionWire): Question {
           answeredAt: wire.assignment.answered_at,
         }
       : null,
+    rewardPoints: wire.reward_points ?? 0,
     answer: wire.answer
       ? {
           id: wire.answer.id,

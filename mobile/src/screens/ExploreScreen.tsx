@@ -10,12 +10,23 @@ import {
   type GuideContext,
   type KnowledgeTypeState,
 } from '../api/guideContext';
-import { Badge, Button, Card, EmptyState, ErrorState, Screen, SectionHeader } from '../components/ui';
+import { listPopularQuestions, type GuidePlaceQuestions } from '../api/placeQuestions';
+import { getRewardConfig, type RewardConfig } from '../api/rewards';
+import {
+  Badge,
+  Card,
+  EmptyState,
+  ErrorState,
+  RewardChip,
+  Screen,
+  SectionHeader,
+} from '../components/ui';
 import {
   FREE_FORM_PROMPT,
   buildPrompts,
   type ExplorePrompt,
 } from '../explore/explorePrompts';
+import { placeQuestionToExplorePrompt } from '../explore/placeQuestionPrompts';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { countCapturesByStatus } from '../repositories/captureRepository';
 import { colors, radii, shadow, spacing, type } from '../theme/theme';
@@ -54,7 +65,18 @@ const KIND_STYLE: Record<
   local_find: { icon: 'restaurant-outline', tint: colors.info, wash: colors.infoSoft },
 };
 
-function PromptCard({ prompt, onPress }: { prompt: ExplorePrompt; onPress: () => void }) {
+function PromptCard({
+  prompt,
+  rewardPoints,
+  onPress,
+}: {
+  prompt: ExplorePrompt;
+  /** From the backend's reward config; null when it hasn't loaded (offline,
+   * or the request failed), in which case no reward is shown at all rather
+   * than a guessed number. */
+  rewardPoints: number | null;
+  onPress: () => void;
+}) {
   const style = KIND_STYLE[prompt.kind];
   return (
     <Card onPress={onPress} accessibilityLabel={prompt.title} style={styles.promptCard}>
@@ -76,6 +98,11 @@ function PromptCard({ prompt, onPress }: { prompt: ExplorePrompt; onPress: () =>
           {prompt.wantsPhoto ? 'Add a photo' : 'Share this'}
         </Text>
         <Ionicons name="arrow-forward" size={15} color={style.tint} />
+        {rewardPoints ? (
+          <View style={styles.promptReward}>
+            <RewardChip points={rewardPoints} />
+          </View>
+        ) : null}
       </View>
     </Card>
   );
@@ -104,6 +131,17 @@ export default function ExploreScreen({ guide, onStartContribution, refreshKey }
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  // Reward values come from the BACKEND (see api/rewards.ts) -- this screen
+  // never hardcodes what a contribution is worth. Null until loaded, in which
+  // case cards simply show no reward rather than a guessed one.
+  const [rewardConfig, setRewardConfig] = useState<RewardConfig | null>(null);
+  // Location-specific "you're here" invitations — the same backend-researched
+  // place questions the Questions tab shows, surfaced here too because Explore
+  // is exactly where "we noticed where you are" belongs. Loaded separately and
+  // never allowed to fail the screen, same contract as rewardConfig below: a
+  // missing/failed fetch means "no place invitation right now", not "Explore is
+  // broken".
+  const [placeQuestions, setPlaceQuestions] = useState<GuidePlaceQuestions | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -120,6 +158,7 @@ export default function ExploreScreen({ guide, onStartContribution, refreshKey }
       if (!guide.serverGuideId) {
         setContext(null);
         setKnowledgeStates(null);
+        setPlaceQuestions(null);
         return;
       }
       const [ctx, states] = await Promise.all([
@@ -128,6 +167,23 @@ export default function ExploreScreen({ guide, onStartContribution, refreshKey }
       ]);
       setContext(ctx);
       setKnowledgeStates(states);
+
+      // Loaded separately and never allowed to fail the screen: rewards are an
+      // incentive layer, so a missing config means "show no points", not
+      // "Explore is broken".
+      try {
+        setRewardConfig(await getRewardConfig());
+      } catch {
+        setRewardConfig(null);
+      }
+
+      // Same best-effort contract — a place question failure degrades to "no
+      // invitation shown", never to breaking the rest of Explore.
+      try {
+        setPlaceQuestions(await listPopularQuestions(guide.serverGuideId));
+      } catch {
+        setPlaceQuestions(null);
+      }
     } catch (err) {
       const message =
         err instanceof ApiError || err instanceof NetworkError
@@ -150,8 +206,29 @@ export default function ExploreScreen({ guide, onStartContribution, refreshKey }
   // tab re-entry) show the inline "Checking where you are…" state instead.
   const { pulling, onPull } = usePullToRefresh(refresh);
 
-  const prompts = buildPrompts(context, knowledgeStates);
+  // Real, sourced invitations already exist for this exact spot — the
+  // generic rotating deck below would only repeat the place's name into a
+  // fixed sentence, which is the "not really contextual" problem this flag
+  // exists to fix. See buildPrompts' doc comment.
+  const hasResearchedPlaceContent = (placeQuestions?.questions.length ?? 0) > 0;
+  const prompts = buildPrompts(context, knowledgeStates, hasResearchedPlaceContent);
   const place = context?.nearestKnownPlace;
+
+  /** What an Explore contribution answering THIS prompt is currently worth.
+   * A prompt asking for a photo is labelled with the media-inclusive total,
+   * because that is genuinely what the guide earns if they do what the card
+   * asks -- the base award plus the media bonus (see
+   * backend/app/services/submissions.py). Any other prompt shows the base
+   * award only; the bonus is still granted if they happen to attach media,
+   * we just don't promise it up front for a card that didn't ask for it. */
+  function rewardForPrompt(prompt: ExplorePrompt): number | null {
+    if (!rewardConfig) return null;
+    const base = rewardConfig.rules.find((r) => r.ruleKey === 'explore_contribution')?.points ?? 0;
+    if (!prompt.wantsPhoto) return base || null;
+    const bonus =
+      rewardConfig.rules.find((r) => r.ruleKey === 'explore_contribution_media_bonus')?.points ?? 0;
+    return base + bonus || null;
+  }
 
   return (
     <Screen onRefresh={onPull} refreshing={pulling} footerSpace={8}>
@@ -221,8 +298,33 @@ export default function ExploreScreen({ guide, onStartContribution, refreshKey }
         </View>
       ) : null}
 
-      {/* Free-form path is permanent and always first — a guide must never have
-          to wait for the right card to appear to report something. */}
+      {/* Location-specific invitations go FIRST, above even the free-form path
+          — "we noticed exactly where you are" is the most contextual, most
+          exciting thing this tab can say, and it should read that way. Each
+          card already carries its own real, backend-resolved reward (see
+          placeQuestionToExplorePrompt) rather than the generic estimate below. */}
+      {placeQuestions && placeQuestions.questions.length > 0 ? (
+        <>
+          <SectionHeader
+            title={placeQuestions.locationName ? `You're at ${placeQuestions.locationName}` : "You're here"}
+            meta="Tell us what you're seeing"
+          />
+          {placeQuestions.questions.map((q) => {
+            const prompt = placeQuestionToExplorePrompt(q, placeQuestions.locationName);
+            return (
+              <PromptCard
+                key={prompt.id}
+                prompt={prompt}
+                rewardPoints={prompt.resolvedRewardPoints ?? null}
+                onPress={() => onStartContribution(prompt)}
+              />
+            );
+          })}
+        </>
+      ) : null}
+
+      {/* Free-form path is permanent and always available — a guide must never
+          have to wait for the right card to appear to report something. */}
       <SectionHeader title="In your own words" />
       <Pressable
         onPress={() => onStartContribution(FREE_FORM_PROMPT)}
@@ -252,6 +354,7 @@ export default function ExploreScreen({ guide, onStartContribution, refreshKey }
             <PromptCard
               key={prompt.id}
               prompt={prompt}
+              rewardPoints={rewardForPrompt(prompt)}
               onPress={() => onStartContribution(prompt)}
             />
           ))}
@@ -341,6 +444,9 @@ const styles = StyleSheet.create({
   promptBody: { ...type.body, color: colors.inkSoft, marginTop: spacing.sm, lineHeight: 22 },
   promptCta: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: spacing.sm },
   promptCtaText: { ...type.smallBold },
+  // Pushed to the trailing edge so the reward reads as a supporting detail
+  // beside the action, never as the card's headline.
+  promptReward: { marginLeft: 'auto' },
 
   footnote: {
     ...type.caption,

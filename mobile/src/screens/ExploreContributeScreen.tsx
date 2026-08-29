@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import type { RecordedAudio } from '../audio/audioRecordingService';
 import VoiceNoteComposer from '../components/VoiceNoteComposer';
-import { AppHeader, Badge, Button, Card, Screen } from '../components/ui';
+import { AppHeader, Badge, Button, Card, RewardChip, Screen } from '../components/ui';
 import type { ExplorePrompt } from '../explore/explorePrompts';
 import { choosePhoto, takePhoto, type PhotoPickResult } from '../photo/photoPickerService';
 import { createExploreCapture } from '../repositories/captureRepository';
@@ -133,6 +133,11 @@ export default function ExploreContributeScreen({ guide, prompt, onDone }: Props
         // Local-only provenance — the backend does not model prompts.
         promptId: prompt.id,
         promptTitle: prompt.title,
+        // Set only when this prompt IS a backend place question (see
+        // explore/placeQuestionPrompts.ts) — this one field IS sent to the
+        // server (api/submissions.ts), unlike promptId/promptTitle above.
+        placeQuestionId: prompt.placeQuestionId ?? null,
+        rewardPoints: prompt.resolvedRewardPoints ?? null,
       });
       setSaved(true);
     } catch (err) {
@@ -191,6 +196,13 @@ export default function ExploreContributeScreen({ guide, prompt, onDone }: Props
             <View style={styles.reasonRow}>
               <Ionicons name="information-circle-outline" size={13} color={colors.inkFaint} />
               <Text style={styles.reasonText}>{prompt.reason}</Text>
+            </View>
+          ) : null}
+          {/* Only for a place question — a real, backend-resolved number for
+              THIS specific invitation, never the generic Explore estimate. */}
+          {prompt.resolvedRewardPoints ? (
+            <View style={styles.rewardRow}>
+              <RewardChip points={prompt.resolvedRewardPoints} />
             </View>
           ) : null}
         </Card>
@@ -304,6 +316,7 @@ const styles = StyleSheet.create({
   promptBody: { ...type.subtitle, color: colors.ink, lineHeight: 24 },
   reasonRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: spacing.sm },
   reasonText: { ...type.caption, color: colors.inkFaint, flexShrink: 1 },
+  rewardRow: { flexDirection: 'row', marginTop: spacing.sm },
 
   sectionLabelRow: {
     flexDirection: 'row',

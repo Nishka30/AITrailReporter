@@ -1,4 +1,4 @@
-# AI Trail Reporter — Mobile
+# TrailMind — Mobile
 
 Offline-first guide app. React Native + Expo + TypeScript, with a local SQLite
 database as the persistence layer and a user-initiated **outbox sync** to the

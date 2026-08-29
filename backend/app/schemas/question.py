@@ -101,3 +101,9 @@ class QuestionRead(BaseModel):
     # this step only ever creates at most one, but reads defensively the same
     # way `assignment` above does.
     answer: QuestionAnswerRead | None = None
+    # What answering this question is currently worth (Step 18), resolved from
+    # the reward_rules table at read time -- safety-critical questions map to
+    # their own, higher-valued rule. Additive: every pre-existing field above
+    # is unchanged, so this does not alter the existing question contract.
+    # The mobile app DISPLAYS this and never computes a reward itself.
+    reward_points: int = 0

@@ -1,6 +1,12 @@
-# AI Trail Reporter
+# TrailMind
 
-A location-first field guide knowledge system. Three projects:
+A location-first field guide knowledge system. Shipped to guides as **TrailMind**;
+the repository, database entities, API routes and package names keep their
+original `AITrailReporter`/`mobile` identifiers, because renaming them would
+change the Android package, the EAS project link and every existing install
+without changing what the product does.
+
+Three projects:
 
 - [`backend/`](backend/README.md) — FastAPI + PostgreSQL/PostGIS API. See its README
   for setup, migrations, and the full API reference.

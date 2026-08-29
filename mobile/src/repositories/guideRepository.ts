@@ -157,6 +157,36 @@ export async function updateLocalGuideProfile(
 }
 
 /**
+ * Saves ONLY the profile photo, immediately.
+ *
+ * Separate from updateLocalGuideProfile above because a profile photo is not
+ * like the other fields: it never leaves the device, so there is nothing to
+ * validate and nothing to push, and deferring it behind the "Save profile"
+ * button was an actual bug — picking a photo updated the avatar instantly,
+ * which reads as "saved", but navigating back discarded it and left the copied
+ * file orphaned on disk.
+ *
+ * Deliberately touches no other column and NEVER sets profile_dirty: the photo
+ * is not a server-visible field, so changing it must not queue a profile PATCH.
+ * Writing only this one column also means an in-progress, unsaved edit to the
+ * name or phone number in the form above is left completely untouched — a
+ * photo change must not silently commit half-typed text.
+ */
+export async function updateLocalGuidePhoto(
+  db: SQLiteDatabase,
+  id: number,
+  localPhotoUri: string | null
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.runAsync(
+    'UPDATE local_guide SET local_photo_uri = ?, updated_at = ? WHERE id = ?',
+    localPhotoUri,
+    now,
+    id
+  );
+}
+
+/**
  * Clears the pending-profile-push flag after the backend has CONFIRMED the new
  * name/phone. Called by the sync engine only, never optimistically — the flag
  * staying set is what makes an interrupted push retry on the next sync.

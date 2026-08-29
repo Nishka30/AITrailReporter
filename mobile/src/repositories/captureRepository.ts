@@ -19,6 +19,8 @@ interface LocalCaptureRow {
   photo_content_type: string | null;
   explore_prompt_id: string | null;
   explore_prompt_title: string | null;
+  place_question_id: string | null;
+  reward_points: number | null;
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
@@ -54,6 +56,8 @@ function mapRow(row: LocalCaptureRow): LocalCapture {
     photoContentType: row.photo_content_type,
     explorePromptId: row.explore_prompt_id,
     explorePromptTitle: row.explore_prompt_title,
+    placeQuestionId: row.place_question_id,
+    rewardPoints: row.reward_points,
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
@@ -177,6 +181,15 @@ export async function createExploreCapture(
     audioContentType?: string | null;
     promptId?: string | null;
     promptTitle?: string | null;
+    /** Set when this contribution answers a backend-researched place question.
+     * Unlike promptId/promptTitle (which are local-only provenance for
+     * device-built Explore prompts), this IS sent to the server — it is what
+     * makes the contribution pay at that question's own rate. */
+    placeQuestionId?: string | null;
+    /** What the BACKEND said this contribution was worth at the moment it was
+     * composed. Snapshotted so an offline guide sees a real server-issued
+     * number rather than a device guess; the server remains authoritative. */
+    rewardPoints?: number | null;
   } = {}
 ): Promise<LocalCapture> {
   const trimmedText = textContent?.trim() ? textContent.trim() : null;
@@ -201,8 +214,9 @@ export async function createExploreCapture(
         local_photo_uri, client_photo_id, photo_content_type,
         local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
         explore_prompt_id, explore_prompt_title,
+        place_question_id, reward_points,
         sync_status, created_at, updated_at)
-     VALUES (?, ?, 'explore', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, 'explore', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     localGuideId,
     clientSubmissionId,
     trimmedText,
@@ -215,6 +229,8 @@ export async function createExploreCapture(
     localAudioUri ? (options.audioContentType ?? null) : null,
     options.promptId ?? null,
     options.promptTitle ?? null,
+    options.placeQuestionId ?? null,
+    options.rewardPoints ?? null,
     now,
     now
   );

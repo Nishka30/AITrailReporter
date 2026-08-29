@@ -9,6 +9,7 @@ export { default as EmptyState } from './EmptyState';
 export { default as ErrorState } from './ErrorState';
 export { default as LoadingState } from './LoadingState';
 export { default as QuickActionTile } from './QuickActionTile';
+export { default as RewardChip } from './RewardChip';
 export { default as Screen } from './Screen';
 export { default as SectionHeader } from './SectionHeader';
 export { default as TabBar } from './TabBar';

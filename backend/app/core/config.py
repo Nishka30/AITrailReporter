@@ -77,6 +77,46 @@ class Settings(BaseSettings):
     anthropic_request_timeout_seconds: float = 60.0
     anthropic_max_output_tokens: int = 2048
 
+    # Step 18: popular-question web research. How long a successful research
+    # run stays valid before a refresh is allowed. Popular questions about a
+    # place ("is it safe to cross?") change slowly, and every refresh costs a
+    # real web search, so this is deliberately generous -- see
+    # app/services/place_questions.py, which is the ONLY thing that reads it.
+    place_question_refresh_days: int = 30
+
+    # Upper bound on how many popular questions are kept per place. The
+    # research prompt asks for "5-6"; this is the hard cap applied
+    # server-side afterwards, so a model returning more can never flood a
+    # place's list.
+    place_question_max_count: int = 6
+
+    # Place research gets its OWN, much longer timeout than
+    # anthropic_request_timeout_seconds above. That 60s is tuned for extraction
+    # and question generation, which are single model turns with no server
+    # tools. Place research is a different shape of request: it runs up to
+    # RESEARCH_TOOL_MAX_SEARCHES real web searches on Anthropic's side and only
+    # then generates, so it routinely exceeds 60s and was reliably failing with
+    # APITimeoutError. Raising the shared value instead would have loosened the
+    # timeout for every other LLM call in the system to fix one of them.
+    #
+    # A timeout here is not data loss -- a failed run leaves the previously
+    # researched questions in place and simply records status='failed' (see
+    # place_questions.ensure_researched) -- but it does mean a place never gets
+    # its first batch, which is a silent quality failure rather than a visible
+    # error.
+    place_question_research_timeout_seconds: float = 300.0
+
+    # Step 18: reward points -> money. `10` means 10 points = 1.00 of
+    # reward_currency_code. Configured here rather than in the mobile app so
+    # the rate can change without an app release -- the app only ever DISPLAYS
+    # the conversion the backend reports (see app/api/routes/rewards.py).
+    #
+    # NOTE: no payout/redemption mechanism exists in this system. This value
+    # drives an "approximate value" display only; nothing here moves money.
+    reward_points_per_currency_unit: int = 10
+    reward_currency_code: str = "USD"
+    reward_currency_symbol: str = "$"
+
     # --- Supabase Storage ---
     # When both are set the backend uses SupabaseMediaStorage for audio/photo
     # uploads instead of the local filesystem. Set these on Render (production)

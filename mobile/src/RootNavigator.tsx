@@ -2,13 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 
+import type { PlaceQuestion } from './api/placeQuestions';
 import type { Question } from './api/questions';
 import { colors, spacing, type } from './theme/theme';
 import { LoadingState, TabBar, type TabKey } from './components/ui';
 import type { ExplorePrompt } from './explore/explorePrompts';
+import { placeQuestionToExplorePrompt } from './explore/placeQuestionPrompts';
 import { useLocalActivityCount } from './hooks/useLocalActivityCount';
 import { getCurrentLocalGuide } from './repositories/guideRepository';
-import AnswerQuestionScreen from './screens/AnswerQuestionScreen';
+import AnswerQuestionScreen, {
+  targetFromPlaceQuestion,
+  targetFromQuestion,
+  type AnswerTarget,
+} from './screens/AnswerQuestionScreen';
 import CreateNoteScreen from './screens/CreateNoteScreen';
 import ExploreContributeScreen from './screens/ExploreContributeScreen';
 import ExploreScreen from './screens/ExploreScreen';
@@ -16,10 +22,17 @@ import HomeScreen from './screens/HomeScreen';
 import PendingItemsScreen from './screens/PendingItemsScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import QuestionsScreen from './screens/QuestionsScreen';
+import RewardsScreen from './screens/RewardsScreen';
 import SetupScreen from './screens/SetupScreen';
 import type { LocalGuide } from './types/models';
 
-type PushedScreen = 'createNote' | 'answerQuestion' | 'exploreContribute' | 'profile' | null;
+type PushedScreen =
+  | 'createNote'
+  | 'answerQuestion'
+  | 'exploreContribute'
+  | 'profile'
+  | 'rewards'
+  | null;
 
 /**
  * Navigation shell (Step 15): a persistent bottom TabBar (Home / Questions /
@@ -42,8 +55,15 @@ export default function RootNavigator() {
 
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [pushed, setPushed] = useState<PushedScreen>(null);
-  const [selectedQuestion, setSelectedQuestion] = useState<Question | null>(null);
+  // A normalized target rather than a Question: the answer screen serves BOTH
+  // question sources (Step 18), and resolving the difference once here keeps
+  // that branch out of the screen itself.
+  const [answerTarget, setAnswerTarget] = useState<AnswerTarget | null>(null);
   const [selectedPrompt, setSelectedPrompt] = useState<ExplorePrompt | null>(null);
+  // Which tab pushed the Explore composer — a photo/voice place question can
+  // now open it from Questions, not only from Explore itself, and closing
+  // should return to wherever the guide actually came from.
+  const [explorePromptOrigin, setExplorePromptOrigin] = useState<TabKey>('explore');
   const [questionBadgeCount, setQuestionBadgeCount] = useState<number | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -73,7 +93,7 @@ export default function RootNavigator() {
 
   const closePushed = useCallback((returnTo?: TabKey) => {
     setPushed(null);
-    setSelectedQuestion(null);
+    setAnswerTarget(null);
     setSelectedPrompt(null);
     if (returnTo) setActiveTab(returnTo);
     setRefreshKey((k) => k + 1);
@@ -103,14 +123,18 @@ export default function RootNavigator() {
     return <CreateNoteScreen guide={guide} onDone={() => closePushed('home')} />;
   }
 
-  if (pushed === 'answerQuestion' && selectedQuestion) {
+  if (pushed === 'answerQuestion' && answerTarget) {
     return (
       <AnswerQuestionScreen
         guide={guide}
-        question={selectedQuestion}
+        target={answerTarget}
         onDone={() => closePushed('questions')}
       />
     );
+  }
+
+  if (pushed === 'rewards') {
+    return <RewardsScreen guide={guide} onDone={() => setPushed('profile')} />;
   }
 
   if (pushed === 'profile') {
@@ -125,6 +149,7 @@ export default function RootNavigator() {
           await reloadGuide();
           closePushed('home');
         }}
+        onOpenRewards={() => setPushed('rewards')}
       />
     );
   }
@@ -134,7 +159,7 @@ export default function RootNavigator() {
       <ExploreContributeScreen
         guide={guide}
         prompt={selectedPrompt}
-        onDone={() => closePushed('explore')}
+        onDone={() => closePushed(explorePromptOrigin)}
       />
     );
   }
@@ -157,6 +182,7 @@ export default function RootNavigator() {
             guide={guide}
             onStartContribution={(prompt) => {
               setSelectedPrompt(prompt);
+              setExplorePromptOrigin('explore');
               setPushed('exploreContribute');
             }}
             refreshKey={refreshKey}
@@ -165,7 +191,23 @@ export default function RootNavigator() {
           <QuestionsScreen
             guide={guide}
             onSelectQuestion={(question) => {
-              setSelectedQuestion(question);
+              setAnswerTarget(targetFromQuestion(question));
+              setPushed('answerQuestion');
+            }}
+            onSelectPopularQuestion={(question, placeName) => {
+              // A place question asking for a photo or a voice note needs
+              // actual media capture, which only ExploreContributeScreen has
+              // — AnswerQuestionScreen is text-only by design (Step 13). Every
+              // other kind (observation/experience/status) is a short text
+              // report and keeps using the lighter, already-built answer
+              // screen, exactly like a priority question.
+              if (question.contributionKind === 'photo' || question.contributionKind === 'voice') {
+                setSelectedPrompt(placeQuestionToExplorePrompt(question, placeName));
+                setExplorePromptOrigin('questions');
+                setPushed('exploreContribute');
+                return;
+              }
+              setAnswerTarget(targetFromPlaceQuestion(question, placeName));
               setPushed('answerQuestion');
             }}
             onCountChange={setQuestionBadgeCount}

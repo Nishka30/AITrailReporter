@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,18 +37,25 @@ function useSyncSnapshot(guide: LocalGuide, refreshKey: number) {
   const [uploaded, setUploaded] = useState<number | null>(null);
   const [latestLocation, setLatestLocation] = useState<LocalLocation | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Guards against two refresh() calls overlapping on the same SQLite
+  // connection (e.g. a rapid double tab-switch bumping refreshKey twice in a
+  // row) — expo-sqlite can throw "shared object already released" when two
+  // in-flight statements race, so a second call while one is still running
+  // is dropped rather than started.
+  const inFlight = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
-      const [captureWaiting, captureFailed, captureUploaded, locationWaiting, locationFailed, loc] =
-        await Promise.all([
-          countCapturesByStatus(db, guide.id, ['pending']),
-          countCapturesByStatus(db, guide.id, ['failed']),
-          countCapturesByStatus(db, guide.id, ['uploaded']),
-          countLocationsByStatus(db, guide.id, ['pending']),
-          countLocationsByStatus(db, guide.id, ['failed']),
-          getLatestLocation(db, guide.id),
-        ]);
+      // Sequential, not Promise.all: overlapping async calls into the same
+      // connection are what triggers the native statement race above.
+      const captureWaiting = await countCapturesByStatus(db, guide.id, ['pending']);
+      const captureFailed = await countCapturesByStatus(db, guide.id, ['failed']);
+      const captureUploaded = await countCapturesByStatus(db, guide.id, ['uploaded']);
+      const locationWaiting = await countLocationsByStatus(db, guide.id, ['pending']);
+      const locationFailed = await countLocationsByStatus(db, guide.id, ['failed']);
+      const loc = await getLatestLocation(db, guide.id);
       setWaiting(captureWaiting + locationWaiting);
       setFailed(captureFailed + locationFailed);
       setUploaded(captureUploaded);
@@ -57,6 +64,8 @@ function useSyncSnapshot(guide: LocalGuide, refreshKey: number) {
     } catch (err) {
       console.error('[HomeScreen] Failed to read local sync counts:', err);
       setError('Could not read local data.');
+    } finally {
+      inFlight.current = false;
     }
   }, [db, guide.id]);
 

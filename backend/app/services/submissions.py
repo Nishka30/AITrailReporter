@@ -5,9 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.db.models.place_question import PlaceQuestion
 from app.db.models.submission import Submission
 from app.schemas.submission import SubmissionCreate
 from app.services import extractions as extraction_service
+from app.services import rewards as reward_service
 from app.services import transcriptions as transcription_service
 from app.services.storage.base import AudioStorage, MediaStorage
 
@@ -50,6 +52,40 @@ class PhotoConflictError(Exception):
         )
 
 
+def _award_media_bonus(db: Session, submission: Submission) -> None:
+    """Adds the Explore media bonus once, when a photo or voice note is
+    attached to an Explore contribution.
+
+    Idempotency key is the submission's client id with a ':media' suffix -- a
+    DIFFERENT key from the base award (which uses the bare client id), so the
+    two coexist, while re-uploading the same media can never pay the bonus
+    twice. Attaching both a photo AND a voice note to one contribution also
+    pays the bonus once, deliberately: the bonus is for enriching a
+    contribution with media, not per file.
+
+    Only 'explore' submissions qualify -- a plain voice note is not an Explore
+    contribution and never received the base award either.
+
+    A place-question contribution is EXCLUDED even though it is an 'explore'
+    submission. It was already paid at its own kind-specific rate, and a photo
+    request is paid the photo rate precisely because it asks for a photo --
+    adding the generic media bonus on top would pay twice for the one thing the
+    question asked for.
+    """
+    if submission.submission_type != "explore" or submission.client_submission_id is None:
+        return
+    if submission.source_place_question_id is not None:
+        return
+    reward_service.award(
+        db,
+        guide_id=submission.guide_id,
+        rule_key="explore_contribution_media_bonus",
+        idempotency_key=f"{submission.client_submission_id}:media",
+        source_type="explore_submission",
+        source_id=submission.id,
+    )
+
+
 def get_submission_by_client_id(db: Session, client_submission_id: str) -> Submission | None:
     stmt = select(Submission).where(Submission.client_submission_id == client_submission_id)
     return db.execute(stmt).scalar_one_or_none()
@@ -64,6 +100,10 @@ def _ensure_compatible(existing: Submission, data: SubmissionCreate) -> None:
         existing.guide_id != data.guide_id
         or existing.submission_type != data.capture_type
         or existing.raw_text != data.text_content
+        # Provenance is part of the payload's identity: the same client id
+        # arriving once as a free-form discovery and once as an answer to a
+        # place question is a genuine conflict, not an idempotent replay.
+        or existing.source_place_question_id != data.source_place_question_id
     ):
         raise SubmissionConflictError(existing)
 
@@ -90,8 +130,50 @@ def create_or_get_submission(db: Session, data: SubmissionCreate) -> tuple[Submi
         raw_text=data.text_content,
         submitted_at=data.submitted_at or datetime.now(timezone.utc),
         status="received",
+        # Null for an ordinary discovery; set when this answers a
+        # location-specific place question. Coordinates are deliberately NOT
+        # copied from the place here -- _resolve_observation_coordinates already
+        # falls back to the guide's own GPS at submission time, which is where
+        # the guide actually was (and is within the place's radius by
+        # construction). Recording the place's coordinates instead would claim
+        # a precision the report doesn't have.
+        source_place_question_id=data.source_place_question_id,
     )
     db.add(submission)
+    # Reward (Step 18) for an Explore contribution, in the SAME transaction as
+    # the submission itself. Only 'explore' earns here: a 'note' is an
+    # unprompted field report and 'voice' has no prompt provenance, while an
+    # Explore contribution answers something the app actually asked for.
+    #
+    # Awarded at the base rate now, because media is attached by a SEPARATE
+    # later request -- attach_audio/photo_to_submission top this up to the
+    # with-media rate once media genuinely arrives (see those functions). The
+    # alternative, guessing up-front that media is coming, would credit a
+    # richer contribution than the guide actually made.
+    if data.capture_type == "explore":
+        db.flush()
+        if data.source_place_question_id is not None:
+            # A place-question contribution is paid at the rate for that
+            # question's own contribution kind (photo/voice/status/...), because
+            # the app asked for something specific and the kinds differ in
+            # effort. Resolved from the stored question, never from the request
+            # -- the device does not get to choose what it is paid.
+            place_question = db.get(PlaceQuestion, data.source_place_question_id)
+            rule_key = reward_service.place_question_rule_key(
+                db, place_question.contribution_kind if place_question is not None else None
+            )
+            source_type = "place_question_answer"
+        else:
+            rule_key = "explore_contribution"
+            source_type = "explore_submission"
+        reward_service.award(
+            db,
+            guide_id=data.guide_id,
+            rule_key=rule_key,
+            idempotency_key=data.client_submission_id,
+            source_type=source_type,
+            source_id=submission.id,
+        )
     try:
         db.commit()
     except IntegrityError:
@@ -167,6 +249,7 @@ def attach_audio_to_submission(
     # atomically together — no window where audio exists but nothing tracks its
     # transcription state.
     transcription_service.ensure_pending_transcription(db, submission_id)
+    _award_media_bonus(db, submission)
     db.commit()
     db.refresh(submission)
     # Automatic transcription (see transcriptions.py:maybe_trigger_transcription)
@@ -227,6 +310,7 @@ def attach_photo_to_submission(
     submission.photo_content_type = content_type
     submission.photo_original_filename = original_filename
     submission.photo_size_bytes = stored.size_bytes
+    _award_media_bonus(db, submission)
     db.commit()
     db.refresh(submission)
     return submission, True

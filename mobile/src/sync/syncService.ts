@@ -6,6 +6,7 @@ import { ApiError, NetworkError } from '../api/client';
 import { createOrGetGuide, updateGuideProfile } from '../api/guides';
 import { createOrGetLocation } from '../api/locations';
 import { uploadSubmissionPhoto } from '../api/photos';
+import { submitPlaceQuestionAnswer } from '../api/placeQuestions';
 import { submitAnswer } from '../api/questionAnswers';
 import { createOrGetSubmission } from '../api/submissions';
 import {
@@ -315,6 +316,10 @@ async function syncOneExploreCapture(
     captureType: 'explore',
     textContent: text || null,
     submittedAt: capture.createdAt,
+    // When set, this is what makes the backend pay this contribution at its
+    // place question's own kind-specific rate rather than the generic Explore
+    // rate — see backend/app/services/submissions.py.
+    sourcePlaceQuestionId: capture.placeQuestionId,
   });
 
   // Each attachment is its own idempotent request keyed on its own client id,
@@ -405,7 +410,12 @@ async function syncOneLocation(
 }
 
 /** STEP 4 of the outbox flow: sync one question answer. Never throws —
- * always resolves. Same shape as syncOneLocation. */
+ * always resolves. Same shape as syncOneLocation.
+ *
+ * Routes to one of the TWO answer endpoints based on `answer.questionKind`
+ * (Step 18). Both are idempotent on the same clientAnswerId, so a retried or
+ * duplicated sync is safe on either path and can never award points twice —
+ * see backend/app/services/rewards.py. */
 async function syncOneAnswer(
   db: SQLiteDatabase,
   serverGuideId: string,
@@ -413,6 +423,21 @@ async function syncOneAnswer(
 ): Promise<AnswerSyncOutcome> {
   await markAnswerUploading(db, answer.id);
   try {
+    if (answer.questionKind === 'popular') {
+      const result = await submitPlaceQuestionAnswer(
+        answer.serverQuestionId,
+        serverGuideId,
+        answer.clientAnswerId,
+        answer.answerText,
+        answer.answeredAt
+      );
+      // A popular question has no QuestionAnswer row of its own — the answer
+      // IS the submission (see backend/app/services/place_question_answers.py),
+      // so the submission id is the honest server-side identifier to record.
+      await markAnswerUploaded(db, answer.id, result.submissionId);
+      return { answerId: answer.id, status: 'uploaded' };
+    }
+
     const question = await submitAnswer({
       questionId: answer.serverQuestionId,
       guideId: serverGuideId,

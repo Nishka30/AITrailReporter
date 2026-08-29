@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -11,6 +11,7 @@ import {
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
+import { getGuideRewards, type GuideRewards } from '../api/rewards';
 import { AppHeader, Avatar, Badge, Button, Card, Screen } from '../components/ui';
 import {
   choosePhoto,
@@ -19,11 +20,14 @@ import {
   type PhotoPickResult,
 } from '../photo/photoPickerService';
 import { normalizePhoneNumber, validatePhoneNumber } from '../profile/phone';
+import { sumPendingRewardPoints } from '../repositories/answerRepository';
 import { updateLocalGuideProfile } from '../repositories/guideRepository';
 import { colors, minTouchSize, radii, spacing, type } from '../theme/theme';
 import type { LocalGuide } from '../types/models';
 
 type Props = {
+  /** Opens the dedicated Rewards screen (Step 18). */
+  onOpenRewards: () => void;
   guide: LocalGuide;
   /** Called after a successful save (and on plain back), so the navigator can
    * re-read the guide and every screen sees the new name/photo. */
@@ -57,7 +61,12 @@ const ABOUT_MAX_LENGTH = 400;
  * Fully offline: saving writes to SQLite and returns. A server push, if one is
  * needed, happens later during a normal sync — never blocking this screen.
  */
-export default function ProfileScreen({ guide, onDone }: Props) {
+export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
+  // Contribution figures come from the server and are shown only once real.
+  // Null while loading, offline, or unsynced -- the block is omitted entirely
+  // rather than rendering a "0 points" that may simply be unknown.
+  const [contribution, setContribution] = useState<GuideRewards | null>(null);
+  const [pendingPoints, setPendingPoints] = useState(0);
   const db = useSQLiteContext();
 
   const [name, setName] = useState(guide.name);
@@ -71,22 +80,70 @@ export default function ProfileScreen({ guide, onDone }: Props) {
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
 
-  // Tracks photos this screen wrote to disk but has not yet committed to
-  // SQLite. If the guide picks three pictures and saves once, the two
-  // superseded files must not be left behind — but they also must not be
-  // deleted eagerly, because until Save is pressed the STORED photo is still
-  // the one the profile legitimately uses.
-  const [uncommittedPhotos, setUncommittedPhotos] = useState<string[]>([]);
+  // What is CURRENTLY committed to SQLite for this guide's photo. Kept
+  // separately from `photoUri` (which is what the form is showing) so that
+  // when a new photo replaces it, the superseded file can be deleted at the
+  // exact moment it stops being referenced — never before, which would delete
+  // a photo the saved profile still points at.
+  const [storedPhotoUri, setStoredPhotoUri] = useState<string | null>(guide.localPhotoUri);
 
   const existingPhoneMissing = !guide.phoneNumber;
 
-  function applyPhotoResult(result: PhotoPickResult) {
+  // Contribution figures are best-effort: a failure here must never block
+  // editing a profile, so nothing is surfaced as an error -- the block is
+  // simply omitted, which is the honest rendering of "we don't know yet".
+  const loadContribution = useCallback(async () => {
+    try {
+      setPendingPoints(await sumPendingRewardPoints(db, guide.id));
+    } catch {
+      setPendingPoints(0);
+    }
+    if (!guide.serverGuideId) {
+      setContribution(null);
+      return;
+    }
+    try {
+      setContribution(await getGuideRewards(guide.serverGuideId));
+    } catch {
+      setContribution(null);
+    }
+  }, [db, guide.id, guide.serverGuideId]);
+
+  useEffect(() => {
+    loadContribution();
+  }, [loadContribution]);
+
+  /** Commits a photo change to SQLite straight away and retires the file it
+   * replaced. Only the photo column is written (see updateLocalGuidePhoto), so
+   * an unsaved name/phone edit in the form is never silently committed with
+   * it. A failure here is surfaced rather than swallowed: the alternative is
+   * an avatar that looks saved and isn't, which is exactly the bug this
+   * replaced. */
+  async function persistPhoto(nextUri: string | null) {
+    const previous = storedPhotoUri;
+    try {
+      await updateLocalGuidePhoto(db, guide.id, nextUri);
+      setStoredPhotoUri(nextUri);
+      // Safe only now that SQLite no longer references it.
+      if (previous && previous !== nextUri) deleteStoredPhoto(previous);
+    } catch (err) {
+      console.error('[ProfileScreen] Failed to save profile photo:', err);
+      setPhotoNotice('Could not save that photo on this device. Please try again.');
+      // Roll the preview back so what is on screen matches what is stored.
+      setPhotoUri(previous);
+    }
+  }
+
+  async function applyPhotoResult(result: PhotoPickResult) {
     switch (result.status) {
       case 'success':
-        setUncommittedPhotos((prev) => [...prev, result.uri]);
         setPhotoUri(result.uri);
         setPhotoNotice(null);
         setSavedMessage(null);
+        // Persisted immediately: a profile photo never leaves the device, so
+        // there is nothing to defer behind the Save button, and deferring it
+        // was losing the photo whenever the guide simply tapped back.
+        await persistPhoto(result.uri);
         break;
       case 'cancelled':
         break;
@@ -108,17 +165,21 @@ export default function ProfileScreen({ guide, onDone }: Props) {
     setPickingPhoto(true);
     setPhotoNotice(null);
     try {
-      applyPhotoResult(useCamera ? await takePhoto('profile') : await choosePhoto('profile'));
+      await applyPhotoResult(useCamera ? await takePhoto('profile') : await choosePhoto('profile'));
     } finally {
       setPickingPhoto(false);
     }
   }
 
-  function handleRemovePhoto() {
+  async function handleRemovePhoto() {
     if (saving) return;
     setPhotoUri(null);
     setPhotoNotice(null);
     setSavedMessage(null);
+    // Removal is committed immediately too, for symmetry with picking: both
+    // are photo-only changes, and a removal that reappeared on the next visit
+    // would be the same bug in the opposite direction.
+    await persistPhoto(null);
   }
 
   async function handleSave() {
@@ -231,6 +292,60 @@ export default function ProfileScreen({ guide, onDone }: Props) {
           {photoNotice ? <Text style={styles.notice}>{photoNotice}</Text> : null}
         </View>
 
+        {/* Rewards + contributions summary. ALWAYS rendered, and always
+            tappable, so the way into Rewards is a permanent, findable part of
+            the profile rather than something that silently disappears while
+            offline or before the first sync (which is exactly what used to
+            happen — the whole block was conditional on a successful server
+            fetch).
+            Honesty is preserved by distinguishing the two cases in the copy
+            instead of by hiding the card: real server figures when we have
+            them, an explicit "sync to see" line when we genuinely don't. A
+            confirmed zero and an unknown are never shown as the same thing. */}
+        <Pressable
+          onPress={onOpenRewards}
+          accessibilityRole="button"
+          accessibilityLabel="View your rewards"
+          style={({ pressed }) => [styles.contributionCard, pressed && styles.pressed]}
+        >
+          <View style={styles.contributionHeader}>
+            <Text style={styles.contributionEyebrow}>YOUR CONTRIBUTION</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.marigoldSoft} />
+          </View>
+          <View style={styles.contributionStats}>
+            <View>
+              <Text style={styles.contributionValue}>
+                {contribution ? contribution.currentPoints.toLocaleString() : '—'}
+              </Text>
+              <Text style={styles.contributionLabel}>
+                {contribution && contribution.currentPoints === 1 ? 'Reward' : 'Rewards'}
+              </Text>
+            </View>
+            <View style={styles.contributionDivider} />
+            <View>
+              <Text style={styles.contributionValue}>
+                {contribution ? contribution.contributionsCount.toLocaleString() : '—'}
+              </Text>
+              <Text style={styles.contributionLabel}>
+                {contribution && contribution.contributionsCount === 1
+                  ? 'Contribution'
+                  : 'Contributions'}
+              </Text>
+            </View>
+          </View>
+          {contribution ? (
+            pendingPoints > 0 ? (
+              <Text style={styles.contributionPending}>+{pendingPoints} waiting to sync</Text>
+            ) : null
+          ) : (
+            <Text style={styles.contributionPending}>
+              {guide.serverGuideId
+                ? "Couldn't reach the server — showing your totals once you're back online."
+                : 'Sync your profile to see your rewards.'}
+            </Text>
+          )}
+        </Pressable>
+
         {/* Prompt rather than block: an existing guide from before Step 17 has
             no phone number, and their profile is not "invalid" — it is simply
             incomplete, and they are asked to finish it, not locked out. */}
@@ -275,7 +390,7 @@ export default function ProfileScreen({ guide, onDone }: Props) {
           maxLength={32}
         />
         <Text style={styles.fieldHint}>
-          Shared with the Trail Reporter team so they can reach you about your reports.
+          Shared with the TrailMind team so they can reach you about your reports.
         </Text>
 
         <View style={styles.aboutLabelRow}>
@@ -335,6 +450,32 @@ export default function ProfileScreen({ guide, onDone }: Props) {
 }
 
 const styles = StyleSheet.create({
+  contributionCard: {
+    backgroundColor: colors.ink,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  contributionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  contributionEyebrow: { ...type.captionBold, color: colors.marigold, letterSpacing: 0.7 },
+  contributionStats: { flexDirection: 'row', alignItems: 'flex-end', marginTop: spacing.sm },
+  contributionValue: { ...type.title, fontSize: 26, color: colors.white },
+  contributionLabel: { ...type.caption, color: 'rgba(255,255,255,0.65)', marginTop: 1 },
+  contributionDivider: {
+    width: 1,
+    height: 34,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    marginHorizontal: spacing.lg,
+  },
+  contributionPending: {
+    ...type.caption,
+    color: colors.marigoldSoft,
+    marginTop: spacing.sm,
+  },
   flex: { flex: 1 },
   pressed: { opacity: 0.75 },
 
