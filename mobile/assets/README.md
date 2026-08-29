@@ -1,44 +1,67 @@
 # TrailMind app icons
 
-`trailmind-icon.svg` is the design source of truth. Its palette is copied
-verbatim from `src/theme/theme.ts`, so the icon and the app cannot drift apart.
-
-## Current status
-
-**The PNGs in this folder are still the Expo starter defaults.** The SVG above
-is the TrailMind mark, but nothing rasterizes SVG at build time — Expo needs
-PNGs — so the launcher icon does not change until the files below are
-regenerated. `app.json` already points at the correct filenames and the
-adaptive-icon background is already set to the brand cream (`#faf4e9`), so
-replacing the files is the only remaining step.
-
-## Regenerating
-
-Any SVG rasterizer works. With `sharp-cli` (no Python/native image deps):
+All icon PNGs in this folder are **generated** from a single logo source by
+`scripts/build-icons.js`. Do not hand-edit them — regenerate instead, or the
+next run will overwrite your changes.
 
 ```bash
-npx sharp-cli -i assets/trailmind-icon.svg -o assets/icon.png resize 1024 1024
-npx sharp-cli -i assets/trailmind-icon.svg -o assets/android-icon-foreground.png resize 1024 1024
-npx sharp-cli -i assets/trailmind-icon.svg -o assets/favicon.png resize 48 48
-npx sharp-cli -i assets/trailmind-icon.svg -o assets/splash-icon.png resize 512 512
+node scripts/build-icons.js [path-to-logo.png]
 ```
 
-Then rebuild — icons are baked in at build time, so Fast Refresh will not show
-the change.
+The default source path is `C:/Users/user/OneDrive/Desktop/TrailMindLogo.png`.
+Pass a different path as the first argument if the master artwork moves.
 
-| File | Size | Notes |
+Icons are baked in at **build** time, so Fast Refresh will not show a change —
+rebuild the app (or reinstall the dev client) to see a new icon on device.
+
+## What gets generated
+
+| File | Size | Content |
 |---|---|---|
-| `icon.png` | 1024×1024 | iOS + fallback. No transparency; iOS masks corners itself. |
-| `android-icon-foreground.png` | 1024×1024 | Adaptive foreground. Keep art inside the centre 66% — the SVG already does. |
-| `android-icon-background.png` | 1024×1024 | Flat `#faf4e9`. Can also be dropped in favour of the `backgroundColor` already set in `app.json`. |
-| `android-icon-monochrome.png` | 1024×1024 | Themed icons: silhouette only, ink on transparent. Drop the marigold fill. |
-| `favicon.png` | 48×48 | Web. |
-| `splash-icon.png` | 512×512 | Splash. |
+| `icon.png` | 1024×1024 | Full lockup (emblem + wordmark + tagline), full bleed |
+| `splash-icon.png` | 512×512 | Full lockup |
+| `android-icon-foreground.png` | 1024×1024 | **Emblem only**, inside the adaptive safe zone |
+| `android-icon-background.png` | 1024×1024 | Flat card cream `#fcf3df` |
+| `android-icon-monochrome.png` | 1024×1024 | Emblem as an ink stencil on transparency |
+| `favicon.png` | 48×48 | **Emblem only** |
 
-## Constraints the mark is built to
+`.original-expo-icons/` holds the Expo starter defaults that these replaced,
+in case a clean comparison is ever needed.
 
-- Warm paper/cream ground, ink linework, marigold accent — the app's palette.
-- Legible at 48px; two colours only, so greyscale and monochrome export survive.
-- No gradients (they band at launcher sizes and break monochrome export).
-- Deliberately not a mountain range or compass rose — the brief explicitly
-  ruled out generic outdoor-tourism marks.
+## Three things the script handles that a plain resize would not
+
+1. **The source has no alpha, and its rounded-card corners are pure black.**
+   iOS and Android both apply their own mask to an app icon, so shipping those
+   corners produces a dark fringe around the finished icon. They are
+   flood-filled back to the card's own cream first. The fill starts from the
+   four corners rather than recolouring all dark pixels globally — the artwork
+   itself contains near-black ink, and a global rule would eat the head
+   silhouette and the wordmark.
+
+2. **Android crops the adaptive foreground to a circle.** Only the centre ~66%
+   is guaranteed visible, and that mask would slice straight through the
+   "TrailMind" wordmark and tagline. The Android foreground therefore uses the
+   **emblem only**, scaled into the safe zone — the wordmark is dropped
+   deliberately rather than clipped accidentally.
+
+3. **The favicon is 48px**, where the tagline is physically unreadable. It also
+   uses the emblem rather than pretending the text will render.
+
+## If the artwork is ever redrawn
+
+`EMBLEM` in `scripts/build-icons.js` holds the measured pixel bounds of the
+emblem within the full lockup (currently `x 309–953, y 145–838` in the
+1254×1254 source). Re-measure and update it if the composition changes, or the
+Android foreground will crop the wrong region.
+
+## Brand palette
+
+Taken from `src/theme/theme.ts`, with the card cream sampled from the artwork:
+
+| Role | Hex |
+|---|---|
+| Card cream (icon ground) | `#fcf3df` |
+| App paper | `#faf4e9` |
+| Ink | `#211a14` |
+| Marigold | `#e8a13c` |
+| Marigold deep | `#c9821f` |
