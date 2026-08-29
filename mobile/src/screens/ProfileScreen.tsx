@@ -21,7 +21,7 @@ import {
 } from '../photo/photoPickerService';
 import { normalizePhoneNumber, validatePhoneNumber } from '../profile/phone';
 import { sumPendingRewardPoints } from '../repositories/answerRepository';
-import { updateLocalGuideProfile } from '../repositories/guideRepository';
+import { updateLocalGuidePhoto, updateLocalGuideProfile } from '../repositories/guideRepository';
 import { colors, minTouchSize, radii, spacing, type } from '../theme/theme';
 import type { LocalGuide } from '../types/models';
 
@@ -205,19 +205,13 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
         name: trimmedName,
         phoneNumber: normalizePhoneNumber(phone),
         aboutText: trimmedAbout ? trimmedAbout : null,
-        localPhotoUri: photoUri,
+        // Already committed the moment it was picked (see persistPhoto), so
+        // this writes back the value that is ALREADY stored rather than a
+        // pending one. Passing `storedPhotoUri` rather than `photoUri` means a
+        // photo whose immediate save failed can't be resurrected here by a
+        // later profile save.
+        localPhotoUri: storedPhotoUri,
       });
-
-      // Only now that SQLite has committed is it safe to delete the files this
-      // session created but did not end up using — including a previously
-      // stored photo that has just been replaced or removed. Doing this before
-      // the write would risk deleting a photo the saved profile still points at.
-      const survivors = new Set(photoUri ? [photoUri] : []);
-      const obsolete = [...uncommittedPhotos, guide.localPhotoUri].filter(
-        (uri): uri is string => Boolean(uri) && !survivors.has(uri as string)
-      );
-      obsolete.forEach(deleteStoredPhoto);
-      setUncommittedPhotos([]);
 
       setSavedMessage('Profile saved on this device.');
       onDone();
