@@ -63,8 +63,12 @@ export function extractDetailMessage(payload: unknown, fallback: string): string
  * loading indefinitely" failure mode. Aborting after a bounded time turns
  * that hang into an honest NetworkError, which every existing caller already
  * catches and surfaces truthfully. Value chosen generously for a slow trail
- * connection, not tuned to this app's fastest expected request. */
-const REQUEST_TIMEOUT_MS = 20_000;
+ * connection AND for the production backend's free-tier Render instance,
+ * which spins down after ~15 min idle and takes up to ~45s to wake on the
+ * next request — a shorter timeout here made the very first sync after any
+ * idle period fail with a misleading "check your connection" error even
+ * though the backend was simply cold-starting, not unreachable. */
+const REQUEST_TIMEOUT_MS = 45_000;
 
 /**
  * Minimal fetch wrapper shared by every endpoint module in src/api/. Screens and
