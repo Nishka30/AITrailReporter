@@ -90,20 +90,17 @@ class Settings(BaseSettings):
     # place's list.
     place_question_max_count: int = 6
 
-    # Place research gets its OWN, much longer timeout than
-    # anthropic_request_timeout_seconds above. That 60s is tuned for extraction
-    # and question generation, which are single model turns with no server
-    # tools. Place research is a different shape of request: it runs up to
-    # RESEARCH_TOOL_MAX_SEARCHES real web searches on Anthropic's side and only
-    # then generates, so it routinely exceeds 60s and was reliably failing with
-    # APITimeoutError. Raising the shared value instead would have loosened the
-    # timeout for every other LLM call in the system to fix one of them.
+    # The budget for ONE COMPLETE research run for a place: reverse geocode,
+    # up to perplexity_max_queries_per_place web searches, then one generation
+    # call. Not a per-request timeout -- each provider has its own
+    # (perplexity_request_timeout_seconds, anthropic_request_timeout_seconds).
+    # This is the whole-run bound, and its only consumer is
+    # place_questions.is_abandoned, which uses it to decide when a run that
+    # claimed a place and then died can safely be reclaimed.
     #
-    # A timeout here is not data loss -- a failed run leaves the previously
-    # researched questions in place and simply records status='failed' (see
-    # place_questions.ensure_researched) -- but it does mean a place never gets
-    # its first batch, which is a silent quality failure rather than a visible
-    # error.
+    # Set generously. Reclaiming too early would let two runs research the same
+    # place and pay twice; reclaiming late only delays a refresh, and the
+    # previously researched questions stay served throughout.
     place_question_research_timeout_seconds: float = 300.0
 
     # --- POI discovery (app/services/poi_discovery.py) --------------------
@@ -133,8 +130,59 @@ class Settings(BaseSettings):
     # add at most this many anchors.
     poi_discovery_max_places: int = 8
     # How long a successful run stays valid. Named places appear and close
-    # slowly, and every refresh costs real web searches.
+    # slowly, and every refresh costs a request to a free, donated service.
     poi_discovery_refresh_days: int = 60
+    # How many OSM candidates to fetch before the selection step filters them.
+    # Comfortably more than poi_discovery_max_places, so selection has real
+    # choices to make rather than rubber-stamping whatever came back first.
+    poi_discovery_candidate_limit: int = 40
+
+    # --- OpenStreetMap ----------------------------------------------------
+    # Overpass supplies the FACTS for discovery: what named places exist and
+    # exactly where. Coordinates never come from a language model, which is
+    # what makes an invented landmark structurally impossible rather than
+    # merely discouraged (see services/poi_discovery_research/osm_provider.py).
+    #
+    # Free and keyless, but a donated service: this project sends one request
+    # per grid cell and caches the result for poi_discovery_refresh_days.
+    # Overridable so a self-hosted or commercial Overpass instance can be used
+    # without a code change.
+    osm_overpass_url: str = "https://overpass-api.de/api/interpreter"
+    osm_request_timeout_seconds: float = 60.0
+    # Reverse geocoding, used only to name the locality a place sits in
+    # ("Koramangala, Bengaluru"). That name matters more than it looks: web
+    # research for "Ganesh Temple" alone is hopeless, while the same query with
+    # its locality attached returns the right temple. One call per place, then
+    # stored on the Location forever.
+    osm_nominatim_url: str = "https://nominatim.openstreetmap.org/reverse"
+
+    # --- Perplexity (web research) ---------------------------------------
+    # The WEB RESEARCH layer: given a place this system already knows exists
+    # (from OSM or manual curation), Perplexity finds what people actually say
+    # about it, with citations. Backend-only, exactly like the Anthropic and
+    # Sarvam keys -- never sent to, or read by, the mobile app. `None` is a
+    # valid local-dev state: research reports a clean failure and the app keeps
+    # serving whatever questions already exist.
+    #
+    # NOTE ON SCOPE: Perplexity is NOT used to discover what is near a
+    # coordinate. It cannot -- see app/services/research/perplexity_provider.py
+    # for the measured reason. Discovery is OSM's job; this is research about a
+    # named entity.
+    perplexity_api_key: str | None = None
+    perplexity_api_url: str = "https://api.perplexity.ai/chat/completions"
+    # 'sonar' costs roughly half of 'sonar-pro' per request and, in side-by-side
+    # runs on the same places, returned the same specific facts. Overridable if
+    # that stops being true.
+    perplexity_model: str = "sonar"
+    perplexity_request_timeout_seconds: float = 90.0
+    # Hard cap on paid searches per place per refresh cycle. Deliberately small:
+    # the second query only runs when the first actually found something (see
+    # place_question_research/research_plan.py), so a place nobody has written
+    # about costs one request, not a fixed budget.
+    perplexity_max_queries_per_place: int = 2
+    # Research text is stored for provenance, not archived wholesale. Enough to
+    # audit why a question was asked; not a copy of the web.
+    place_research_max_summary_chars: int = 4000
 
     # Step 18: reward points -> money. `10` means 10 points = 1.00 of
     # reward_currency_code. Configured here rather than in the mobile app so

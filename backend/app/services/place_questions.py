@@ -1,13 +1,32 @@
-"""Popular questions for a place (Step 18) -- the SECOND question source.
+"""Place-specific invitations -- the SECOND question source.
 
 Nothing in this module touches the knowledge-gap pipeline. It never reads
 KnowledgeTypeConfig, never evaluates knowledge state, never ranks a gap, and
-never creates a Question/QuestionAssignment row. Popular questions are a
-parallel, secondary source that the mobile app renders BELOW the gap queue.
+never creates a Question/QuestionAssignment row. These are a parallel,
+secondary source that the mobile app renders BELOW the gap queue. The two
+systems answer different questions:
+
+    Questions queue -- "what does TrailMind not know yet?"   (gap-driven)
+    Place questions -- "this person is standing HERE, now"   (presence-driven)
+
+THE THREE-SOURCE CHAIN THIS ORCHESTRATES
+
+    OpenStreetMap  ->  what physically exists here, and where
+    Perplexity     ->  what the web actually says about that named thing
+    Claude         ->  which of those details a person here could check
+
+Each source is used only for what it can be trusted about. A place name and
+coordinate never originate from a language model; a claim about a place never
+originates from a model's memory; and the decision about what is worth asking
+never originates from a search engine.
+
+The chain is also a cost gate. Every stage can end it: no nearby place means no
+research, no usable research means no generation call, and both outcomes are
+recorded as honest successes rather than retried.
 
 Concurrency follows the established pattern from extractions.py/questions.py:
 the research row is claimed under SELECT ... FOR UPDATE, and the lock is
-RELEASED BEFORE the LLM/web call -- a slow external call must never hold a
+RELEASED BEFORE the external calls -- slow network work must never hold a
 database row lock.
 """
 
@@ -24,8 +43,16 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.models.location import Location
 from app.db.models.place_question import PlaceQuestion, PlaceQuestionResearch
+from app.db.models.place_research_finding import PlaceResearchFinding
 from app.services import rewards as reward_service
-from app.services.place_question_research import anthropic_provider, validation
+from app.services.place_question_research import (
+    anthropic_provider,
+    research_plan,
+    validation,
+)
+from app.services.poi_discovery_research import osm_provider
+from app.services.research import perplexity_provider
+from app.services.research.base import ResearchFinding, ResearchProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -125,10 +152,88 @@ def _ensure_research_row(db: Session, location_id: UUID) -> PlaceQuestionResearc
     return research
 
 
+def _resolve_locality(db: Session, location: Location) -> str | None:
+    """The place's locality ("Koramangala, Bengaluru"), resolving and storing it
+    the first time it is needed.
+
+    Not merely nice-to-have context: research for a place named "Ganesh Temple"
+    is worthless without it and accurate with it. Resolved lazily rather than at
+    creation so manually-curated Locations, which predate this column, pick one
+    up on their first research run instead of needing a backfill that would have
+    to guess.
+
+    Best-effort: a failure returns None and research proceeds on the name alone,
+    which is worse but not broken.
+    """
+    if location.locality:
+        return location.locality
+    locality = osm_provider.reverse_geocode_locality(
+        float(location.latitude), float(location.longitude)
+    )
+    if locality:
+        location.locality = locality
+        db.commit()
+        logger.info("Resolved locality for %r: %s", location.name, locality)
+    return locality
+
+
+def _previously_asked(db: Session, location_id: UUID) -> list[str]:
+    """Every invitation ever generated for this place, active or superseded.
+
+    Given to the generation step so it does not re-ask what a guide has already
+    been asked. Deliberately includes INACTIVE questions: a question retired by
+    a previous refresh was still put in front of someone, and re-proposing it
+    would just cycle the same few ideas forever. The UNIQUE (location_id,
+    normalized_text) constraint would catch exact repeats anyway -- this catches
+    the rephrasings it cannot.
+    """
+    stmt = (
+        select(PlaceQuestion.question_text)
+        .where(PlaceQuestion.location_id == location_id)
+        .order_by(PlaceQuestion.created_at.desc())
+        .limit(30)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def _persist_findings(
+    db: Session,
+    location_id: UUID,
+    research_id: UUID,
+    findings: list[ResearchFinding],
+) -> dict[str, PlaceResearchFinding]:
+    """Stores what research actually found, keyed by topic for the questions
+    that will cite it.
+
+    Written BEFORE generation runs, so provenance exists even if generation then
+    fails -- the evidence was really retrieved either way, and the next attempt
+    can be diagnosed against it.
+    """
+    stored: dict[str, PlaceResearchFinding] = {}
+    for finding in findings:
+        row = PlaceResearchFinding(
+            location_id=location_id,
+            research_id=research_id,
+            topic=finding.topic,
+            query_text=finding.query,
+            provider=finding.provider,
+            model=finding.model,
+            summary=finding.summary,
+            source_urls=finding.source_urls or None,
+            source_titles=finding.source_titles or None,
+            retrieved_at=finding.retrieved_at,
+        )
+        db.add(row)
+        stored[finding.topic] = row
+    db.flush()
+    return stored
+
+
 def _persist_questions(
     db: Session,
     location_id: UUID,
     researched: list[validation.ResearchedQuestion],
+    findings_by_topic: dict[str, PlaceResearchFinding] | None = None,
 ) -> int:
     """Replaces this place's active question set with the new batch.
 
@@ -163,6 +268,12 @@ def _persist_questions(
             break
 
         source_urls = item.source_urls or None
+        # Links the invitation to the exact finding it was drawn from, so
+        # "why did TrailMind ask this?" resolves to a stored query, summary and
+        # citation list rather than to a model call that has already ended.
+        finding = (findings_by_topic or {}).get(item.finding_topic or "")
+        finding_id = finding.id if finding is not None else None
+
         existing = existing_by_key.get(key)
         if existing is not None:
             existing.question_text = item.question_text
@@ -170,6 +281,7 @@ def _persist_questions(
             existing.context_note = item.context_note
             existing.display_order = order
             existing.source_urls = source_urls
+            existing.source_finding_id = finding_id
             existing.research_batch_id = batch_id
             existing.active = True
         else:
@@ -182,6 +294,7 @@ def _persist_questions(
                     context_note=item.context_note,
                     display_order=order,
                     source_urls=source_urls,
+                    source_finding_id=finding_id,
                     research_batch_id=batch_id,
                     active=True,
                 )
@@ -232,12 +345,19 @@ def ensure_researched(db: Session, location_id: UUID, force: bool = False) -> Pl
         db.commit()
         return locked
 
+    # Resolved before the claim is taken, so the (cheap, cached) geocode is not
+    # counted against the run's abandoned-run timeout.
+    locality = _resolve_locality(db, location)
+
     locked.status = "processing"
     locked.attempt_count += 1
     locked.started_at = datetime.now(timezone.utc)
     locked.error_message = None
+    # Both halves recorded: research and generation are different providers now,
+    # and a run's provenance should say so.
+    locked.provider = f"{perplexity_provider.PROVIDER_NAME}+anthropic"
     locked.model = settings.anthropic_model
-    # Releases the row lock BEFORE the external call -- the lock exists to
+    # Releases the row lock BEFORE the external calls -- the lock exists to
     # serialize claiming, not to be held across a multi-second web search.
     db.commit()
 
@@ -245,25 +365,70 @@ def ensure_researched(db: Session, location_id: UUID, force: bool = False) -> Pl
     latitude = float(location.latitude)
     longitude = float(location.longitude)
     description = location.description
+    place_kind = location.place_kind
 
-    try:
-        raw = anthropic_provider.research_place_questions(
-            place_name, latitude, longitude, description
-        )
-        researched = validation.validate_research_output(raw)
-    except (
-        anthropic_provider.PlaceQuestionResearchProviderError,
-        validation.ResearchValidationError,
-    ) as exc:
+    def _fail(exc: Exception) -> PlaceQuestionResearch:
         failed = db.get(PlaceQuestionResearch, research.id)
         failed.status = "failed"
         failed.error_message = str(getattr(exc, "message", exc))[:500]
         failed.completed_at = datetime.now(timezone.utc)
         db.commit()
-        logger.warning("Place question research failed for %s: %s", location_id, type(exc).__name__)
+        logger.warning(
+            "Place question research failed for %s: %s", location_id, type(exc).__name__
+        )
         return failed
 
-    kept = _persist_questions(db, location_id, researched)
+    # --- 1. RESEARCH: what does the web actually say about this exact place? --
+    try:
+        provider = perplexity_provider.get_provider()
+        findings = research_plan.run_research_plan(
+            provider, place_name, place_kind, locality
+        )
+    except ResearchProviderError as exc:
+        return _fail(exc)
+
+    findings_by_topic = _persist_findings(db, location_id, research.id, findings)
+    db.commit()
+
+    if not findings:
+        # An honest, common outcome: most places on earth are not written
+        # about. Recorded as a SUCCESSFUL run with zero questions rather than a
+        # failure -- a failure would be retried on every request forever, and
+        # there is nothing to retry. No generation call is made, which is also
+        # the cheapest possible handling of the commonest case.
+        done = db.get(PlaceQuestionResearch, research.id)
+        done.status = "completed"
+        done.error_message = None
+        completed_at = datetime.now(timezone.utc)
+        done.completed_at = completed_at
+        done.researched_at = completed_at
+        db.commit()
+        logger.info("No usable research for location %s -- no questions generated.", location_id)
+        return done
+
+    # --- 2. GENERATION: which of those details can someone here check? -------
+    # Only URLs genuinely retrieved above are citable. This is what makes a
+    # question's provenance a fact rather than a claim -- see
+    # validation._keep_only_cited_urls.
+    allowed_urls = {url for finding in findings for url in finding.source_urls}
+    try:
+        raw = anthropic_provider.generate_place_questions(
+            place_name,
+            latitude,
+            longitude,
+            description,
+            locality,
+            findings,
+            _previously_asked(db, location_id),
+        )
+        researched = validation.validate_research_output(raw, allowed_urls)
+    except (
+        anthropic_provider.PlaceQuestionResearchProviderError,
+        validation.ResearchValidationError,
+    ) as exc:
+        return _fail(exc)
+
+    kept = _persist_questions(db, location_id, researched, findings_by_topic)
 
     done = db.get(PlaceQuestionResearch, research.id)
     done.status = "completed"

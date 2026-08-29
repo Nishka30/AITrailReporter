@@ -77,6 +77,33 @@ _TOO_GENERIC_PHRASES = (
 )
 
 
+def _normalize_for_matching(text: str) -> str:
+    """Lowercases and strips punctuation to a single spaced form.
+
+    APPLIED TO BOTH SIDES OF EVERY COMPARISON, which is the point. It was
+    previously applied only to the incoming question, so every phrase in the
+    lists above that contained an apostrophe was DEAD: "What's this place
+    like?" normalizes to "what s this place like", which never matches the
+    literal "what's this place like". The most obviously generic invitation in
+    the list sailed through the gate that names it.
+
+    Normalizing the constants at import time instead of hand-writing them
+    pre-normalized keeps them readable and makes the same mistake impossible to
+    reintroduce.
+    """
+    lowered = re.sub(r"[^a-z0-9\s]", " ", text.lower())
+    return " ".join(lowered.split())
+
+
+_NORMALIZED_READER_FACING = tuple(_normalize_for_matching(p) for p in _READER_FACING_OPENERS)
+# Trailing space preserved: these are prefix matches on whole words, so
+# "what is " must not also match "what island".
+_NORMALIZED_FIXED_FACT = tuple(
+    _normalize_for_matching(p) + " " for p in _FIXED_FACT_OPENERS
+)
+_NORMALIZED_TOO_GENERIC = tuple(_normalize_for_matching(p) for p in _TOO_GENERIC_PHRASES)
+
+
 class ResearchedQuestion(BaseModel):
     question_text: str = Field(min_length=8, max_length=MAX_QUESTION_LENGTH)
     contribution_kind: str = DEFAULT_CONTRIBUTION_KIND
@@ -94,6 +121,10 @@ class ResearchedQuestion(BaseModel):
     # (which could contain three non-URL strings and still "pass") before the
     # filter removes them.
     source_urls: list[str] = Field(default_factory=list)
+    # Which research finding the grounding detail came from. Optional because a
+    # missing label costs only traceability, not correctness -- the citation
+    # allowlist below is what actually guarantees the invitation is grounded.
+    finding_topic: str | None = None
 
     @field_validator("question_text")
     @classmethod
@@ -102,13 +133,12 @@ class ResearchedQuestion(BaseModel):
         if not cleaned.endswith("?"):
             raise ValueError("not phrased as a question")
 
-        lowered = re.sub(r"[^a-z0-9\s]", " ", cleaned.lower())
-        lowered = " ".join(lowered.split())
-        if lowered.startswith(_READER_FACING_OPENERS):
+        lowered = _normalize_for_matching(cleaned)
+        if lowered.startswith(_NORMALIZED_READER_FACING):
             raise ValueError("addressed to a reader planning a trip, not to a guide who is here")
-        if lowered.startswith(_FIXED_FACT_OPENERS):
+        if lowered.startswith(_NORMALIZED_FIXED_FACT):
             raise ValueError("asks for a fixed fact rather than a present observation")
-        if any(phrase in lowered for phrase in _TOO_GENERIC_PHRASES):
+        if any(phrase in lowered for phrase in _NORMALIZED_TOO_GENERIC):
             raise ValueError("generic enough to apply to any place, not specific to this one")
         return cleaned
 
@@ -166,8 +196,48 @@ class ResearchValidationError(Exception):
     """The response was not the agreed shape at all (not merely a bad item)."""
 
 
-def validate_research_output(raw: dict) -> list[ResearchedQuestion]:
+def _keep_only_cited_urls(
+    question: ResearchedQuestion, allowed_urls: set[str]
+) -> ResearchedQuestion | None:
+    """Discards citations that were not actually in the research, and the
+    invitation itself if none survive.
+
+    WHY THIS IS NECESSARY. A URL that came out of a model is a claim about
+    provenance, not provenance. It can be a real-looking address for a page
+    that says nothing of the kind, or a plausible reconstruction of one that
+    was in the research. Either way it defeats the entire point of citing
+    sources: someone auditing "why did TrailMind ask this?" would follow it and
+    find nothing.
+
+    So the citation list is intersected with the URLs that were genuinely
+    retrieved for THIS place. An invitation whose grounding evaporates under
+    that check is dropped rather than stored uncited -- exactly like a missing
+    context_note, and for the same reason.
+
+    An empty allowlist means no research was supplied, in which case there is
+    nothing to check against and the invitation cannot be grounded at all.
+    """
+    if not allowed_urls:
+        return None
+    kept = [u for u in question.source_urls if u in allowed_urls]
+    if not kept:
+        logger.info(
+            "Dropped an invitation citing %d URL(s) that were not in the research.",
+            len(question.source_urls),
+        )
+        return None
+    return question.model_copy(update={"source_urls": kept})
+
+
+def validate_research_output(
+    raw: dict, allowed_urls: set[str] | None = None
+) -> list[ResearchedQuestion]:
     """Returns the valid questions, dropping individually-malformed ones.
+
+    `allowed_urls` is every source URL actually retrieved while researching this
+    place. When supplied, an invitation must cite at least one of them or it is
+    dropped -- see _keep_only_cited_urls. It is optional only so the shape
+    checks above stay independently testable; the real caller always passes it.
 
     Returns an empty list when the model reported it found nothing -- that is
     a legitimate, honest outcome ('insufficient web information'), never an
@@ -197,8 +267,14 @@ def validate_research_output(raw: dict) -> list[ResearchedQuestion]:
     valid: list[ResearchedQuestion] = []
     for item in envelope.questions:
         try:
-            valid.append(ResearchedQuestion.model_validate(item))
+            question = ResearchedQuestion.model_validate(item)
         except ValidationError:
             logger.info("Dropped one malformed researched question.")
             continue
+        if allowed_urls is not None:
+            grounded = _keep_only_cited_urls(question, allowed_urls)
+            if grounded is None:
+                continue
+            question = grounded
+        valid.append(question)
     return valid

@@ -6,6 +6,7 @@ from app.db.models.location import Location
 from app.db.models.observation import Observation
 from app.db.models.observation_moderation import ObservationModeration
 from app.db.models.place_question import PlaceQuestion, PlaceQuestionResearch
+from app.db.models.place_research_finding import PlaceResearchFinding
 from app.db.models.poi_discovery import PoiDiscovery
 from app.db.models.question import Question
 from app.db.models.question_answer import QuestionAnswer
@@ -24,6 +25,7 @@ __all__ = [
     "ObservationModeration",
     "PlaceQuestion",
     "PlaceQuestionResearch",
+    "PlaceResearchFinding",
     "PoiDiscovery",
     "Question",
     "QuestionAnswer",

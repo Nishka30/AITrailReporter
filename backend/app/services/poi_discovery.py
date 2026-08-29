@@ -9,12 +9,21 @@ place research never runs, no "you're here" invitations exist, and Explore
 falls back to generic prompts however good the downstream prompts are. The
 pipeline was never broken; it was starving.
 
-This module feeds it, from real web research rather than curation.
+This module feeds it, from real map data rather than curation.
+
+Two sources, split by what each is genuinely authoritative about:
+
+    OpenStreetMap  ->  what exists here, and exactly where     (facts)
+    Claude         ->  which of those are worth asking about   (judgement)
+
+So a discovered place can never be a place that does not exist, and can never
+be in a position nobody published -- that is structural here, not a rule the
+prompt asks a model to follow.
 
 Concurrency follows the established pattern from extractions.py /
 place_questions.py: the discovery row is claimed under SELECT ... FOR UPDATE
-and the lock is RELEASED BEFORE the external call -- a multi-minute web search
-must never hold a database row lock.
+and the lock is RELEASED BEFORE the external call -- a slow network call must
+never hold a database row lock.
 
 Nothing here touches the knowledge-gap pipeline. It creates Locations; the
 existing services take it from there entirely unmodified.
@@ -32,7 +41,7 @@ from app.core.config import settings
 from app.db.geo import make_point
 from app.db.models.location import Location
 from app.db.models.poi_discovery import PoiDiscovery
-from app.services.poi_discovery_research import anthropic_provider, validation
+from app.services.poi_discovery_research import osm_provider, selection
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +90,10 @@ def is_abandoned(discovery: PoiDiscovery) -> bool:
     recovery, that cell is locked out of discovery PERMANENTLY, and the failure
     is invisible -- the app just quietly never gets places there again.
 
-    The cutoff is the provider timeout plus a margin. Past that point the
-    original attempt has either finished (and would have moved the status) or
-    can no longer be alive, so reclaiming is safe rather than a race.
+    The cutoff is this run's OWN worst case -- both external calls timing out
+    back to back -- plus a margin. Past that point the original attempt has
+    either finished (and would have moved the status) or can no longer be
+    alive, so reclaiming is safe rather than a race.
     """
     if discovery.status != "processing":
         return False
@@ -91,8 +101,13 @@ def is_abandoned(discovery: PoiDiscovery) -> bool:
     if started is None:
         # 'processing' with no start time is incoherent state; reclaim it.
         return True
+    cutoff = (
+        settings.osm_request_timeout_seconds
+        + settings.anthropic_request_timeout_seconds
+        + 120
+    )
     age = datetime.now(timezone.utc) - started
-    return age.total_seconds() > settings.place_question_research_timeout_seconds + 120
+    return age.total_seconds() > cutoff
 
 
 def is_discovery_stale(discovery: PoiDiscovery | None) -> bool:
@@ -165,30 +180,31 @@ def _persist_places(
     cell_key: str,
     center_lat: float,
     center_lon: float,
-    places: list[validation.DiscoveredPlace],
+    chosen: list[tuple[osm_provider.OsmPlace, str]],
 ) -> int:
-    """Creates Location rows for genuinely new, plausibly-located places.
+    """Creates Location rows for genuinely new places.
 
-    THE COORDINATE SANITY CHECK IS THE REAL ANTI-HALLUCINATION GUARD. A model
-    asked "what is near 12.93, 77.63" can invent a convincing cafe with a
-    convincing name and a convincing citation, but an invented latitude/longitude
-    is rarely near the query point by luck. Anything outside the accept radius
-    is rejected outright rather than clamped or stored "close enough" -- a
-    Location in the wrong spot is worse than no Location, because everything
-    downstream (research, invitations, observations, rewards) anchors to it and
-    it is indistinguishable from a real row once written.
+    Names and coordinates here came from OpenStreetMap, so there is no question
+    of an invented landmark or an invented position -- that is the whole reason
+    discovery is built this way (see osm_provider's header). The distance check
+    below is therefore a sanity check on OUR OWN query construction, not a
+    hallucination guard: if a place comes back further from the cell centre than
+    we asked for, the radius maths is wrong somewhere and the row is skipped
+    rather than trusted.
+
+    Geographic dedup still matters, because OSM legitimately holds the same
+    feature more than once (a temple as both a node and its enclosing way) and
+    because a neighbouring cell may already have stored it.
     """
     kept = 0
-    for place in places:
+    for place, reason in chosen:
         if kept >= settings.poi_discovery_max_places:
             break
 
-        distance = _distance_meters(
-            db, center_lat, center_lon, place.latitude, place.longitude
-        )
+        distance = _distance_meters(db, center_lat, center_lon, place.latitude, place.longitude)
         if distance > settings.poi_discovery_accept_radius_meters:
             logger.info(
-                "Rejected discovered place %r: %.0fm from cell centre (max %dm).",
+                "Skipped %r: %.0fm from cell centre (max %dm).",
                 place.name,
                 distance,
                 settings.poi_discovery_accept_radius_meters,
@@ -197,26 +213,28 @@ def _persist_places(
 
         duplicate = _existing_nearby_place(db, place.latitude, place.longitude)
         if duplicate is not None:
-            logger.info(
-                "Skipped discovered place %r: already known as %r.", place.name, duplicate.name
-            )
+            logger.info("Skipped %r: already known as %r.", place.name, duplicate.name)
             continue
 
         db.add(
             Location(
                 name=place.name,
-                description=place.description or None,
+                # The model's one-line description when it supplied one,
+                # otherwise the plain OSM kind. Never left to imply more than
+                # is actually known about the place.
+                description=reason or f"A {place.place_kind} near here.",
                 latitude=place.latitude,
                 longitude=place.longitude,
                 geog=make_point(place.latitude, place.longitude),
                 source="discovered",
                 place_kind=place.place_kind or None,
-                source_urls=place.source_urls,
+                # A real, checkable citation: the OSM object itself.
+                source_urls=[place.source_url],
                 discovery_cell_key=cell_key,
             )
         )
         # Flushed per place so the NEXT iteration's dedup query can see it --
-        # otherwise one batch could insert the same place twice under two names.
+        # otherwise one batch could store the same feature twice.
         db.flush()
         kept += 1
     return kept
@@ -263,19 +281,24 @@ def ensure_discovered(db: Session, latitude: float, longitude: float, force: boo
     locked.attempt_count += 1
     locked.started_at = datetime.now(timezone.utc)
     locked.error_message = None
+    # Provenance recorded as it actually is: the places themselves come from
+    # OpenStreetMap, and the model only filters them. The column's historic
+    # default of 'anthropic' would misreport where this data originated.
+    locked.provider = "openstreetmap"
     locked.model = settings.anthropic_model
     # Releases the row lock BEFORE the external call.
     db.commit()
 
     try:
-        raw = anthropic_provider.discover_places(
-            center_lat, center_lon, settings.poi_discovery_search_radius_meters
+        # 1. FACTS: what actually exists here, and exactly where. From
+        #    OpenStreetMap, so no name or coordinate is ever model-generated.
+        candidates = osm_provider.fetch_places(
+            center_lat,
+            center_lon,
+            settings.poi_discovery_search_radius_meters,
+            settings.poi_discovery_candidate_limit,
         )
-        places = validation.validate_discovery_output(raw)
-    except (
-        anthropic_provider.PoiDiscoveryProviderError,
-        validation.DiscoveryValidationError,
-    ) as exc:
+    except osm_provider.OsmProviderError as exc:
         failed = db.get(PoiDiscovery, discovery.id)
         failed.status = "failed"
         failed.error_message = str(getattr(exc, "message", exc))[:500]
@@ -284,7 +307,13 @@ def ensure_discovered(db: Session, latitude: float, longitude: float, force: boo
         logger.warning("POI discovery failed for cell %s: %s", cell_key, type(exc).__name__)
         return failed
 
-    kept = _persist_places(db, cell_key, center_lat, center_lon, places)
+    # 2. JUDGEMENT: which of those real places are worth anchoring an
+    #    experience to. Best-effort and never raises -- if selection is
+    #    unavailable the OSM list is kept unfiltered, which is far better than
+    #    discovering nothing (see selection.select_places).
+    chosen = selection.select_places(candidates, settings.poi_discovery_max_places)
+
+    kept = _persist_places(db, cell_key, center_lat, center_lon, chosen)
 
     done = db.get(PoiDiscovery, discovery.id)
     done.status = "completed"

@@ -97,7 +97,12 @@ def research_location_popular_questions(
     philosophy as POST .../transcribe and POST .../extract. Only a
     precondition that blocks starting an attempt at all is a 4xx/5xx.
     """
-    if not settings.anthropic_api_key:
+    # Research now spans two providers -- web research, then generation -- and
+    # needs both. Checked up front so a missing key is a clean 503 rather than
+    # a run that claims the place, fails, and records an error. The message
+    # never says WHICH key is absent: that is server configuration, and
+    # narrowing it for a caller only helps someone probing the deployment.
+    if not settings.perplexity_api_key or not settings.anthropic_api_key:
         raise HTTPException(
             status_code=503,
             detail="Question research service is not configured on the server.",

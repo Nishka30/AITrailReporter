@@ -60,6 +60,16 @@ class Location(Base):
     # of discovery is finding place types nobody enumerated in advance. Null for
     # manually created rows, which never had to declare one.
     place_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Where this place is, in words a search engine understands: "Koramangala,
+    # Bengaluru, India". Resolved once by reverse geocoding and then reused
+    # forever (see poi_discovery_research/osm_provider.reverse_geocode_locality).
+    #
+    # NOT decoration. Web research for a place named "Ganesh Temple" returns
+    # noise from every city on earth; the same research for "Ganesh Temple in
+    # Koramangala, Bengaluru" returns the right building. This column is the
+    # difference between those two outcomes, which is why it is stored on the
+    # Location rather than recomputed per research run.
+    locality: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Real citations backing a discovered place's existence, name and position.
     # A discovered row is never written without at least one (see
     # app/services/poi_discovery.py) -- an unsourced "landmark" is exactly the

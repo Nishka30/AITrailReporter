@@ -118,6 +118,20 @@ class PlaceQuestion(Base):
     # popular questions are never ranked against gaps.
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     source_urls: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # The specific research finding that justified asking this. `source_urls`
+    # answers "what backs this up?"; this answers the stronger question "which
+    # piece of research, run with which query, produced this?" -- following it
+    # reaches the exact text and citations the generation step was reasoning
+    # over (see app/db/models/place_research_finding.py).
+    #
+    # Nullable, and ON DELETE SET NULL: questions researched before findings
+    # were recorded have none, and a question must never be destroyed by the
+    # removal of its provenance row.
+    source_finding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("place_research_findings.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     # Groups every question produced by ONE research run, so a refresh can
     # deactivate a previous batch wholesale without deleting history.
     research_batch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
