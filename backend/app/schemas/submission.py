@@ -44,21 +44,29 @@ SUPPORTED_CAPTURE_TYPES = ("note", "voice", "explore", "memory")
 # alongside optional text and an optional photo (Step 17; memories reuse the
 # identical composer).
 #
+# 'answer' joins them because the mobile answer composer now offers the same
+# optional photo/voice controls the Explore composer has: standing in front of
+# the thing being asked about is exactly when a picture or a spoken reply is
+# easiest and most accurate. The media is strictly ADDITIVE to the written
+# answer -- answer_text keeps its min_length=1 and not-blank validator on both
+# answer endpoints, so this never introduces a media-only answer.
+#
 # Defined ONCE here and imported by both the upload route
 # (api/routes/submissions.py) and the transcription service
 # (services/transcriptions.py) so the two can never drift apart into a state
 # where audio can be uploaded but then never transcribed — which would be a
 # silent dead end for the guide, not a visible error.
 #
-# Deliberately an allow-list rather than "any type": accepting audio on a 'note'
-# or 'answer' submission would create a state no flow produces or renders.
-AUDIO_CAPABLE_SUBMISSION_TYPES = ("voice", "explore", "memory")
+# Still deliberately an allow-list rather than "any type": a 'note' is text by
+# definition and has no composer that could produce either attachment.
+AUDIO_CAPABLE_SUBMISSION_TYPES = ("voice", "explore", "memory", "answer")
 
 # Submission types that may carry a photo attachment (Step 16, extended to
-# 'memory'). Same allow-list rationale and same single-source-of-truth
-# reasoning as AUDIO_CAPABLE_SUBMISSION_TYPES above -- imported by
+# 'memory', then to 'answer' alongside audio for the reason above). Same
+# allow-list rationale and same single-source-of-truth reasoning as
+# AUDIO_CAPABLE_SUBMISSION_TYPES above -- imported by
 # api/routes/submissions.py rather than checked against a literal there.
-PHOTO_CAPABLE_SUBMISSION_TYPES = ("explore", "memory")
+PHOTO_CAPABLE_SUBMISSION_TYPES = ("explore", "memory", "answer")
 
 
 class SubmissionCreate(BaseModel):

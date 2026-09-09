@@ -55,8 +55,8 @@ async def upload_submission_audio(
     duration_seconds: float | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    """Uploads and durably attaches audio to a 'voice' or 'explore' submission
-    created via POST /api/v1/submissions. Idempotent on client_audio_id (a
+    """Uploads and durably attaches audio to any submission whose type is in
+    AUDIO_CAPABLE_SUBMISSION_TYPES. Idempotent on client_audio_id (a
     second, distinct stable id from client_submission_id — see
     Submission.client_audio_id): a retried request with the same client_audio_id
     returns the existing reference (200) instead of storing a duplicate file; the
@@ -68,9 +68,12 @@ async def upload_submission_audio(
     needed NO new columns, table, or storage path: Submission's audio_* columns
     and photo_* columns were already independent of each other (see
     db/models/submission.py), so an Explore contribution can now carry text, a
-    photo, and a voice note on ONE submission. Deliberately still an allow-list
-    rather than "any type": accepting audio on a 'note' or 'answer' submission
-    would create a state no flow produces, stores, or renders."""
+    photo, and a voice note on ONE submission. 'answer' was added for the same
+    reason once the mobile answer composer gained the same optional photo/voice
+    controls -- an answer's Submission (created server-side by
+    services/question_answers.py) is structurally identical, so it needed no new
+    columns either. Deliberately still an allow-list rather than "any type": a
+    'note' is text by definition and has no composer that could produce audio."""
     try:
         uuid_module.UUID(client_audio_id)
     except ValueError:
@@ -82,8 +85,10 @@ async def upload_submission_audio(
     if submission.submission_type not in AUDIO_CAPABLE_SUBMISSION_TYPES:
         raise HTTPException(
             status_code=400,
-            detail="Audio can only be attached to a submission with capture_type "
-            "'voice' or 'explore'",
+            detail=(
+                "Audio can only be attached to a submission with capture_type "
+                f"in {AUDIO_CAPABLE_SUBMISSION_TYPES!r}"
+            ),
         )
 
     # Read at most one byte past the configured cap: enough to detect an oversized
@@ -139,9 +144,10 @@ async def upload_submission_photo(
     duplicate file; the same submission with a DIFFERENT client_photo_id is
     rejected with 409.
 
-    Restricted to PHOTO_CAPABLE_SUBMISSION_TYPES on purpose: photos are an
-    Explore/memory capability, and silently accepting one on a 'note' or
-    'voice' submission would create a state no existing flow produces or
+    Restricted to PHOTO_CAPABLE_SUBMISSION_TYPES on purpose: photos come from
+    the Explore/memory composer and, since the answer composer gained the same
+    controls, from an 'answer'. Silently accepting one on a 'note' or 'voice'
+    submission would still create a state no existing flow produces or
     renders."""
     try:
         uuid_module.UUID(client_photo_id)

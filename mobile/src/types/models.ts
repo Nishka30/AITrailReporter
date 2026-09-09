@@ -322,6 +322,16 @@ export interface LocalAnswer {
   questionKind: QuestionKind;
   clientAnswerId: string;
   serverAnswerId: string | null;
+  /**
+   * The Submission this answer became on the server, once synced.
+   *
+   * Distinct from `serverAnswerId`, whose meaning varies by `questionKind`
+   * (a QuestionAnswer id for 'dynamic', the submission id for 'popular' —
+   * which has no QuestionAnswer row at all). Transcription and extraction are
+   * keyed on the SUBMISSION, so the Activity screen needs it unambiguously
+   * for both kinds. Null until this answer has synced.
+   */
+  serverSubmissionId: string | null;
   answerText: string;
   answeredAt: string;
   /**

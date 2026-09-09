@@ -523,7 +523,7 @@ async function syncOneAnswer(
       // IS the submission (see backend/app/services/place_question_answers.py),
       // so the submission id is the honest server-side identifier to record.
       await uploadAnswerMedia(answer, result.submissionId);
-      await markAnswerUploaded(db, answer.id, result.submissionId);
+      await markAnswerUploaded(db, answer.id, result.submissionId, result.submissionId);
       return { answerId: answer.id, status: 'uploaded' };
     }
 
@@ -543,7 +543,7 @@ async function syncOneAnswer(
     // The answer's own Submission is what media attaches to — the same
     // submission the text became (see question_answers.py).
     await uploadAnswerMedia(answer, question.answer.submissionId);
-    await markAnswerUploaded(db, answer.id, question.answer.id);
+    await markAnswerUploaded(db, answer.id, question.answer.id, question.answer.submissionId);
     return { answerId: answer.id, status: 'uploaded' };
   } catch (err) {
     const message = describeError(err);

@@ -10,6 +10,7 @@ interface LocalAnswerRow {
   question_kind: string;
   client_answer_id: string;
   server_answer_id: string | null;
+  server_submission_id: string | null;
   answer_text: string;
   answered_at: string;
   reward_points: number | null;
@@ -50,6 +51,7 @@ function mapRow(row: LocalAnswerRow): LocalAnswer {
     questionKind: (row.question_kind as QuestionKind) ?? 'dynamic',
     clientAnswerId: row.client_answer_id,
     serverAnswerId: row.server_answer_id,
+    serverSubmissionId: row.server_submission_id,
     answerText: row.answer_text,
     answeredAt: row.answered_at,
     rewardPoints: row.reward_points,
@@ -234,18 +236,28 @@ export async function markAnswerUploading(db: SQLiteDatabase, id: number): Promi
   );
 }
 
-/** Marks an answer as confirmed received and persisted by the backend. */
+/**
+ * Marks an answer as confirmed received and persisted by the backend.
+ *
+ * Records the submission id separately from the answer id: they are the same
+ * value for a 'popular' answer but genuinely different for a 'dynamic' one,
+ * and the Activity screen needs the SUBMISSION to offer transcription and
+ * extraction (see LocalAnswer.serverSubmissionId).
+ */
 export async function markAnswerUploaded(
   db: SQLiteDatabase,
   id: number,
-  serverAnswerId: string
+  serverAnswerId: string,
+  serverSubmissionId: string
 ): Promise<void> {
   const now = new Date().toISOString();
   await db.runAsync(
     `UPDATE local_answer
-     SET sync_status = 'uploaded', server_answer_id = ?, last_sync_error = NULL, updated_at = ?
+     SET sync_status = 'uploaded', server_answer_id = ?, server_submission_id = ?,
+         last_sync_error = NULL, updated_at = ?
      WHERE id = ?`,
     serverAnswerId,
+    serverSubmissionId,
     now,
     id
   );

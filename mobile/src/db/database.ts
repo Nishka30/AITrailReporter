@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 12;
+const DATABASE_VERSION = 13;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -432,7 +432,22 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 12;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 12) { ...; currentDbVersion = 13; }`
+  if (currentDbVersion === 12) {
+    // v12 -> v13: remember which SERVER SUBMISSION an answer became.
+    //
+    // server_answer_id already exists but means different things per source:
+    // for a 'dynamic' answer it is the QuestionAnswer id, for a 'popular' one
+    // it is the submission id (a popular answer has no QuestionAnswer row).
+    // The Activity screen needs the submission specifically — that is what
+    // transcription and extraction are keyed on — so it gets its own column
+    // rather than overloading a field whose meaning already varies by kind.
+    await db.execAsync(`
+      ALTER TABLE local_answer ADD COLUMN server_submission_id TEXT;
+    `);
+    currentDbVersion = 13;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 13) { ...; currentDbVersion = 14; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

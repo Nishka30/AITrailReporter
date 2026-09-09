@@ -9,10 +9,11 @@ import { ApiError, NetworkError } from '../api/client';
 import { formatDurationOrUnknown } from '../audio/duration';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { Badge, type BadgeTone, Button, Card, EmptyState, Screen, SectionHeader } from '../components/ui';
+import { listAnswersForGuide } from '../repositories/answerRepository';
 import { listCaptures } from '../repositories/captureRepository';
 import { listLocations } from '../repositories/locationRepository';
 import { colors, spacing, type } from '../theme/theme';
-import type { LocalCapture, LocalGuide, LocalLocation, SyncStatus } from '../types/models';
+import type { LocalAnswer, LocalCapture, LocalGuide, LocalLocation, SyncStatus } from '../types/models';
 
 type Props = {
   guide: LocalGuide;
@@ -408,6 +409,110 @@ function VoiceItem({ item }: { item: LocalCapture }) {
   );
 }
 
+/**
+ * An answer the guide gave to a question — from either source (a knowledge-gap
+ * "Still true?" question or a researched place question; see
+ * LocalAnswer.questionKind).
+ *
+ * Answers live in their own table, not local_capture, which is why this is a
+ * separate renderer rather than another captureType branch. They have always
+ * counted toward the Activity badge (see useLocalActivityCount) but were never
+ * LISTED here, so a pending answer showed up as a number with no card behind
+ * it. This is that missing card.
+ *
+ * Reports exactly what the other items report and nothing more: the answer's
+ * own text, its real sync status, and — since answers can now carry a photo
+ * and a voice note — whether each is still only on this device or has reached
+ * the server. The transcription/extraction chain is offered on the same terms
+ * as an Explore contribution, because an answer creates the same kind of
+ * Submission and goes through the identical backend pipeline.
+ */
+function AnswerItem({ item }: { item: LocalAnswer }) {
+  const badge = syncBadge(item.syncStatus);
+  const uploaded = item.syncStatus === 'uploaded';
+  const hasVoice = Boolean(item.localAudioUri);
+  const hasPhoto = Boolean(item.localPhotoUri);
+
+  return (
+    <Card style={styles.item}>
+      <View style={styles.itemHeaderRow}>
+        <View style={styles.itemTypeRow}>
+          <Ionicons name="chatbubble-ellipses-outline" size={13} color={colors.inkFaint} />
+          <Text style={styles.itemType}>
+            {item.questionKind === 'popular' ? 'Place answer' : 'Answer'}
+          </Text>
+        </View>
+        <Text style={styles.itemDate}>{new Date(item.answeredAt).toLocaleDateString()}</Text>
+      </View>
+
+      <Text style={styles.itemText} numberOfLines={4}>
+        {item.answerText}
+      </Text>
+
+      <View style={styles.itemBadgeRow}>
+        <Badge label={badge.label} tone={badge.tone} icon={badge.icon} />
+        {hasVoice ? (
+          <Badge
+            label={uploaded ? 'Voice sent' : 'Voice attached'}
+            tone={uploaded ? 'success' : 'info'}
+            icon="mic-outline"
+          />
+        ) : null}
+        {hasPhoto ? (
+          <Badge
+            label={uploaded ? 'Photo sent' : 'Photo attached'}
+            tone={uploaded ? 'success' : 'info'}
+            icon="image-outline"
+          />
+        ) : null}
+        {/* Provisional until the server confirms — the authoritative total
+            always comes from GET /guides/{id}/rewards, never from arithmetic
+            here (see LocalAnswer.rewardPoints). */}
+        {item.rewardPoints != null && item.rewardPoints > 0 ? (
+          <Badge
+            label={uploaded ? `${item.rewardPoints} pts` : `${item.rewardPoints} pts pending`}
+            tone={uploaded ? 'success' : 'neutral'}
+            icon="ribbon-outline"
+          />
+        ) : null}
+      </View>
+
+      {item.syncStatus === 'failed' && item.lastSyncError ? (
+        <Text style={styles.nestedErrorText}>{item.lastSyncError}</Text>
+      ) : null}
+
+      {item.serverSubmissionId ? (
+        <View style={styles.nestedBlock}>
+          {/* The written answer is always the source for extraction — text is
+              required on every answer — so this needs no transcript first. A
+              voice note is supplementary and transcribes separately, exactly
+              as it does on a text+voice discovery. */}
+          <ExtractionBlock submissionId={item.serverSubmissionId} />
+          {hasVoice ? (
+            <View style={styles.nestedDivider}>
+              <TranscriptionBlock
+                submissionId={item.serverSubmissionId}
+                startLabel="Transcribe the voice note"
+              />
+            </View>
+          ) : null}
+        </View>
+      ) : uploaded ? (
+        // Synced before server_submission_id existed (schema v13). The answer
+        // genuinely reached the server, so telling the guide to send it again
+        // would be a lie — we simply have no submission id on this device to
+        // key transcription/extraction on.
+        <Text style={styles.itemMeta}>
+          Sent before this device started recording the submission link — answered on the
+          server, but not checkable from here.
+        </Text>
+      ) : (
+        <Text style={styles.itemMeta}>Send this answer before it can be understood.</Text>
+      )}
+    </Card>
+  );
+}
+
 function LocationItem({ item }: { item: LocalLocation }) {
   const badge = syncBadge(item.syncStatus);
   return (
@@ -437,15 +542,21 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
   const db = useSQLiteContext();
   const [captures, setCaptures] = useState<LocalCapture[]>([]);
   const [locations, setLocations] = useState<LocalLocation[]>([]);
+  const [answers, setAnswers] = useState<LocalAnswer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [captureRows, locationRows] = await Promise.all([listCaptures(db, guide.id), listLocations(db, guide.id)]);
+      const [captureRows, locationRows, answerRows] = await Promise.all([
+        listCaptures(db, guide.id),
+        listLocations(db, guide.id),
+        listAnswersForGuide(db, guide.id),
+      ]);
       setCaptures(captureRows);
       setLocations(locationRows);
+      setAnswers(answerRows);
       setError(null);
     } catch (err) {
       console.error('[PendingItemsScreen] Failed to load local data:', err);
@@ -467,12 +578,14 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
   const voiceCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'voice'));
   const exploreCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'explore'));
   const memoryCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'memory'));
+  const sortedAnswers = byNeedsAttentionFirst(answers);
   const sortedLocations = byNeedsAttentionFirst(locations);
   const isEmpty =
     notes.length === 0 &&
     voiceCaptures.length === 0 &&
     exploreCaptures.length === 0 &&
     memoryCaptures.length === 0 &&
+    sortedAnswers.length === 0 &&
     sortedLocations.length === 0;
 
   return (
@@ -488,7 +601,7 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
         <EmptyState
           icon="file-tray-outline"
           title="Nothing captured yet"
-          message="Notes, voice updates, discoveries, memories, and locations you save will show up here."
+          message="Notes, voice updates, discoveries, memories, answers, and locations you save will show up here."
         />
       ) : (
         <>
@@ -520,6 +633,13 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
             memoryCaptures.map((item) => (
               <ExploreItem key={item.id} item={item} kindLabel="Memory" kindIcon="images-outline" />
             ))
+          )}
+
+          <SectionHeader title="Answers" meta={String(sortedAnswers.length)} />
+          {sortedAnswers.length === 0 ? (
+            <Text style={styles.emptyText}>No questions answered yet.</Text>
+          ) : (
+            sortedAnswers.map((item) => <AnswerItem key={item.id} item={item} />)
           )}
 
           <SectionHeader title="Locations" meta={String(sortedLocations.length)} />
