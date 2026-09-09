@@ -240,12 +240,26 @@ export default function QuestionsScreen({
 
   const needsAttention = questions?.filter((q) => q.assignment?.status !== 'completed') ?? [];
   const answered = questions?.filter((q) => q.assignment?.status === 'completed') ?? [];
-  // Only questions whose research has gone STALE belong here: this tab is
-  // where a guide is asked to confirm whether something we were told before
-  // is still true. Fresh ones are an invitation to describe a place for the
-  // first time, which is Explore's job -- see GuidePlaceQuestions.researchStale.
-  const staleQuestions = popular?.researchStale ? popular.questions : [];
-  const hasAnything = (questions?.length ?? 0) > 0 || staleQuestions.length > 0;
+
+  // The two asks this tab exists for, split by SOURCE -- which is also the
+  // split the guide experiences:
+  //
+  //   About This Place -> Google identified the POI, Perplexity researched it,
+  //                       Claude wrote the questions. Always shown while the
+  //                       guide is at a place we know something about.
+  //   Still True?      -> the knowledge pipeline's own asks: information that
+  //                       has aged or gaps it wants closed.
+  //
+  // `researchStale` is NOT the axis here. It describes how old our RESEARCH
+  // about a place is -- an internal refresh schedule -- not whether the guide
+  // should be asked about the place at all. Routing on it made the whole
+  // "About this place" section vanish whenever a refresh happened to be due,
+  // which is exactly backwards: those are still the questions about where
+  // they are standing. It now only annotates the section (below).
+  const placeQuestions = popular?.questions ?? [];
+  const researchAged = popular?.researchStale ?? false;
+  const needsChecking = needsAttention.length;
+  const hasAnything = (questions?.length ?? 0) > 0 || placeQuestions.length > 0;
 
   return (
     <Screen
@@ -257,7 +271,7 @@ export default function QuestionsScreen({
       <View style={styles.header}>
         <Text style={styles.title}>Questions</Text>
         <Text style={styles.subtitle}>
-          Things the team is waiting on, plus anything near you that needs checking again.
+          About where you are right now, and what needs checking again.
         </Text>
       </View>
 
@@ -281,31 +295,14 @@ export default function QuestionsScreen({
         />
       ) : (
         <View style={styles.list}>
-          {needsAttention.length > 0 ? (
-            <>
-              <SectionHeader title="Your priority questions" meta={String(needsAttention.length)} />
-              {needsAttention.map((q) => (
-                <QuestionCard
-                  key={q.id}
-                  question={q}
-                  localAnswer={localAnswers.find((a) => a.serverQuestionId === q.id) ?? null}
-                  onPress={() => onSelectQuestion(q)}
-                />
-              ))}
-            </>
-          ) : null}
-
-          {/* Stale place questions come AFTER the priority queue, always —
-              they are a secondary source and must never displace it. They
-              still appear when the queue is empty, so a guide always has
-              something useful to do. The framing is deliberately "is this
-              still true?" rather than "tell us about this place": what makes
-              these worth surfacing is precisely that the answer we hold has
-              aged, and only somebody standing there can settle it. */}
-          {staleQuestions.length > 0 ? (
+          {/* ── 1. ABOUT THIS PLACE ──────────────────────────────────────
+              Researched questions about the POI the guide is standing at.
+              First because they are the most specific thing this tab can
+              ask: nobody who is not here can answer them. */}
+          {placeQuestions.length > 0 ? (
             <View style={styles.popularSection}>
               <SectionHeader
-                title="Still true?"
+                title="About this place"
                 meta={
                   popular?.distanceMeters != null
                     ? `~${Math.round(popular.distanceMeters)}m away`
@@ -314,11 +311,14 @@ export default function QuestionsScreen({
               />
               <Text style={styles.popularIntro}>
                 {popular?.locationName
-                  ? `What we know about ${popular.locationName} is getting old. You're there now — a quick yes or no keeps it accurate for everyone else.`
-                  : "What we know about this place is getting old. You're there now — a quick yes or no keeps it accurate for everyone else."}
+                  ? `You're at ${popular.locationName}. These are specific to here — answer any you can see the answer to right now.`
+                  : "These are specific to where you are — answer any you can see the answer to right now."}
+                {researchAged
+                  ? ' Some of this was researched a while ago, so it is worth a second look.'
+                  : ''}
               </Text>
               <View style={styles.popularGroup}>
-                {staleQuestions.map((q) => (
+                {placeQuestions.map((q) => (
                   <PopularQuestionRow
                     key={q.id}
                     question={q}
@@ -327,6 +327,30 @@ export default function QuestionsScreen({
                   />
                 ))}
               </View>
+            </View>
+          ) : null}
+
+          {/* ── 2. STILL TRUE? / KNOWLEDGE GAPS ──────────────────────────
+              The knowledge pipeline's own asks: information it holds that has
+              aged out, and gaps it wants closed. Distinct from the section
+              above by SOURCE and by job -- those describe a place we just
+              identified, these confirm or correct something the system
+              already believes. */}
+          {needsAttention.length > 0 ? (
+            <View style={styles.popularSection}>
+              <SectionHeader title="Still true?" meta={String(needsChecking)} />
+              <Text style={styles.popularIntro}>
+                Information we already hold that has aged, or gaps we know about. A quick
+                confirmation keeps it accurate for everyone who comes next.
+              </Text>
+              {needsAttention.map((q) => (
+                <QuestionCard
+                  key={q.id}
+                  question={q}
+                  localAnswer={localAnswers.find((a) => a.serverQuestionId === q.id) ?? null}
+                  onPress={() => onSelectQuestion(q)}
+                />
+              ))}
             </View>
           ) : null}
 

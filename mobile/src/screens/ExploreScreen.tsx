@@ -4,13 +4,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
 import { ApiError, NetworkError } from '../api/client';
-import {
-  getGuideContext,
-  getGuideKnowledgeState,
-  type GuideContext,
-  type KnowledgeTypeState,
-} from '../api/guideContext';
-import { listPopularQuestions, type GuidePlaceQuestions } from '../api/placeQuestions';
+import { getGuideContext, type GuideContext } from '../api/guideContext';
 import { getRewardConfig, type RewardConfig } from '../api/rewards';
 import {
   Badge,
@@ -26,7 +20,6 @@ import {
   buildPrompts,
   type ExplorePrompt,
 } from '../explore/explorePrompts';
-import { placeQuestionToExplorePrompt } from '../explore/placeQuestionPrompts';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { countCapturesByStatus } from '../repositories/captureRepository';
 import { colors, radii, shadow, spacing, type } from '../theme/theme';
@@ -130,7 +123,6 @@ function PromptCard({
 export default function ExploreScreen({ guide, onStartContribution, onStartMemory, refreshKey }: Props) {
   const db = useSQLiteContext();
   const [context, setContext] = useState<GuideContext | null>(null);
-  const [knowledgeStates, setKnowledgeStates] = useState<KnowledgeTypeState[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,13 +131,6 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
   // never hardcodes what a contribution is worth. Null until loaded, in which
   // case cards simply show no reward rather than a guessed one.
   const [rewardConfig, setRewardConfig] = useState<RewardConfig | null>(null);
-  // Location-specific "you're here" invitations — the same backend-researched
-  // place questions the Questions tab shows, surfaced here too because Explore
-  // is exactly where "we noticed where you are" belongs. Loaded separately and
-  // never allowed to fail the screen, same contract as rewardConfig below: a
-  // missing/failed fetch means "no place invitation right now", not "Explore is
-  // broken".
-  const [placeQuestions, setPlaceQuestions] = useState<GuidePlaceQuestions | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -161,16 +146,12 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
 
       if (!guide.serverGuideId) {
         setContext(null);
-        setKnowledgeStates(null);
-        setPlaceQuestions(null);
         return;
       }
-      const [ctx, states] = await Promise.all([
-        getGuideContext(guide.serverGuideId),
-        getGuideKnowledgeState(guide.serverGuideId),
-      ]);
-      setContext(ctx);
-      setKnowledgeStates(states);
+      // Context only. Place questions and knowledge state both drive the
+      // Questions tab now, so Explore no longer fetches either -- two network
+      // calls that existed purely to render sections that have moved.
+      setContext(await getGuideContext(guide.serverGuideId));
 
       // Loaded separately and never allowed to fail the screen: rewards are an
       // incentive layer, so a missing config means "show no points", not
@@ -179,14 +160,6 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
         setRewardConfig(await getRewardConfig());
       } catch {
         setRewardConfig(null);
-      }
-
-      // Same best-effort contract — a place question failure degrades to "no
-      // invitation shown", never to breaking the rest of Explore.
-      try {
-        setPlaceQuestions(await listPopularQuestions(guide.serverGuideId));
-      } catch {
-        setPlaceQuestions(null);
       }
     } catch (err) {
       const message =
@@ -210,19 +183,17 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
   // tab re-entry) show the inline "Checking where you are…" state instead.
   const { pulling, onPull } = usePullToRefresh(refresh);
 
-  // Every place question belongs on Explore -- this is the tab about where the
-  // guide is, and it should never lose that section just because the research
-  // behind it is due a refresh. The Questions tab additionally surfaces the
-  // stale ones as a re-check ask (see GuidePlaceQuestions.researchStale); that
-  // is a second, differently-framed job, not a reason to remove them here.
-  const freshPlaceQuestions = placeQuestions?.questions ?? [];
-
-  // Real, sourced invitations already exist for this exact spot — the
-  // generic rotating deck below would only repeat the place's name into a
-  // fixed sentence, which is the "not really contextual" problem this flag
-  // exists to fix. See buildPrompts' doc comment.
-  const hasResearchedPlaceContent = freshPlaceQuestions.length > 0;
-  const prompts = buildPrompts(context, knowledgeStates, hasResearchedPlaceContent);
+  // Generic prompts ONLY. Two kinds of ask deliberately do not appear here:
+  //
+  //   place questions  -> Questions tab, "About This Place"
+  //   knowledge gaps   -> Questions tab, "Still True?"
+  //
+  // Both are verification work about one specific spot, and Explore is the
+  // contribution surface: open prompts a guide can act on anywhere. Passing
+  // `null` for knowledge states is what keeps gap-derived prompts out (see
+  // buildPrompts), and with no place questions competing for the space the
+  // deck runs at its full length rather than trimmed.
+  const prompts = buildPrompts(context, null);
   const place = context?.nearestKnownPlace;
 
   /** What an Explore contribution answering THIS prompt is currently worth.
@@ -309,48 +280,12 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
         </View>
       ) : null}
 
-      {/* ── 1. ABOUT THIS PLACE ────────────────────────────────────────────
-          Researched questions about the exact place the guide is standing in,
-          first because it is the only thing here that could not have been
-          written without knowing where they are.
-
-          Fresh questions ONLY. Ones whose research has gone stale are a
-          different job -- re-checking something we were told once, rather
-          than describing a place for the first time -- and they live on the
-          Questions tab, where verifying belongs. Mixing the two made this
-          tab read as an undifferentiated pile of asks. */}
-      {freshPlaceQuestions.length > 0 ? (
-        <>
-          <SectionHeader
-            title={
-              placeQuestions?.locationName
-                ? `About ${placeQuestions.locationName}`
-                : 'About this place'
-            }
-            meta={`${freshPlaceQuestions.length} question${freshPlaceQuestions.length === 1 ? '' : 's'}`}
-          />
-          <Text style={styles.sectionIntro}>
-            Specific to where you are right now — nobody else can answer these for you.
-          </Text>
-          {freshPlaceQuestions.map((q) => {
-            const prompt = placeQuestionToExplorePrompt(q, placeQuestions?.locationName ?? null);
-            return (
-              <PromptCard
-                key={prompt.id}
-                prompt={prompt}
-                rewardPoints={prompt.resolvedRewardPoints ?? null}
-                onPress={() => onStartContribution(prompt)}
-              />
-            );
-          })}
-        </>
-      ) : null}
-
-      {/* ── 2. GENERAL IDEAS ───────────────────────────────────────────────
-          The device-built rotating deck. Second because it is generic by
-          construction: useful, but true of anywhere. Labelled so the guide
-          can tell at a glance that these are suggestions rather than
-          questions somebody is actually waiting on. */}
+      {/* ── 1. GENERAL IDEAS ───────────────────────────────────────────────
+          The device-built rotating deck: things worth reporting anywhere,
+          which is exactly what makes them Explore's rather than Questions'.
+          Anything tied to one specific place -- researched place questions,
+          knowledge gaps -- lives on the Questions tab now, so this section
+          never has to compete with a more urgent, more specific ask. */}
       {prompts.length > 0 ? (
         <>
           <SectionHeader title="General ideas" meta={context && place ? place.name : undefined} />
@@ -366,7 +301,7 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
             />
           ))}
         </>
-      ) : loaded && !error && freshPlaceQuestions.length === 0 ? (
+      ) : loaded && !error ? (
         <View style={styles.emptyWrap}>
           <EmptyState
             icon="compass-outline"
@@ -376,14 +311,14 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
         </View>
       ) : null}
 
-      {/* ── 3. ANYTHING ELSE ───────────────────────────────────────────────
-          Deliberately LAST. These two are always available and never change,
-          so they are the floor of the screen rather than something competing
-          with the contextual asks above -- a guide who has read past every
-          question and still has something to say lands exactly here. */}
-      <SectionHeader title="Anything else?" />
+      {/* ── 2. SHARE ANYTHING / SHARE A MEMORY ─────────────────────────────
+          Always available and never rotating, so they sit at the floor of the
+          screen rather than competing with the prompts above -- a guide who
+          has read past every idea and still has something to say lands
+          exactly here. */}
+      <SectionHeader title="Share anything" />
       <Text style={styles.sectionIntro}>
-        Not covered above? These are always open.
+        Nothing above fit? Tell us in your own words, or add something from another day.
       </Text>
       <Pressable
         onPress={() => onStartContribution(FREE_FORM_PROMPT)}

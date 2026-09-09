@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 11;
+const DATABASE_VERSION = 12;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -410,7 +410,29 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 11;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 11) { ...; currentDbVersion = 12; }`
+  if (currentDbVersion === 11) {
+    // v11 -> v12: answers can carry a photo and/or a voice note, not just text.
+    //
+    // Standing in front of the thing being asked about is exactly when a
+    // picture or a spoken answer is the easiest and most accurate way to
+    // reply, and the backend already supports it: an answer creates a
+    // Submission (see backend/app/services/question_answers.py), which is the
+    // same thing captures attach media to. This mirrors the local_capture
+    // media columns added in v4/v6 exactly, including the separate
+    // client_*_id values that keep each upload independently idempotent.
+    await db.execAsync(`
+      ALTER TABLE local_answer ADD COLUMN local_audio_uri TEXT;
+      ALTER TABLE local_answer ADD COLUMN client_audio_id TEXT;
+      ALTER TABLE local_answer ADD COLUMN audio_duration_millis INTEGER;
+      ALTER TABLE local_answer ADD COLUMN audio_content_type TEXT;
+      ALTER TABLE local_answer ADD COLUMN local_photo_uri TEXT;
+      ALTER TABLE local_answer ADD COLUMN client_photo_id TEXT;
+      ALTER TABLE local_answer ADD COLUMN photo_content_type TEXT;
+    `);
+    currentDbVersion = 12;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 12) { ...; currentDbVersion = 13; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

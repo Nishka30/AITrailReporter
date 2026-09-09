@@ -454,6 +454,49 @@ async function syncOneLocation(
   }
 }
 
+/**
+ * Attaches an answer's optional photo/voice note to the Submission the answer
+ * itself created. Second stage of the same two-stage, both-idempotent shape
+ * syncOneVoiceCapture uses: each upload is keyed on its own client id, so a
+ * retry after a partial failure re-runs from the answer POST without ever
+ * duplicating anything.
+ *
+ * Throws on failure, which marks the whole answer 'failed' and retries it
+ * next sync -- deliberately, because an answer whose photo never arrived is
+ * an incomplete answer, and silently reporting it as sent would strand the
+ * media on the device with nothing left pointing at it.
+ */
+async function uploadAnswerMedia(answer: LocalAnswer, submissionId: string): Promise<void> {
+  if (answer.localPhotoUri && answer.clientPhotoId) {
+    if (!new File(answer.localPhotoUri).exists) {
+      throw new Error(
+        'The photo for this answer is no longer on your device. Remove it and answer again.'
+      );
+    }
+    await uploadSubmissionPhoto({
+      submissionId,
+      clientPhotoId: answer.clientPhotoId,
+      localUri: answer.localPhotoUri,
+      contentType: answer.photoContentType ?? 'image/jpeg',
+    });
+  }
+  if (answer.localAudioUri && answer.clientAudioId) {
+    if (!new File(answer.localAudioUri).exists) {
+      throw new Error(
+        'The recording for this answer is no longer on your device. Remove it and answer again.'
+      );
+    }
+    await uploadSubmissionAudio({
+      submissionId,
+      clientAudioId: answer.clientAudioId,
+      localUri: answer.localAudioUri,
+      contentType: answer.audioContentType ?? 'audio/m4a',
+      durationSeconds:
+        answer.audioDurationMillis != null ? answer.audioDurationMillis / 1000 : null,
+    });
+  }
+}
+
 /** STEP 4 of the outbox flow: sync one question answer. Never throws —
  * always resolves. Same shape as syncOneLocation.
  *
@@ -479,6 +522,7 @@ async function syncOneAnswer(
       // A popular question has no QuestionAnswer row of its own — the answer
       // IS the submission (see backend/app/services/place_question_answers.py),
       // so the submission id is the honest server-side identifier to record.
+      await uploadAnswerMedia(answer, result.submissionId);
       await markAnswerUploaded(db, answer.id, result.submissionId);
       return { answerId: answer.id, status: 'uploaded' };
     }
@@ -496,6 +540,9 @@ async function syncOneAnswer(
       // response, not local data, so fail loudly rather than guessing an id.
       throw new Error('Server did not return the persisted answer.');
     }
+    // The answer's own Submission is what media attaches to — the same
+    // submission the text became (see question_answers.py).
+    await uploadAnswerMedia(answer, question.answer.submissionId);
     await markAnswerUploaded(db, answer.id, question.answer.id);
     return { answerId: answer.id, status: 'uploaded' };
   } catch (err) {

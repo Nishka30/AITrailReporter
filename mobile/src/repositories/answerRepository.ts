@@ -13,6 +13,13 @@ interface LocalAnswerRow {
   answer_text: string;
   answered_at: string;
   reward_points: number | null;
+  local_audio_uri: string | null;
+  client_audio_id: string | null;
+  audio_duration_millis: number | null;
+  audio_content_type: string | null;
+  local_photo_uri: string | null;
+  client_photo_id: string | null;
+  photo_content_type: string | null;
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
@@ -26,6 +33,15 @@ interface LocalAnswerRow {
 // still be retried, not orphaned.
 const SYNCABLE_STATUSES: SyncStatus[] = ['pending', 'failed', 'uploading'];
 
+/** Optional media captured alongside an answer's text. */
+export interface AnswerMediaInput {
+  localAudioUri?: string | null;
+  audioDurationMillis?: number | null;
+  audioContentType?: string | null;
+  localPhotoUri?: string | null;
+  photoContentType?: string | null;
+}
+
 function mapRow(row: LocalAnswerRow): LocalAnswer {
   return {
     id: row.id,
@@ -37,6 +53,13 @@ function mapRow(row: LocalAnswerRow): LocalAnswer {
     answerText: row.answer_text,
     answeredAt: row.answered_at,
     rewardPoints: row.reward_points,
+    localAudioUri: row.local_audio_uri,
+    clientAudioId: row.client_audio_id,
+    audioDurationMillis: row.audio_duration_millis,
+    audioContentType: row.audio_content_type,
+    localPhotoUri: row.local_photo_uri,
+    clientPhotoId: row.client_photo_id,
+    photoContentType: row.photo_content_type,
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
@@ -69,14 +92,23 @@ export async function createAnswer(
    * guide sees a real server-issued number rather than a guess. Null when the
    * reward wasn't known (e.g. the question list was served from cache before
    * rewards existed). */
-  rewardPoints: number | null = null
+  rewardPoints: number | null = null,
+  /** Optional photo/voice note captured alongside the text. Each gets its own
+   * client id here so the two uploads stay independently idempotent, exactly
+   * as captures do (see captureRepository). */
+  media: AnswerMediaInput = {}
 ): Promise<LocalAnswer> {
   const now = new Date().toISOString();
   const clientAnswerId = generateClientId();
+  const clientAudioId = media.localAudioUri ? generateClientId() : null;
+  const clientPhotoId = media.localPhotoUri ? generateClientId() : null;
   const result = await db.runAsync(
     `INSERT INTO local_answer
-       (local_guide_id, server_question_id, question_kind, client_answer_id, answer_text, answered_at, reward_points, sync_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+       (local_guide_id, server_question_id, question_kind, client_answer_id, answer_text, answered_at, reward_points,
+        local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
+        local_photo_uri, client_photo_id, photo_content_type,
+        sync_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     localGuideId,
     serverQuestionId,
     questionKind,
@@ -84,6 +116,13 @@ export async function createAnswer(
     answerText,
     answeredAt,
     rewardPoints,
+    media.localAudioUri ?? null,
+    clientAudioId,
+    media.audioDurationMillis ?? null,
+    media.audioContentType ?? null,
+    media.localPhotoUri ?? null,
+    clientPhotoId,
+    media.photoContentType ?? null,
     now,
     now
   );

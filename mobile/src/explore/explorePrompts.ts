@@ -86,6 +86,11 @@ export interface ExplorePrompt {
 /** Copy templates. `place` is pre-resolved to either a real place name or a
  * neutral phrase before these are used — see buildPrompts. */
 interface Template {
+  /** Stable, unique per template — NOT derived from `kind`, because several
+   * templates deliberately share a kind (it only drives the card's icon and
+   * tint). Deriving the React key from kind produced duplicate keys the
+   * moment a second 'conditions' template existed. */
+  id: string;
   kind: ExplorePromptKind;
   title: string;
   body: (place: string, hasRealPlace: boolean) => string;
@@ -96,6 +101,7 @@ interface Template {
 
 const TEMPLATES: Template[] = [
   {
+    id: 'photo_now',
     kind: 'photo',
     title: 'Photo moment',
     body: (place, real) =>
@@ -108,6 +114,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: true,
   },
   {
+    id: 'conditions_now',
     kind: 'conditions',
     title: 'What you can see',
     body: (place, real) =>
@@ -119,6 +126,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'local_story',
     kind: 'story',
     title: 'Local knowledge',
     body: (place, real) =>
@@ -130,6 +138,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'worth_passing',
     kind: 'discovery',
     title: 'Worth passing on',
     body: () =>
@@ -139,6 +148,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'easy_to_miss',
     kind: 'culture',
     title: 'Easy to miss',
     body: (place, real) =>
@@ -150,6 +160,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'good_find',
     kind: 'local_find',
     title: 'A good find',
     body: () =>
@@ -159,6 +170,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'getting_here',
     kind: 'conditions',
     title: 'Getting here',
     body: (place, real) =>
@@ -170,6 +182,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'best_time',
     kind: 'conditions',
     title: 'Best time to come',
     body: (place, real) =>
@@ -181,6 +194,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'what_it_costs',
     kind: 'local_find',
     title: 'What it costs',
     body: () =>
@@ -190,6 +204,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'changed_recently',
     kind: 'discovery',
     title: 'Changed recently',
     body: (place, real) =>
@@ -201,6 +216,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: false,
   },
   {
+    id: 'show_the_way',
     kind: 'photo',
     title: 'Show the way',
     body: (place, real) =>
@@ -212,6 +228,7 @@ const TEMPLATES: Template[] = [
     wantsPhoto: true,
   },
   {
+    id: 'know_first',
     kind: 'culture',
     title: 'Worth knowing first',
     body: () =>
@@ -353,7 +370,7 @@ export function buildPrompts(
     if (template.kind === 'conditions' && gaps.length > 0) continue;
     genericCount += 1;
     prompts.push({
-      id: `open:${template.kind}`,
+      id: `open:${template.id}`,
       kind: template.kind,
       title: template.title,
       body: template.body(placeLabel, hasRealPlace),

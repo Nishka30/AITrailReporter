@@ -1,14 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
 import type { PlaceQuestion } from '../api/placeQuestions';
 import type { Question } from '../api/questions';
+import type { RecordedAudio } from '../audio/audioRecordingService';
 import { AppHeader, Badge, Button, Card, LoadingState, RewardChip, Screen } from '../components/ui';
+import VoiceNoteComposer from '../components/VoiceNoteComposer';
+import { choosePhoto, takePhoto, type PhotoPickResult } from '../photo/photoPickerService';
 import { createAnswer, getAnswerByQuestionId } from '../repositories/answerRepository';
 import { colors, spacing, type } from '../theme/theme';
 import type { LocalAnswer, LocalGuide, QuestionKind } from '../types/models';
+
+type AttachedPhoto = { uri: string; contentType: string };
 
 /**
  * A question to answer, normalized across the TWO sources (Step 18).
@@ -121,6 +135,43 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  const [voice, setVoice] = useState<RecordedAudio | null>(null);
+  const [photo, setPhoto] = useState<AttachedPhoto | null>(null);
+  const [pickingPhoto, setPickingPhoto] = useState(false);
+  const [photoNotice, setPhotoNotice] = useState<string | null>(null);
+
+  function applyPhotoResult(result: PhotoPickResult) {
+    switch (result.status) {
+      case 'success':
+        setPhoto({ uri: result.uri, contentType: result.contentType });
+        setPhotoNotice(null);
+        break;
+      case 'cancelled':
+        // Not an error, and not worth a message — the guide chose to back out.
+        break;
+      case 'permission-denied':
+        setPhotoNotice(
+          result.canAskAgain
+            ? 'Photo permission is needed for this. Please allow it and try again.'
+            : 'Photo permission was denied. You can enable it for this app in your device settings.'
+        );
+        break;
+      case 'error':
+        setPhotoNotice(result.message);
+        break;
+    }
+  }
+
+  async function handlePickPhoto(useCamera: boolean) {
+    if (pickingPhoto || saving) return;
+    setPickingPhoto(true);
+    setPhotoNotice(null);
+    try {
+      applyPhotoResult(useCamera ? await takePhoto() : await choosePhoto());
+    } finally {
+      setPickingPhoto(false);
+    }
+  }
 
   const loadExisting = useCallback(async () => {
     try {
@@ -138,8 +189,22 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
   async function handleSave() {
     if (saving) return;
     const trimmed = text.trim();
+    // Text is REQUIRED here even when a voice note or photo is attached, and
+    // that is a backend contract rather than a style choice: both answer
+    // endpoints declare answer_text with min_length=1 and an explicit
+    // not-blank validator, so a media-only answer would save locally and then
+    // fail with a 422 on every sync attempt forever. The media is additive to
+    // the written answer, not a replacement for it.
+    //
+    // (This is the one place it differs from ExploreContributeScreen, which
+    // posts a submission rather than an answer and so can accept a voice note
+    // with no text at all.)
     if (!trimmed) {
-      setError('Please enter an answer before saving.');
+      setError(
+        voice || photo
+          ? 'Add a few words as well — an answer needs some text alongside the recording or photo.'
+          : 'Please enter an answer before saving.'
+      );
       return;
     }
     setSaving(true);
@@ -155,7 +220,14 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
         // Snapshot what the BACKEND said this was worth, so the pending-points
         // line is a real server-issued number rather than a device guess.
         // 0 means no active rule, which we store as null (earned nothing).
-        target.rewardPoints > 0 ? target.rewardPoints : null
+        target.rewardPoints > 0 ? target.rewardPoints : null,
+        {
+          localAudioUri: voice?.uri ?? null,
+          audioDurationMillis: voice?.durationMillis ?? null,
+          audioContentType: voice?.contentType ?? null,
+          localPhotoUri: photo?.uri ?? null,
+          photoContentType: photo?.contentType ?? null,
+        }
       );
       setJustSaved(true);
       await loadExisting();
@@ -211,6 +283,79 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
               autoFocus
               editable={!saving}
             />
+
+            {/* Both optional, both additive to the text answer. Standing in
+                front of the thing being asked about is exactly when a picture
+                or a spoken reply is the easiest and most accurate way to
+                answer -- and the backend already supports it, because an
+                answer creates a Submission just like a capture does (see
+                backend/app/services/question_answers.py). */}
+            <Text style={styles.mediaLabel}>
+              <Ionicons name="mic-outline" size={13} color={colors.inkFaint} /> Voice note
+              <Text style={styles.mediaHint}>
+                {voice ? '  ·  Attached' : '  ·  Optional — record alongside your answer'}
+              </Text>
+            </Text>
+            <View style={styles.voiceWrap}>
+              <VoiceNoteComposer
+                value={voice}
+                onChange={setVoice}
+                idleCopy="Say your answer out loud"
+                disabled={saving}
+              />
+            </View>
+
+            <Text style={styles.mediaLabel}>
+              <Ionicons name="camera-outline" size={13} color={colors.inkFaint} /> Photo
+              <Text style={styles.mediaHint}>  ·  Optional</Text>
+            </Text>
+            {photo ? (
+              <View style={styles.photoWrap}>
+                <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
+                <Pressable
+                  onPress={() => setPhoto(null)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove photo"
+                  hitSlop={8}
+                  style={styles.photoRemove}
+                  disabled={saving}
+                >
+                  <Ionicons name="close" size={17} color={colors.white} />
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.photoActions}>
+                <Pressable
+                  onPress={() => handlePickPhoto(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Take photo"
+                  disabled={pickingPhoto || saving}
+                  style={({ pressed }) => [
+                    styles.photoAction,
+                    pressed && styles.photoActionPressed,
+                    (pickingPhoto || saving) && styles.photoActionDisabled,
+                  ]}
+                >
+                  <Ionicons name="camera-outline" size={21} color={colors.marigoldDeep} />
+                  <Text style={styles.photoActionText}>Take photo</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => handlePickPhoto(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose photo"
+                  disabled={pickingPhoto || saving}
+                  style={({ pressed }) => [
+                    styles.photoAction,
+                    pressed && styles.photoActionPressed,
+                    (pickingPhoto || saving) && styles.photoActionDisabled,
+                  ]}
+                >
+                  <Ionicons name="images-outline" size={21} color={colors.marigoldDeep} />
+                  <Text style={styles.photoActionText}>Choose photo</Text>
+                </Pressable>
+              </View>
+            )}
+            {photoNotice ? <Text style={styles.notice}>{photoNotice}</Text> : null}
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -276,6 +421,46 @@ function AnsweredElsewhereCard({ answerText, onDone }: { answerText: string; onD
 }
 
 const styles = StyleSheet.create({
+  mediaLabel: {
+    ...type.small,
+    color: colors.ink,
+    fontWeight: '600',
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
+  },
+  mediaHint: { ...type.caption, color: colors.inkFaint, fontWeight: '400' },
+  voiceWrap: { marginBottom: spacing.xs },
+  photoWrap: { position: 'relative', marginBottom: spacing.sm },
+  photoPreview: { width: '100%', height: 190, borderRadius: 12, backgroundColor: colors.inkFaint },
+  photoRemove: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  photoActions: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
+  photoAction: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: spacing.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.marigoldSoft,
+    backgroundColor: colors.marigoldSoft,
+  },
+  photoActionPressed: { opacity: 0.7 },
+  photoActionDisabled: { opacity: 0.5 },
+  photoActionText: { ...type.small, color: colors.marigoldDeep, fontWeight: '600' },
+  notice: { ...type.caption, color: colors.inkFaint, marginBottom: spacing.sm },
+
   flex: { flex: 1 },
   questionCard: { marginBottom: spacing.md },
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.sm },

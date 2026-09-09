@@ -3,7 +3,6 @@ import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
-import { listPopularQuestions } from '../api/placeQuestions';
 import { listAssignedQuestions } from '../api/questions';
 import VoiceRecorderCard from '../components/VoiceRecorderCard';
 import { Avatar, Badge, Button, Card, QuickActionTile, Screen, SectionHeader } from '../components/ui';
@@ -120,40 +119,6 @@ function useAttentionQuestionCount(guide: LocalGuide, refreshKey: number) {
   return count;
 }
 
-/** How many things near the guide have gone stale and need re-checking.
- *
- * Home does not render these questions itself -- answering them belongs on
- * the Questions tab, and duplicating them here would just be two places to
- * keep in sync. All Home needs is whether to raise its hand, because a stale
- * fact is only fixable by someone who happens to be standing there NOW, and
- * a guide who never opens the Questions tab would never learn that. Silent
- * on failure for the same reason the count above is: a nudge that cannot be
- * loaded is simply not shown, never an error on the home screen. */
-function useStaleQuestionCount(guide: LocalGuide, refreshKey: number) {
-  const [count, setCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!guide.serverGuideId) {
-      setCount(null);
-      return;
-    }
-    let cancelled = false;
-    listPopularQuestions(guide.serverGuideId)
-      .then((result) => {
-        if (cancelled) return;
-        setCount(result.researchStale ? result.questions.length : 0);
-      })
-      .catch(() => {
-        if (!cancelled) setCount(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [guide.serverGuideId, refreshKey]);
-
-  return count;
-}
-
 export default function HomeScreen({
   guide,
   onCreateNote,
@@ -166,7 +131,10 @@ export default function HomeScreen({
   const db = useSQLiteContext();
   const sync = useSyncSnapshot(guide, refreshKey);
   const attentionQuestions = useAttentionQuestionCount(guide, refreshKey);
-  const staleQuestions = useStaleQuestionCount(guide, refreshKey);
+  // Mirrors the Questions tab's "Still True?" section exactly -- the knowledge
+  // pipeline's aged information and open gaps. Nudging with a number the
+  // destination doesn't show reads as a bug, so this must stay the same count.
+  const needsChecking = attentionQuestions ?? 0;
 
   const [syncing, setSyncing] = useState(false);
   const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
@@ -349,26 +317,27 @@ export default function HomeScreen({
         </Card>
       )}
 
-      {/* Stale-info nudge. Shown ONLY when something near the guide has aged
-          out, because its whole value is that it is time- and place-bound:
-          they are standing there now, and the answer we hold has gone off.
-          It states the ask and hands over to the Questions tab rather than
-          trying to answer it here -- one place to answer, one place to nudge. */}
-      {staleQuestions !== null && staleQuestions > 0 ? (
+      {/* Nudge toward the Questions tab's "Still True?" section. The count is
+          the SUM of both things that section holds -- aged place questions and
+          assigned knowledge gaps -- because that is the number the guide will
+          actually see when they land there; nudging with a smaller figure than
+          the destination shows reads as a bug. Home never lists the items
+          itself: one place to answer, one place to nudge. */}
+      {needsChecking > 0 ? (
         <Card
           onPress={onViewQuestions}
-          accessibilityLabel={`${staleQuestions} thing${staleQuestions === 1 ? '' : 's'} near you need checking. Open Questions.`}
+          accessibilityLabel={`${needsChecking} thing${needsChecking === 1 ? '' : 's'} need checking. Open Questions.`}
           style={styles.staleCard}
         >
           <View style={styles.staleRow}>
             <Ionicons name="time-outline" size={19} color={colors.info} />
             <View style={styles.staleText}>
               <Text style={styles.staleTitle}>
-                {staleQuestions} thing{staleQuestions === 1 ? '' : 's'} near you need
-                {staleQuestions === 1 ? 's' : ''} checking
+                {needsChecking} thing{needsChecking === 1 ? '' : 's'} need
+                {needsChecking === 1 ? 's' : ''} checking
               </Text>
               <Text style={styles.staleBody}>
-                What we know here is getting old. You're the one who can confirm it.
+                Information near you that has aged. You're the one who can confirm it.
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.inkFaint} />

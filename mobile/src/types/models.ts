@@ -335,6 +335,23 @@ export interface LocalAnswer {
    * created before rewards existed.
    */
   rewardPoints: number | null;
+  /**
+   * Optional media attached to the answer. An answer creates a Submission
+   * server-side (see backend/app/services/question_answers.py), which is the
+   * same thing a capture attaches media to — so these upload through the
+   * identical two-stage path syncOneVoiceCapture/syncOneExploreCapture use,
+   * with their own client_*_id keeping each upload independently idempotent.
+   *
+   * Null on every answer created before this existed, and on any text-only
+   * answer — which remains the common case.
+   */
+  localAudioUri: string | null;
+  clientAudioId: string | null;
+  audioDurationMillis: number | null;
+  audioContentType: string | null;
+  localPhotoUri: string | null;
+  clientPhotoId: string | null;
+  photoContentType: string | null;
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;

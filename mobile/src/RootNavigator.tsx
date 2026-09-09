@@ -11,7 +11,6 @@ import { placeQuestionToExplorePrompt } from './explore/placeQuestionPrompts';
 import { useLocalActivityCount } from './hooks/useLocalActivityCount';
 import { getCurrentLocalGuide } from './repositories/guideRepository';
 import AnswerQuestionScreen, {
-  targetFromPlaceQuestion,
   targetFromQuestion,
   type AnswerTarget,
 } from './screens/AnswerQuestionScreen';
@@ -214,20 +213,19 @@ export default function RootNavigator() {
               setPushed('answerQuestion');
             }}
             onSelectPopularQuestion={(question, placeName) => {
-              // A place question asking for a photo or a voice note needs
-              // actual media capture, which only ExploreContributeScreen has
-              // — AnswerQuestionScreen is text-only by design (Step 13). Every
-              // other kind (observation/experience/status) is a short text
-              // report and keeps using the lighter, already-built answer
-              // screen, exactly like a priority question.
-              if (question.contributionKind === 'photo' || question.contributionKind === 'voice') {
-                setSelectedPrompt(placeQuestionToExplorePrompt(question, placeName));
-                setExplorePromptOrigin('questions');
-                setPushed('exploreContribute');
-                return;
-              }
-              setAnswerTarget(targetFromPlaceQuestion(question, placeName));
-              setPushed('answerQuestion');
+              // EVERY place question goes to the compose screen with media,
+              // not just the ones whose kind literally asks for a photo or a
+              // voice note. Standing in front of the thing being asked about
+              // is exactly when a picture or a spoken answer is easiest and
+              // most useful, and which of those a guide reaches for is their
+              // call, not something the question's `contributionKind` should
+              // decide for them -- that field says what we ASKED for, not what
+              // they are allowed to send. Photo and voice remain optional
+              // here; the kind still drives the placeholder and whether the
+              // photo control is foregrounded (see placeQuestionToExplorePrompt).
+              setSelectedPrompt(placeQuestionToExplorePrompt(question, placeName));
+              setExplorePromptOrigin('questions');
+              setPushed('exploreContribute');
             }}
             onCountChange={setQuestionBadgeCount}
             refreshKey={refreshKey}
