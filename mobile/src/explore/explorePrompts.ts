@@ -158,6 +158,68 @@ const TEMPLATES: Template[] = [
     voiceCopy: () => 'Tell us what you found',
     wantsPhoto: false,
   },
+  {
+    kind: 'conditions',
+    title: 'Getting here',
+    body: (place, real) =>
+      real
+        ? `How would someone actually reach ${place} today — road, transport, walk, anything in the way?`
+        : 'How would someone actually reach where you are today — road, transport, walk, anything in the way?',
+    placeholder: 'The route, and anything that would slow someone down…',
+    voiceCopy: () => 'Say how someone would get here',
+    wantsPhoto: false,
+  },
+  {
+    kind: 'conditions',
+    title: 'Best time to come',
+    body: (place, real) =>
+      real
+        ? `When is ${place} at its best — and when should someone avoid it entirely?`
+        : 'When is this place at its best — and when should someone avoid it entirely?',
+    placeholder: 'Time of day, day of week, season…',
+    voiceCopy: () => 'Say when someone should come',
+    wantsPhoto: false,
+  },
+  {
+    kind: 'local_find',
+    title: 'What it costs',
+    body: () =>
+      'What does something here actually cost right now — a meal, a ticket, a ride, a room?',
+    placeholder: 'What you paid, and for what…',
+    voiceCopy: () => 'Tell us what things cost here',
+    wantsPhoto: false,
+  },
+  {
+    kind: 'discovery',
+    title: 'Changed recently',
+    body: (place, real) =>
+      real
+        ? `Has anything about ${place} changed lately that older information would get wrong?`
+        : 'Has anything here changed lately that older information would get wrong?',
+    placeholder: "What's different now…",
+    voiceCopy: () => 'Say what has changed here',
+    wantsPhoto: false,
+  },
+  {
+    kind: 'photo',
+    title: 'Show the way',
+    body: (place, real) =>
+      real
+        ? `A photo of the approach, sign or entrance to ${place} — the thing someone needs to spot to find it.`
+        : 'A photo of the approach, sign or entrance here — the thing someone needs to spot to find it.',
+    placeholder: 'Say what the photo shows…',
+    voiceCopy: () => 'Describe what someone should look for',
+    wantsPhoto: true,
+  },
+  {
+    kind: 'culture',
+    title: 'Worth knowing first',
+    body: () =>
+      'Anything a visitor should know before turning up here — custom, etiquette, something to be careful about?',
+    placeholder: 'What you would tell a friend before they came…',
+    voiceCopy: () => 'Say what someone should know first',
+    wantsPhoto: false,
+  },
 ];
 
 /**
@@ -277,7 +339,11 @@ export function buildPrompts(
   const seed = rotationSeed(context);
   const offset = ((seed % TEMPLATES.length) + TEMPLATES.length) % TEMPLATES.length;
   const rotated = [...TEMPLATES.slice(offset), ...TEMPLATES.slice(0, offset)];
-  const genericLimit = hasResearchedPlaceContent ? 3 : TEMPLATES.length;
+  // Capped rather than "show the whole pool": the deck is deliberately larger
+  // than what any one visit displays, so the rotation above has something to
+  // rotate THROUGH -- a guide at the same spot on a different day gets
+  // different prompts instead of the same wall of cards every time.
+  const genericLimit = hasResearchedPlaceContent ? 4 : 6;
 
   let genericCount = 0;
   for (const template of rotated) {

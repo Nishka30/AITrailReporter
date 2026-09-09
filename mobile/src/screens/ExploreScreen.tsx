@@ -210,11 +210,12 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
   // tab re-entry) show the inline "Checking where you are…" state instead.
   const { pulling, onPull } = usePullToRefresh(refresh);
 
-  // Only FRESH place questions belong on Explore. Stale ones are a request to
-  // re-check something already reported, which is the Questions tab's job --
-  // see GuidePlaceQuestions.researchStale.
-  const freshPlaceQuestions =
-    placeQuestions && !placeQuestions.researchStale ? placeQuestions.questions : [];
+  // Every place question belongs on Explore -- this is the tab about where the
+  // guide is, and it should never lose that section just because the research
+  // behind it is due a refresh. The Questions tab additionally surfaces the
+  // stale ones as a re-check ask (see GuidePlaceQuestions.researchStale); that
+  // is a second, differently-framed job, not a reason to remove them here.
+  const freshPlaceQuestions = placeQuestions?.questions ?? [];
 
   // Real, sourced invitations already exist for this exact spot — the
   // generic rotating deck below would only repeat the place's name into a
