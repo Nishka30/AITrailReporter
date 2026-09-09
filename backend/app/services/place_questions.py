@@ -11,7 +11,7 @@ systems answer different questions:
 
 THE THREE-SOURCE CHAIN THIS ORCHESTRATES
 
-    OpenStreetMap  ->  what physically exists here, and where
+    Google Places  ->  what physically exists here, and where
     Perplexity     ->  what the web actually says about that named thing
     Claude         ->  which of those details a person here could check
 
@@ -50,7 +50,7 @@ from app.services.place_question_research import (
     research_plan,
     validation,
 )
-from app.services.poi_discovery_research import osm_provider
+from app.services.places.google_provider import get_place_provider
 from app.services.research import perplexity_provider
 from app.services.research.base import ResearchFinding, ResearchProviderError
 
@@ -167,7 +167,7 @@ def _resolve_locality(db: Session, location: Location) -> str | None:
     """
     if location.locality:
         return location.locality
-    locality = osm_provider.reverse_geocode_locality(
+    locality = get_place_provider().reverse_geocode_locality(
         float(location.latitude), float(location.longitude)
     )
     if locality:
@@ -247,6 +247,19 @@ def _persist_questions(
     exists from a previous batch, so a refresh never fails on a repeat.
     """
     batch_id = uuid.uuid4()
+
+    # Nothing usable came back. Keep the existing set exactly as it is rather
+    # than retiring it for a replacement that does not exist: those questions
+    # are still the best thing we have to ask about this place, and a guide
+    # standing there can still confirm whether they hold. Wiping them would
+    # turn "our information has aged" into "we have no information", which is
+    # strictly worse and not what the run discovered.
+    if not researched:
+        logger.info(
+            "Research for %s produced no usable questions -- keeping the existing set.",
+            location_id,
+        )
+        return 0
 
     existing_by_key = {
         q.normalized_text: q
@@ -420,6 +433,8 @@ def ensure_researched(db: Session, location_id: UUID, force: bool = False) -> Pl
             locality,
             findings,
             _previously_asked(db, location_id),
+            location.category,
+            location.subcategory,
         )
         researched = validation.validate_research_output(raw, allowed_urls)
     except (

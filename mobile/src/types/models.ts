@@ -246,6 +246,9 @@ export interface LocalCapture {
   occurredAt: string | null;
   occurredAtPrecision: DatePrecision;
   dateSource: DateSource;
+  /** A Google Place ID, only set alongside locationSource 'user_selected' --
+   * see CaptureProvenanceInput in repositories/captureRepository.ts. */
+  externalPlaceId: string | null;
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;

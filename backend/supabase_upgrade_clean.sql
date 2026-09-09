@@ -229,5 +229,31 @@ ALTER TABLE observations ADD COLUMN location_evidence TEXT;
 
 UPDATE alembic_version SET version_num='a4d9e6c1f708' WHERE alembic_version.version_num = 'e7a2c5f81b60';
 
+-- Running upgrade a4d9e6c1f708 -> 481faa86f41c (Google Places provider fields, replacing OSM)
+
+ALTER TABLE locations ADD COLUMN provider VARCHAR(30);
+
+ALTER TABLE locations ADD COLUMN external_place_id VARCHAR(255);
+
+ALTER TABLE locations ADD COLUMN google_primary_type VARCHAR(100);
+
+ALTER TABLE locations ADD COLUMN google_types JSONB;
+
+ALTER TABLE locations ADD COLUMN category VARCHAR(50);
+
+ALTER TABLE locations ADD COLUMN subcategory VARCHAR(50);
+
+ALTER TABLE locations ADD COLUMN formatted_address VARCHAR(500);
+
+UPDATE locations SET provider = 'openstreetmap' WHERE source = 'discovered' AND provider IS NULL;
+
+ALTER TABLE locations ADD CONSTRAINT uq_locations_provider_external_place_id UNIQUE (provider, external_place_id);
+
+CREATE INDEX ix_locations_name_trgm ON locations USING gin (name gin_trgm_ops);
+
+ALTER TABLE submissions ADD COLUMN external_place_id VARCHAR(255);
+
+UPDATE alembic_version SET version_num='481faa86f41c' WHERE alembic_version.version_num = 'a4d9e6c1f708';
+
 COMMIT;
 

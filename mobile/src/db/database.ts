@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 10;
+const DATABASE_VERSION = 11;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -398,7 +398,19 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 10;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 10) { ...; currentDbVersion = 11; }`
+  if (currentDbVersion === 10) {
+    // v10 -> v11: carries a Google Place ID through sync when a guide picks
+    // a place via the existing place-search/autocomplete feature, so the
+    // backend can resolve/create that exact Location by id instead of only
+    // spatial proximity (see backend Submission.external_place_id). Only
+    // ever set alongside location_source = 'user_selected'.
+    await db.execAsync(`
+      ALTER TABLE local_capture ADD COLUMN external_place_id TEXT;
+    `);
+    currentDbVersion = 11;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 11) { ...; currentDbVersion = 12; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

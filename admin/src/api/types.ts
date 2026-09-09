@@ -168,6 +168,9 @@ export type PlaceSummary = {
   name: string;
   latitude: number;
   longitude: number;
+  category: string | null;
+  subcategory: string | null;
+  source: string;
   nearby_observation_count: number;
   pending_review_count: number;
   approved_count: number;
@@ -179,6 +182,13 @@ export type PlaceDetail = {
   description: string | null;
   latitude: number;
   longitude: number;
+  category: string | null;
+  subcategory: string | null;
+  source: string;
+  provider: string | null;
+  external_place_id: string | null;
+  formatted_address: string | null;
+  created_at: string;
   recent_observations: ReviewQueueItem[];
 };
 

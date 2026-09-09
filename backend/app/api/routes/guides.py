@@ -5,8 +5,9 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import SessionLocal, get_db
-from app.schemas.geographic_context import GuideContext
+from app.schemas.geographic_context import GuideContext, NearestKnownPlace
 from app.schemas.guide import GuideCreate, GuideRead, GuideUpdate
 from app.schemas.guide_location import NearbyGuideResult
 from app.schemas.knowledge_decision import KnowledgeDecisionResult
@@ -15,7 +16,6 @@ from app.schemas.place_question import GuidePlaceQuestions, PlaceQuestionRead
 from app.schemas.place_search import PlaceSearchResponse, PlaceSearchResult
 from app.schemas.question import QuestionRead
 from app.schemas.reward import GuideRewardSummary
-from app.services import geocoding as geocoding_service
 from app.services import geographic_context as geographic_context_service
 from app.services import guide_locations as guide_location_service
 from app.services import guides as guide_service
@@ -25,6 +25,8 @@ from app.services import place_questions as place_question_service
 from app.services import poi_discovery as poi_discovery_service
 from app.services import questions as question_service
 from app.services import rewards as reward_service
+from app.services.places.base import PlaceProviderError
+from app.services.places.google_provider import get_place_provider
 
 router = APIRouter(prefix="/api/v1/guides", tags=["guides"])
 
@@ -48,12 +50,45 @@ router = APIRouter(prefix="/api/v1/guides", tags=["guides"])
 # operate on a dead connection.
 
 
-def _discover_places_job(latitude: float, longitude: float) -> None:
-    db = SessionLocal()
-    try:
-        poi_discovery_service.maybe_ensure_discovered(db, latitude, longitude)
-    finally:
-        db.close()
+def _resolve_position_place(
+    db: Session, latitude: float, longitude: float
+) -> NearestKnownPlace | None:
+    """Where the guide is, right now, as a real named place -- shared by the
+    two endpoints that answer that question.
+
+    Order matters, and reflects what each source can honestly claim:
+
+    1. A POI TrailMind already knows within the (tight) context radius -- the
+       guide is genuinely standing at a specific place.
+    2. Failing that, discover POIs here via Google and look again, so a new
+       part of the map gets its places on the FIRST visit rather than a later
+       one.
+    3. Failing that, the named area the coordinate is inside (reverse
+       geocode). Not a fallback in the apologetic sense -- outside dense
+       retail strips this is simply the truthful answer to "where am I", and
+       it is available essentially everywhere on land, which is what stops a
+       guide's position from being nameless.
+
+    Every step is best-effort and bounded; any of them failing just means the
+    next one runs, and all three failing means an honestly unknown position.
+    """
+    poi_discovery_service.maybe_ensure_discovered(
+        db, latitude, longitude, timeout=settings.google_places_inline_timeout_seconds
+    )
+    context = geographic_context_service.resolve_geographic_context(db, latitude, longitude)
+    if context.nearest_known_place is not None:
+        return context.nearest_known_place
+
+    area = poi_discovery_service.maybe_resolve_area_place(
+        db, latitude, longitude, timeout=settings.google_places_inline_timeout_seconds
+    )
+    if area is None:
+        return None
+    # Distance 0 is the literal truth here, not a placeholder: an area is a
+    # region the coordinate falls INSIDE, so there is no gap to report. (The
+    # stored row's own lat/lon is the area's centroid, which is a different
+    # thing and would be actively misleading to present as a distance.)
+    return NearestKnownPlace(id=area.id, name=area.name, distance_meters=0.0)
 
 
 def _research_place_questions_job(location_id: UUID) -> None:
@@ -125,7 +160,11 @@ def get_guide_context(guide_id: UUID, db: Session = Depends(get_db)):
 
     latitude = float(location.latitude)
     longitude = float(location.longitude)
-    context = geographic_context_service.resolve_geographic_context(db, latitude, longitude)
+    # Resolved NOW rather than only ever in the background on a LATER request,
+    # which is what used to leave a genuinely new spot nameless on the first
+    # "you're here" check. Inline, bounded and best-effort throughout -- see
+    # _resolve_position_place.
+    nearest_known_place = _resolve_position_place(db, latitude, longitude)
 
     return GuideContext(
         guide_id=guide.id,
@@ -134,7 +173,7 @@ def get_guide_context(guide_id: UUID, db: Session = Depends(get_db)):
         longitude=longitude,
         recorded_at=location.recorded_at,
         accuracy_meters=location.accuracy_meters,
-        nearest_known_place=context.nearest_known_place,
+        nearest_known_place=nearest_known_place,
     )
 
 
@@ -252,12 +291,14 @@ def get_guide_popular_questions(
     here never affects the priority queue.
 
     Resolves the guide's place with the EXISTING geographic-context rule
-    (nearest known Location within `geographic_context_radius_meters`,
-    unchanged), then best-effort refreshes research if it is stale. Never
-    404s on a missing location or an out-of-range position: those are ordinary
-    situations for a guide in the field, reported as an empty list with null
-    location fields so the app can say "we don't know where you are" rather
-    than showing questions about somewhere they aren't.
+    (nearest known Location within `geographic_context_radius_meters`), but
+    now identifies it INLINE via Google first if TrailMind doesn't already
+    know a place here -- see get_guide_context's matching comment. Then
+    best-effort refreshes research if it is stale. Never 404s on a missing
+    location or an out-of-range position: those are ordinary situations for a
+    guide in the field, reported as an empty list with null location fields so
+    the app can say "we don't know where you are" rather than showing
+    questions about somewhere they aren't.
     """
     guide = guide_service.get_guide(db, guide_id)
     if guide is None:
@@ -272,29 +313,24 @@ def get_guide_popular_questions(
         return empty
 
     latitude, longitude = float(location.latitude), float(location.longitude)
-    context = geographic_context_service.resolve_geographic_context(db, latitude, longitude)
-    place = context.nearest_known_place
+    # Same resolution the Explore hero uses, so questions are always about the
+    # place the app is telling the guide they are at -- never a different one.
+    # Cost-gated inside: a place resolved by /context moments earlier is a DB
+    # lookup here, not a second round of Google calls.
+    place = _resolve_position_place(db, latitude, longitude)
     if place is None:
-        # No known place within range. Historically this was simply the end of
-        # the road -- and with an empty `locations` table it was the end of the
-        # road EVERYWHERE, which is why production served nothing but generic
-        # prompts however good the research prompts were.
-        #
-        # Now it schedules discovery for this part of the map instead. This
-        # request still returns empty (honestly -- we genuinely don't know where
-        # they are yet), but the next one has real places to work with. Cached
-        # per grid cell, so a whole neighbourhood costs one run, not one per
-        # guide and not one per GPS reading.
-        background.add_task(_discover_places_job, latitude, longitude)
+        # Even a real, inline attempt just now could name nothing here (a
+        # Google outage, or mid-ocean) -- an honest empty result.
         return empty
 
     # Scheduled rather than awaited: research takes minutes and is cached for
     # 30 days afterwards, so blocking this request would stall the app for one
     # guide to benefit all the later ones. is_research_stale is re-checked
     # inside the job, so scheduling on every request costs nothing once fresh.
-    if place_question_service.is_research_stale(
+    research_stale = place_question_service.is_research_stale(
         place_question_service.get_research(db, place.id)
-    ):
+    )
+    if research_stale:
         background.add_task(_research_place_questions_job, place.id)
 
     questions = place_question_service.list_place_questions(db, place.id)
@@ -303,6 +339,7 @@ def get_guide_popular_questions(
         location_id=place.id,
         location_name=place.name,
         distance_meters=place.distance_meters,
+        research_stale=research_stale,
         questions=[
             PlaceQuestionRead(
                 id=q.id,
@@ -327,33 +364,49 @@ def get_guide_popular_questions(
 @router.get("/{guide_id}/place-search", response_model=PlaceSearchResponse)
 def search_places_for_guide(
     guide_id: UUID,
-    q: str = Query(min_length=1, max_length=200),
+    # Floor of 2 matches the mobile debounce's own minimum query length --
+    # Google's Text Search is billed per request, unlike the free Nominatim
+    # this replaced, so a 1-character floor would let any other caller
+    # generate cheap billed requests all day.
+    q: str = Query(min_length=2, max_length=200),
     db: Session = Depends(get_db),
 ):
     """Place-name autocomplete for describing a memory/old photo without
-    exact coordinates (see app/services/geocoding.py). Read-only and
-    stateless -- selecting a result is entirely a mobile-side concern; this
-    endpoint just answers "what real places could this guide mean?".
+    exact coordinates (see app/services/places/). Read-only and stateless --
+    selecting a result is entirely a mobile-side concern; this endpoint just
+    answers "what real places could this guide mean?".
 
     Biased (never restricted) toward wherever this guide has actually
-    recorded GPS history, so "pang" surfaces Pangong first for a guide with a
-    Ladakh trip in their history rather than an unrelated namesake elsewhere.
-    A guide with no location history yet gets an unbiased search -- never an
-    error, and never empty just because history doesn't exist.
+    recorded RECENT GPS history, so "pang" surfaces Pangong first for a guide
+    with a Ladakh trip in their history rather than an unrelated namesake
+    elsewhere. A guide with no recent location history gets an unbiased
+    search -- never an error, and never empty just because history doesn't
+    exist.
     """
     guide = guide_service.get_guide(db, guide_id)
     if guide is None:
         raise HTTPException(status_code=404, detail="Guide not found")
 
     bounding_box = guide_location_service.bounding_box_for_guide(db, guide_id)
+    bias = guide_location_service.bias_circle_for_bounding_box(bounding_box)
     try:
-        candidates = geocoding_service.search_places(q, bounding_box=bounding_box)
-    except geocoding_service.GeocodingProviderError as exc:
+        candidates = get_place_provider().search_places(
+            q,
+            bias_latitude=bias[0] if bias else None,
+            bias_longitude=bias[1] if bias else None,
+            bias_radius_meters=bias[2] if bias else None,
+        )
+    except PlaceProviderError as exc:
         raise HTTPException(status_code=503, detail=exc.message)
 
     return PlaceSearchResponse(
         results=[
-            PlaceSearchResult(label=c.label, latitude=c.latitude, longitude=c.longitude)
+            PlaceSearchResult(
+                label=c.label,
+                latitude=c.latitude,
+                longitude=c.longitude,
+                place_id=c.external_place_id,
+            )
             for c in candidates
         ]
     )

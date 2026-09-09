@@ -1,9 +1,9 @@
 """The ONLY file in this codebase that talks to Perplexity.
 
-Same isolation rule as every other provider here (Sarvam, Anthropic, Overpass):
-the SDK/wire format lives in exactly one module, and the rest of the system
-depends on the neutral contract in base.py. Swapping research providers is a
-one-file change.
+Same isolation rule as every other provider here (Sarvam, Anthropic, Google
+Places): the SDK/wire format lives in exactly one module, and the rest of the
+system depends on the neutral contract in base.py. Swapping research
+providers is a one-file change.
 
 WHAT PERPLEXITY IS FOR HERE
 Given a place this system ALREADY KNOWS EXISTS, find what people actually say
@@ -24,7 +24,7 @@ refusing.
 So the two capabilities are split by what each source can actually be trusted
 for, and the split is structural:
 
-    OpenStreetMap  ->  what is here, and exactly where     (poi_discovery_research/)
+    Google Places  ->  what is here, and exactly where     (services/places/)
     Perplexity     ->  what the web says about that thing  (this module)
     Claude         ->  what is worth asking a guide        (place_question_research/)
 

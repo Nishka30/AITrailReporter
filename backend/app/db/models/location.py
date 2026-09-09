@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from geoalchemy2 import Geography
-from sqlalchemy import DateTime, Index, Numeric, String, Text, func
+from sqlalchemy import DateTime, Index, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,6 +42,17 @@ class Location(Base):
         # Supports "has this discovery cell already produced places?" and
         # bulk review/cleanup of one discovery run.
         Index("ix_locations_discovery_cell_key", "discovery_cell_key"),
+        # An exact identity match is the strongest dedup signal there is: if
+        # this provider has already told us about this exact external id, it
+        # is the same place, full stop. Two columns (not just
+        # external_place_id alone) because the same raw id string could in
+        # principle exist under two different providers. Postgres's standard
+        # multi-column UNIQUE semantics mean any-NULL rows (every manual
+        # Location, and every discovered one predating this column) never
+        # collide with each other or with populated rows.
+        UniqueConstraint(
+            "provider", "external_place_id", name="uq_locations_provider_external_place_id"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -62,7 +73,8 @@ class Location(Base):
     place_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Where this place is, in words a search engine understands: "Koramangala,
     # Bengaluru, India". Resolved once by reverse geocoding and then reused
-    # forever (see poi_discovery_research/osm_provider.reverse_geocode_locality).
+    # forever (see app/services/places/google_provider.py's
+    # reverse_geocode_locality).
     #
     # NOT decoration. Web research for a place named "Ganesh Temple" returns
     # noise from every city on earth; the same research for "Ganesh Temple in
@@ -78,6 +90,34 @@ class Location(Base):
     # Which discovery grid cell produced this row. Lets one run be traced,
     # reviewed or reverted as a unit. Null for manually created rows.
     discovery_cell_key: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Which place-identification backend supplied this row: "openstreetmap"
+    # (legacy, backfilled onto pre-Google discovered rows), "google", or null
+    # for manual rows. A DIFFERENT thing from PoiDiscovery.provider, which
+    # records which backend a whole discovery RUN used -- this one records
+    # which backend identified THIS SPECIFIC place, since a place found via
+    # user-selected search never goes through a PoiDiscovery row at all.
+    provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # The provider's own stable id for this place (e.g. a Google Place ID).
+    # Paired with `provider` in a UNIQUE constraint below -- this is what lets
+    # "has this exact place already been discovered?" be answered exactly,
+    # not just approximately by distance.
+    external_place_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Google's own primary classification for this place (e.g. "cafe",
+    # "hindu_temple"). Preserved verbatim even though `category`/`subcategory`
+    # below are TrailMind's own vocabulary derived from it -- so
+    # classification can be improved later without re-fetching anything.
+    google_primary_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    google_types: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # TrailMind's OWN taxonomy (see app/services/places/categories.py),
+    # deterministically derived from google_primary_type/google_types/name.
+    # Never left null for a discovered row without a confident mapping --
+    # "Other"/"Other" is the honest fallback, not a missing value.
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    subcategory: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Google's formatted address string, kept for admin display -- NOT used
+    # as the locality passed into place research (see `locality` above, which
+    # is deliberately just neighbourhood+city, not a full postal address).
+    formatted_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

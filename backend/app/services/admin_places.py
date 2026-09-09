@@ -26,6 +26,9 @@ def list_places(db: Session) -> list[PlaceSummary]:
             Location.name,
             Location.latitude,
             Location.longitude,
+            Location.category,
+            Location.subcategory,
+            Location.source,
             func.count(Observation.id).label("nearby_count"),
             func.coalesce(
                 func.sum(case((ObservationModeration.status == "pending_review", 1), else_=0)), 0
@@ -39,7 +42,15 @@ def list_places(db: Session) -> list[PlaceSummary]:
             (Observation.geog.isnot(None)) & (func.ST_DWithin(Observation.geog, Location.geog, radius)),
         )
         .outerjoin(ObservationModeration, ObservationModeration.observation_id == Observation.id)
-        .group_by(Location.id, Location.name, Location.latitude, Location.longitude)
+        .group_by(
+            Location.id,
+            Location.name,
+            Location.latitude,
+            Location.longitude,
+            Location.category,
+            Location.subcategory,
+            Location.source,
+        )
         .order_by(Location.name)
     )
     rows = db.execute(stmt).all()
@@ -49,6 +60,9 @@ def list_places(db: Session) -> list[PlaceSummary]:
             name=row.name,
             latitude=float(row.latitude),
             longitude=float(row.longitude),
+            category=row.category,
+            subcategory=row.subcategory,
+            source=row.source,
             nearby_observation_count=row.nearby_count,
             pending_review_count=row.pending_count,
             approved_count=row.approved_count,
@@ -71,5 +85,12 @@ def get_place_detail(db: Session, location_id: UUID, limit: int = 25) -> PlaceDe
         description=location.description,
         latitude=float(location.latitude),
         longitude=float(location.longitude),
+        category=location.category,
+        subcategory=location.subcategory,
+        source=location.source,
+        provider=location.provider,
+        external_place_id=location.external_place_id,
+        formatted_address=location.formatted_address,
+        created_at=location.created_at,
         recent_observations=result.items,
     )

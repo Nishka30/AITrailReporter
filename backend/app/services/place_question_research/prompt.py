@@ -153,6 +153,8 @@ def build_user_message(
     locality: str | None,
     findings: list,
     already_asked: list[str],
+    category: str | None = None,
+    subcategory: str | None = None,
 ) -> str:
     """Assembles the reasoning input.
 
@@ -168,6 +170,14 @@ def build_user_message(
     ]
     if locality:
         lines.append(f"Locality: {locality}")
+    # Additive: TrailMind's own category/subcategory (see
+    # app/services/places/categories.py), when this place was discovered via
+    # Google Places. Helps the model ask something shaped right for a bridge
+    # vs a cafe vs a viewpoint, without changing anything else about this
+    # function's contract.
+    if category:
+        category_line = f"Category: {category} / {subcategory}" if subcategory else f"Category: {category}"
+        lines.append(category_line)
     if description:
         lines.append(f"Known description: {description}")
 

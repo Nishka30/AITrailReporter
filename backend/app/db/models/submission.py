@@ -166,6 +166,15 @@ class Submission(Base):
     date_source: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=DEFAULT_DATE_SOURCE
     )
+    # A Google Place ID, ONLY when this submission's place came from the
+    # guide manually searching and picking one (location_source
+    # 'user_selected') via the place-search/autocomplete feature. Carries
+    # that exact identity through offline-first sync into extraction, where
+    # it lets Location resolution key on an exact id match rather than only
+    # spatial proximity (see extractions.py, poi_discovery.py's
+    # maybe_resolve_user_selected_place). Never set for any other
+    # location_source -- a live GPS reading has no such id to carry.
+    external_place_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     submission_type: Mapped[str] = mapped_column(String(100), nullable=False)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)

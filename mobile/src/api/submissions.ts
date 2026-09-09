@@ -42,6 +42,10 @@ export interface CreateSubmissionRequest {
   occurredAt?: string | null;
   occurredAtPrecision?: DatePrecision;
   dateSource?: DateSource;
+  /** A Google Place ID, only when locationSource is 'user_selected' (the
+   * guide picked this place via PlaceAutocomplete). See backend
+   * Submission.external_place_id. */
+  externalPlaceId?: string | null;
 }
 
 export interface SubmissionAudioResponse {
@@ -164,6 +168,7 @@ export async function createOrGetSubmission(
       occurred_at: req.occurredAt ?? null,
       occurred_at_precision: req.occurredAtPrecision ?? null,
       date_source: req.dateSource ?? null,
+      external_place_id: req.externalPlaceId ?? null,
     },
   });
   return submissionFromWire(wire);

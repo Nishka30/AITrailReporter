@@ -210,11 +210,17 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
   // tab re-entry) show the inline "Checking where you are…" state instead.
   const { pulling, onPull } = usePullToRefresh(refresh);
 
+  // Only FRESH place questions belong on Explore. Stale ones are a request to
+  // re-check something already reported, which is the Questions tab's job --
+  // see GuidePlaceQuestions.researchStale.
+  const freshPlaceQuestions =
+    placeQuestions && !placeQuestions.researchStale ? placeQuestions.questions : [];
+
   // Real, sourced invitations already exist for this exact spot — the
   // generic rotating deck below would only repeat the place's name into a
   // fixed sentence, which is the "not really contextual" problem this flag
   // exists to fix. See buildPrompts' doc comment.
-  const hasResearchedPlaceContent = (placeQuestions?.questions.length ?? 0) > 0;
+  const hasResearchedPlaceContent = freshPlaceQuestions.length > 0;
   const prompts = buildPrompts(context, knowledgeStates, hasResearchedPlaceContent);
   const place = context?.nearestKnownPlace;
 
@@ -302,19 +308,31 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
         </View>
       ) : null}
 
-      {/* Location-specific invitations go FIRST, above even the free-form path
-          — "we noticed exactly where you are" is the most contextual, most
-          exciting thing this tab can say, and it should read that way. Each
-          card already carries its own real, backend-resolved reward (see
-          placeQuestionToExplorePrompt) rather than the generic estimate below. */}
-      {placeQuestions && placeQuestions.questions.length > 0 ? (
+      {/* ── 1. ABOUT THIS PLACE ────────────────────────────────────────────
+          Researched questions about the exact place the guide is standing in,
+          first because it is the only thing here that could not have been
+          written without knowing where they are.
+
+          Fresh questions ONLY. Ones whose research has gone stale are a
+          different job -- re-checking something we were told once, rather
+          than describing a place for the first time -- and they live on the
+          Questions tab, where verifying belongs. Mixing the two made this
+          tab read as an undifferentiated pile of asks. */}
+      {freshPlaceQuestions.length > 0 ? (
         <>
           <SectionHeader
-            title={placeQuestions.locationName ? `You're at ${placeQuestions.locationName}` : "You're here"}
-            meta="Tell us what you're seeing"
+            title={
+              placeQuestions?.locationName
+                ? `About ${placeQuestions.locationName}`
+                : 'About this place'
+            }
+            meta={`${freshPlaceQuestions.length} question${freshPlaceQuestions.length === 1 ? '' : 's'}`}
           />
-          {placeQuestions.questions.map((q) => {
-            const prompt = placeQuestionToExplorePrompt(q, placeQuestions.locationName);
+          <Text style={styles.sectionIntro}>
+            Specific to where you are right now — nobody else can answer these for you.
+          </Text>
+          {freshPlaceQuestions.map((q) => {
+            const prompt = placeQuestionToExplorePrompt(q, placeQuestions?.locationName ?? null);
             return (
               <PromptCard
                 key={prompt.id}
@@ -327,9 +345,45 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
         </>
       ) : null}
 
-      {/* Free-form path is permanent and always available — a guide must never
-          have to wait for the right card to appear to report something. */}
-      <SectionHeader title="In your own words" />
+      {/* ── 2. GENERAL IDEAS ───────────────────────────────────────────────
+          The device-built rotating deck. Second because it is generic by
+          construction: useful, but true of anywhere. Labelled so the guide
+          can tell at a glance that these are suggestions rather than
+          questions somebody is actually waiting on. */}
+      {prompts.length > 0 ? (
+        <>
+          <SectionHeader title="General ideas" meta={context && place ? place.name : undefined} />
+          <Text style={styles.sectionIntro}>
+            Everyday things worth reporting from anywhere on your route.
+          </Text>
+          {prompts.map((prompt) => (
+            <PromptCard
+              key={prompt.id}
+              prompt={prompt}
+              rewardPoints={rewardForPrompt(prompt)}
+              onPress={() => onStartContribution(prompt)}
+            />
+          ))}
+        </>
+      ) : loaded && !error && freshPlaceQuestions.length === 0 ? (
+        <View style={styles.emptyWrap}>
+          <EmptyState
+            icon="compass-outline"
+            title="Nothing to suggest yet"
+            message="You can still tell us anything you've noticed — the options below always work."
+          />
+        </View>
+      ) : null}
+
+      {/* ── 3. ANYTHING ELSE ───────────────────────────────────────────────
+          Deliberately LAST. These two are always available and never change,
+          so they are the floor of the screen rather than something competing
+          with the contextual asks above -- a guide who has read past every
+          question and still has something to say lands exactly here. */}
+      <SectionHeader title="Anything else?" />
+      <Text style={styles.sectionIntro}>
+        Not covered above? These are always open.
+      </Text>
       <Pressable
         onPress={() => onStartContribution(FREE_FORM_PROMPT)}
         accessibilityRole="button"
@@ -348,10 +402,9 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
         <Ionicons name="arrow-forward" size={18} color={colors.paper} />
       </Pressable>
 
-      {/* Also permanent and always available, and deliberately using the SAME
-          visual treatment as "Share anything" above — a memory is the same
-          kind of proactive, no-prompt-needed contribution, just one that
-          might be about a different time and place than right now (see
+      {/* Same visual treatment as "Share anything" on purpose — a memory is
+          the same kind of proactive, no-prompt-needed contribution, just one
+          that might be about a different time and place than right now (see
           MemoryContributeScreen for how location/date are figured out). */}
       <Pressable
         onPress={onStartMemory}
@@ -368,31 +421,6 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
         </View>
         <Ionicons name="arrow-forward" size={18} color={colors.paper} />
       </Pressable>
-
-      {prompts.length > 0 ? (
-        <>
-          <SectionHeader
-            title="Ideas for right here"
-            meta={context && place ? place.name : undefined}
-          />
-          {prompts.map((prompt) => (
-            <PromptCard
-              key={prompt.id}
-              prompt={prompt}
-              rewardPoints={rewardForPrompt(prompt)}
-              onPress={() => onStartContribution(prompt)}
-            />
-          ))}
-        </>
-      ) : loaded && !error ? (
-        <View style={styles.emptyWrap}>
-          <EmptyState
-            icon="compass-outline"
-            title="No suggestions right now"
-            message="You can still share anything you've noticed using the button above."
-          />
-        </View>
-      ) : null}
 
       <Text style={styles.footnote}>
         Everything you share is saved on this device first and sent when you sync.
@@ -429,6 +457,14 @@ const styles = StyleSheet.create({
   pendingRow: { flexDirection: 'row', marginBottom: spacing.xs },
   errorWrap: { marginVertical: spacing.sm },
   emptyWrap: { marginTop: spacing.lg },
+  // One line under each SectionHeader saying what that section IS. Explore
+  // now carries three kinds of ask, and without this they look interchangeable.
+  sectionIntro: {
+    ...type.small,
+    color: colors.inkFaint,
+    marginTop: -spacing.xs,
+    marginBottom: spacing.sm,
+  },
 
   freeForm: {
     flexDirection: 'row',

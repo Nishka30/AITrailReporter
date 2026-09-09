@@ -73,6 +73,7 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
   const [phone, setPhone] = useState(guide.phoneNumber ?? '');
   const [about, setAbout] = useState(guide.aboutText ?? '');
   const [photoUri, setPhotoUri] = useState<string | null>(guide.localPhotoUri);
+  const phoneCheck = validatePhoneNumber(phone);
 
   const [saving, setSaving] = useState(false);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
@@ -191,7 +192,6 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
       return;
     }
 
-    const phoneCheck = validatePhoneNumber(phone);
     if (!phoneCheck.valid) {
       setError(phoneCheck.message);
       return;
@@ -372,7 +372,7 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
         <Text style={styles.fieldLabel}>Phone number</Text>
         <TextInput
           style={styles.input}
-          placeholder="e.g. +91 98765 43210"
+          placeholder="98765 43210"
           placeholderTextColor={colors.inkFaint}
           value={phone}
           onChangeText={(v) => {
@@ -383,9 +383,13 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
           keyboardType="phone-pad"
           maxLength={32}
         />
-        <Text style={styles.fieldHint}>
-          Shared with the TrailMind team so they can reach you about your reports.
-        </Text>
+        {phone.trim() && !phoneCheck.valid ? (
+          <Text style={styles.fieldHintWarn}>{phoneCheck.message}</Text>
+        ) : (
+          <Text style={styles.fieldHint}>
+            10-digit mobile number, shared with the TrailMind team so they can reach you.
+          </Text>
+        )}
 
         <View style={styles.aboutLabelRow}>
           <Text style={styles.fieldLabel}>About you</Text>
@@ -539,6 +543,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   fieldHint: { ...type.caption, color: colors.inkFaint, marginTop: 5, marginBottom: spacing.md },
+  fieldHintWarn: { ...type.caption, color: colors.fix, marginTop: 5, marginBottom: spacing.md },
 
   aboutLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   optionalTag: {

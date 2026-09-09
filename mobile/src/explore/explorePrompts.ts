@@ -208,16 +208,17 @@ function describeGap(state: KnowledgeTypeState): string | null {
  *
  * `hasResearchedPlaceContent` (set when the backend's own place-question
  * research — see explore/placeQuestionPrompts.ts — has real, sourced
- * invitations for the guide's exact spot) SKIPS the rotating template deck
- * below. Those templates can only ever insert the place's NAME into a fixed
- * sentence ("What's the weather like at Hillary Bridge?") — they have no
- * actual knowledge of the place. That was a reasonable always-available
- * fallback before research existed; once real, sourced, place-specific
- * invitations ARE available for this exact spot, showing generic filler
- * alongside them is what makes Explore read as "not really contextual" even
- * though a good card is right there. The grounded gap prompts above are
- * UNAFFECTED by this flag — they come from real backend knowledge state, not
- * a template, and stay regardless.
+ * invitations for the guide's exact spot) TRIMS the rotating template deck
+ * below rather than removing it. Those templates can only ever insert the
+ * place's NAME into a fixed sentence ("What's the weather like at Hillary
+ * Bridge?") — they have no actual knowledge of the place, so when genuinely
+ * researched questions exist they should not be competing for the same
+ * attention at the same length. Explore now shows the two in separate,
+ * labelled sections, so the honest handling is a shorter generic list, not an
+ * absent one: a guide who has answered the researched questions still needs
+ * somewhere to go. The grounded gap prompts above are UNAFFECTED by this flag
+ * — they come from real backend knowledge state, not a template, and stay
+ * regardless.
  */
 export function buildPrompts(
   context: GuideContext | null,
@@ -260,17 +261,31 @@ export function buildPrompts(
     });
   }
 
-  // 2. Open discovery prompts, rotated deterministically. Skipped entirely
-  //    when real researched content already exists for this exact spot — see
-  //    the flag's doc comment above.
+  // 2. Open discovery prompts, rotated deterministically.
+  //
+  //    These used to be dropped ENTIRELY whenever researched content existed
+  //    for the spot, which was right when both kinds were interleaved in one
+  //    list: a generic "tell us a story about here" sitting directly beneath
+  //    "Is Aaharam open now?" reads as filler padding out real questions.
+  //
+  //    They are now in their own labelled section, so that reason is gone --
+  //    and deleting them cost real prompts ("tell us a story" among them) at
+  //    exactly the places we know most about. Trimmed rather than dropped:
+  //    the researched questions are the headline and should stay the longer
+  //    list, but a guide who has answered them, or who simply doesn't want
+  //    to, must still have somewhere to go.
   const seed = rotationSeed(context);
   const offset = ((seed % TEMPLATES.length) + TEMPLATES.length) % TEMPLATES.length;
-  const rotated = hasResearchedPlaceContent ? [] : [...TEMPLATES.slice(offset), ...TEMPLATES.slice(0, offset)];
+  const rotated = [...TEMPLATES.slice(offset), ...TEMPLATES.slice(0, offset)];
+  const genericLimit = hasResearchedPlaceContent ? 3 : TEMPLATES.length;
 
+  let genericCount = 0;
   for (const template of rotated) {
+    if (genericCount >= genericLimit) break;
     // Skip a generic 'conditions' card when grounded gap cards already asked
     // about conditions — otherwise the deck repeats itself.
     if (template.kind === 'conditions' && gaps.length > 0) continue;
+    genericCount += 1;
     prompts.push({
       id: `open:${template.kind}`,
       kind: template.kind,

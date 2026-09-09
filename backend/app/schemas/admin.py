@@ -128,6 +128,9 @@ class PlaceSummary(BaseModel):
     name: str
     latitude: float
     longitude: float
+    category: str | None
+    subcategory: str | None
+    source: str
     nearby_observation_count: int
     pending_review_count: int
     approved_count: int
@@ -139,6 +142,13 @@ class PlaceDetail(BaseModel):
     description: str | None
     latitude: float
     longitude: float
+    category: str | None
+    subcategory: str | None
+    source: str
+    provider: str | None
+    external_place_id: str | None
+    formatted_address: str | None
+    created_at: datetime
     recent_observations: list[ReviewQueueItem]
 
 

@@ -155,6 +155,7 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
       locationLabel: place.label,
       locationAccuracyMeters: null,
       locationCapturedAt: null,
+      externalPlaceId: place.placeId,
     }));
   }
 

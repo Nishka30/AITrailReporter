@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+import math
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -172,29 +173,75 @@ def list_locations(
     return list(db.execute(stmt).scalars().all())
 
 
-def bounding_box_for_guide(db: Session, guide_id: UUID) -> tuple[float, float, float, float] | None:
+def bounding_box_for_guide(
+    db: Session, guide_id: UUID, *, since_days: int | None = 30
+) -> tuple[float, float, float, float] | None:
     """The (min_lat, min_lon, max_lat, max_lon) extent of a guide's own
-    recorded GPS history, or None if they have none.
+    recorded GPS history, or None if they have none in the window.
 
     Used ONLY to bias place-autocomplete search results (see
-    app/services/geocoding.py) toward where this guide has actually been --
+    app/services/places/) toward where this guide has actually been --
     typing "pang" after a Ladakh trip should surface Pangong before some
-    unrelated "Pang" on the other side of the world. This is a SOFT bias
-    (Nominatim's `bounded=0`), never a hard filter: a guide is always allowed
-    to describe a memory from somewhere they've never recorded a GPS ping.
+    unrelated "Pang" on the other side of the world. This is a SOFT bias,
+    never a hard filter: a guide is always allowed to describe a memory from
+    somewhere they've never recorded a GPS ping.
+
+    `since_days` (default 30) restricts this to RECENT history rather than
+    all-time. A guide with two geographically disjoint trips (say, Bengaluru
+    months ago and Ladakh now) would otherwise get a bounding box spanning
+    both -- its midpoint biases search toward neither real place, which is
+    worse than no bias at all. Pass None for all-time (used by callers that
+    genuinely want the full history extent, if any emerge later).
     """
-    row = db.execute(
-        select(
-            func.min(GuideLocation.latitude),
-            func.min(GuideLocation.longitude),
-            func.max(GuideLocation.latitude),
-            func.max(GuideLocation.longitude),
-        ).where(GuideLocation.guide_id == guide_id)
-    ).one()
+    stmt = select(
+        func.min(GuideLocation.latitude),
+        func.min(GuideLocation.longitude),
+        func.max(GuideLocation.latitude),
+        func.max(GuideLocation.longitude),
+    ).where(GuideLocation.guide_id == guide_id)
+    if since_days is not None:
+        stmt = stmt.where(GuideLocation.recorded_at >= datetime.now(timezone.utc) - timedelta(days=since_days))
+    row = db.execute(stmt).one()
     min_lat, min_lon, max_lat, max_lon = row
     if min_lat is None:
         return None
     return float(min_lat), float(min_lon), float(max_lat), float(max_lon)
+
+
+def _haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    earth_radius_m = 6_371_000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+    a = math.sin(d_phi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(d_lambda / 2) ** 2
+    return 2 * earth_radius_m * math.asin(math.sqrt(a))
+
+
+def bias_circle_for_bounding_box(
+    bounding_box: tuple[float, float, float, float] | None, *, max_radius_meters: float = 50_000.0
+) -> tuple[float, float, float] | None:
+    """Converts a (min_lat, min_lon, max_lat, max_lon) extent into a
+    (center_lat, center_lon, radius_meters) circle, for Google's
+    locationBias.circle shape (which has no native bounding-box form, unlike
+    Nominatim's viewbox). Radius is the distance to the box's farthest
+    corner, capped at `max_radius_meters` (Google's own Nearby/Text Search
+    hard limit)."""
+    if bounding_box is None:
+        return None
+    min_lat, min_lon, max_lat, max_lon = bounding_box
+    center_lat = (min_lat + max_lat) / 2
+    center_lon = (min_lon + max_lon) / 2
+    radius = max(
+        _haversine_meters(center_lat, center_lon, min_lat, min_lon),
+        _haversine_meters(center_lat, center_lon, min_lat, max_lon),
+        _haversine_meters(center_lat, center_lon, max_lat, min_lon),
+        _haversine_meters(center_lat, center_lon, max_lat, max_lon),
+    )
+    # A degenerate box (a guide with exactly one recorded point) collapses to
+    # zero radius, which Google's API rejects (radius must be > 0) -- floor
+    # it to a sensible minimum "somewhere near this one point" bias instead.
+    radius = max(radius, 500.0)
+    return center_lat, center_lon, min(radius, max_radius_meters)
 
 
 def find_nearby_guides(

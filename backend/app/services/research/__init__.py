@@ -7,8 +7,8 @@ callers supply a query and get a ResearchFinding.
 
 WHAT DOES NOT LIVE HERE: geographic discovery. Finding out what physically
 exists near a coordinate is a different problem with a different right answer
-(see app/services/poi_discovery_research/), and conflating the two is what
-produced the failure documented in perplexity_provider.py's header.
+(see app/services/places/), and conflating the two is what produced the
+failure documented in perplexity_provider.py's header.
 
     base.py                -- the contract every provider implements
     perplexity_provider.py -- the only file that talks to Perplexity

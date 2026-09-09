@@ -94,6 +94,8 @@ def generate_place_questions(
     locality: str | None,
     findings: list,
     already_asked: list[str],
+    category: str | None = None,
+    subcategory: str | None = None,
 ) -> dict:
     """Turns research findings into invitations.
 
@@ -120,6 +122,8 @@ def generate_place_questions(
                         locality,
                         findings,
                         already_asked,
+                        category,
+                        subcategory,
                     ),
                 }
             ],

@@ -225,6 +225,7 @@ function provenanceFields(capture: LocalCapture) {
     occurredAt: capture.occurredAt,
     occurredAtPrecision: capture.occurredAtPrecision,
     dateSource: capture.dateSource,
+    externalPlaceId: capture.externalPlaceId,
   };
 }
 

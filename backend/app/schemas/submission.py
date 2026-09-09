@@ -122,6 +122,10 @@ class SubmissionCreate(BaseModel):
     occurred_at: datetime | None = None
     occurred_at_precision: str | None = None
     date_source: str | None = None
+    # A Google Place ID, only when the guide picked this place via the
+    # place-search/autocomplete feature (location_source='user_selected').
+    # See app/db/models/submission.py's column comment.
+    external_place_id: str | None = Field(default=None, max_length=255)
 
     @field_validator("location_source")
     @classmethod

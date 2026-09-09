@@ -52,6 +52,7 @@ export default function SetupScreen({ onGuideCreated }: Props) {
   const [about, setAbout] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
+  const phoneCheck = validatePhoneNumber(phone);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +101,6 @@ export default function SetupScreen({ onGuideCreated }: Props) {
       setError('Please enter your name.');
       return;
     }
-    const phoneCheck = validatePhoneNumber(phone);
     if (!phoneCheck.valid) {
       setError(phoneCheck.message);
       return;
@@ -201,7 +201,7 @@ export default function SetupScreen({ onGuideCreated }: Props) {
         <Text style={[styles.fieldLabel, styles.fieldLabelSpaced]}>Phone number</Text>
         <TextInput
           style={styles.input}
-          placeholder="e.g. +91 98765 43210"
+          placeholder="98765 43210"
           placeholderTextColor={colors.inkFaint}
           value={phone}
           onChangeText={setPhone}
@@ -209,7 +209,16 @@ export default function SetupScreen({ onGuideCreated }: Props) {
           maxLength={32}
           editable={!saving}
         />
-        <Text style={styles.fieldHint}>So the team can reach you about your reports.</Text>
+        {/* Live, but only once they have actually started typing -- an error
+            shown against an untouched field reads as being told off before
+            doing anything wrong. */}
+        {phone.trim() && !phoneCheck.valid ? (
+          <Text style={styles.fieldHintWarn}>{phoneCheck.message}</Text>
+        ) : (
+          <Text style={styles.fieldHint}>
+            10-digit mobile number, so the team can reach you about your reports.
+          </Text>
+        )}
 
         {/* Collapsed by default — deliberately one tap away rather than a third
             field to scroll past. It can equally be filled in later. */}
@@ -325,6 +334,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   fieldHint: { ...type.caption, color: colors.inkFaint, marginTop: 5, marginBottom: spacing.md },
+  fieldHintWarn: { ...type.caption, color: colors.fix, marginTop: 5, marginBottom: spacing.md },
 
   aboutLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   optionalTag: { ...type.caption, color: colors.inkFaint, opacity: 0.8, marginBottom: spacing.xs },

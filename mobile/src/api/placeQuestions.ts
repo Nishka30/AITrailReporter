@@ -44,15 +44,24 @@ export interface PlaceQuestion {
   rewardPoints: number;
 }
 
-/** What the Questions tab shows under "Popular questions about this place".
- * `locationName` is null when the guide has no recorded location or isn't near
- * a known place — in which case `questions` is empty and the UI says so
- * plainly rather than showing questions about somewhere they aren't. */
+/** The place questions for wherever the guide currently is. `locationName` is
+ * null when the guide has no recorded location or nowhere could be named — in
+ * which case `questions` is empty and the UI says so plainly rather than
+ * showing questions about somewhere they aren't. */
 export interface GuidePlaceQuestions {
   locationId: string | null;
   locationName: string | null;
   distanceMeters: number | null;
   questions: PlaceQuestion[];
+  /** Whether this place's research is due for a refresh — which decides WHICH
+   * SCREEN these questions belong on, not whether they are shown at all:
+   *
+   *   false -> Explore   "tell us about this place"  (contribute)
+   *   true  -> Questions "is this still true?"       (verify)
+   *
+   * The backend schedules a re-research whenever this is true, so a question
+   * returns to Explore by itself once it has been refreshed. */
+  researchStale: boolean;
 }
 
 interface PlaceQuestionWire {
@@ -72,6 +81,7 @@ interface GuidePlaceQuestionsWire {
   location_name: string | null;
   distance_meters: number | null;
   questions: PlaceQuestionWire[];
+  research_stale?: boolean;
 }
 
 function placeQuestionFromWire(wire: PlaceQuestionWire): PlaceQuestion {
@@ -107,6 +117,10 @@ export async function listPopularQuestions(guideId: string): Promise<GuidePlaceQ
     locationName: wire.location_name,
     distanceMeters: wire.distance_meters,
     questions: wire.questions.map(placeQuestionFromWire),
+    // A backend predating the fresh/stale split omits the key; treating that
+    // as "fresh" keeps those questions on Explore, which is where they were
+    // shown before the split existed.
+    researchStale: wire.research_stale ?? false,
   };
 }
 

@@ -18,6 +18,7 @@ from app.services import guide_locations as guide_location_service
 from app.services import knowledge_types as knowledge_type_service
 from app.services import observation_moderation as observation_moderation_service
 from app.services import observations as observation_service
+from app.services import poi_discovery as poi_discovery_service
 from app.services import source_text as source_text_service
 from app.services.extraction.anthropic_provider import ExtractionProviderError, extract_observations
 from app.services.extraction.validation import (
@@ -289,6 +290,21 @@ def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]
     location_evidence = resolved[3] if resolved is not None else None
     nearest_known_place = None
     if coordinates is not None:
+        # Best-effort: give THIS extraction a chance at a freshly-discovered
+        # Location, not just a later one -- see poi_discovery.py's module
+        # docstring for why this is fast enough to run inline here now (no
+        # Claude judgement pass over candidates anymore, unlike the old
+        # OSM+Claude combo that genuinely needed backgrounding). Never
+        # blocks or fails the submission: coordinates and the contribution
+        # are preserved regardless of Google's outcome.
+        if location_source == "user_selected" and submission.external_place_id:
+            poi_discovery_service.maybe_resolve_user_selected_place(
+                db, submission.external_place_id, *coordinates
+            )
+        else:
+            poi_discovery_service.maybe_ensure_discovered(
+                db, *coordinates, timeout=settings.google_places_inline_timeout_seconds
+            )
         context = geographic_context_service.resolve_geographic_context(db, *coordinates)
         nearest_known_place = context.nearest_known_place
 

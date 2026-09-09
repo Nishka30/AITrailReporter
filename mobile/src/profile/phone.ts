@@ -1,34 +1,48 @@
 /**
  * Phone number handling for the guide profile (Step 17).
  *
- * DELIBERATELY MINIMAL. This app has no existing country/locale logic anywhere,
- * and the backend stores phone_number as a plain `String(32)` with no format
- * constraint of its own (see backend/app/db/models/guide.py). Inventing
- * country-code rules here would be a guess about users this project has not
- * defined, and would reject legitimate numbers from guides in regions the
- * assumption didn't cover — a much worse failure than accepting an unusual
- * format.
+ * Guides are Indian mobile users, so this validates against the Indian mobile
+ * numbering plan specifically: exactly 10 national digits, starting 6-9.
+ * A country code may be written or omitted -- +91, 91 and a leading 0 are all
+ * accepted and stripped before counting, because all three are things people
+ * genuinely type and none of them change the number.
  *
- * So the rules are only the ones that are true regardless of country:
- *   - it must contain enough digits to be a phone number at all
- *   - it must not contain characters no phone number uses
- *   - it must fit the backend's 32-character column
+ * The tighter rule earns its keep at the point of entry: a typo'd number is
+ * only discovered when somebody tries to call the guide about a report, long
+ * after the moment it could have been corrected. Catching a 9- or 11-digit
+ * number while they are still looking at the field is the entire point.
+ *
+ * The value is still STORED as typed (see normalizePhoneNumber) -- validation
+ * decides what to accept, not what to rewrite.
  */
 
-/** Characters that legitimately appear in internationally-written numbers. */
+/** Characters that legitimately appear in a written number. */
 const ALLOWED_PATTERN = /^[0-9+\-()\s.]+$/;
 
 /** Matches the backend's Guide.phone_number column width — validated here so
  * the guide is told immediately rather than by a failed sync much later. */
 const MAX_LENGTH = 32;
 
-const MIN_DIGITS = 6;
-const MAX_DIGITS = 15; // E.164's global maximum; safe as an upper bound anywhere.
+/** Indian mobile numbers are 10 digits and never start below 6. */
+const NATIONAL_DIGITS = 10;
+const VALID_FIRST_DIGIT = /^[6-9]/;
 
 export type PhoneValidation = { valid: true } | { valid: false; message: string };
 
 export function countDigits(value: string): number {
   return (value.match(/\d/g) ?? []).length;
+}
+
+/**
+ * The 10 national digits, with any country code or trunk prefix removed.
+ * Returns the digits as typed when nothing recognisable can be stripped, so
+ * the caller can report the real length back to the guide.
+ */
+export function nationalDigits(raw: string): string {
+  const digits = (raw.match(/\d/g) ?? []).join('');
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+  if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
+  return digits;
 }
 
 /**
@@ -49,12 +63,20 @@ export function validatePhoneNumber(raw: string): PhoneValidation {
       message: 'Phone number can only contain digits and + - ( ) or spaces.',
     };
   }
-  const digits = countDigits(value);
-  if (digits < MIN_DIGITS) {
-    return { valid: false, message: 'That does not look like a complete phone number.' };
+
+  const national = nationalDigits(value);
+  if (national.length !== NATIONAL_DIGITS) {
+    // Says which way they are wrong and by how much -- "enter 10 digits" alone
+    // leaves someone staring at a field they believe already has 10.
+    const diff = national.length - NATIONAL_DIGITS;
+    const detail =
+      diff < 0
+        ? `${national.length} so far, ${-diff} more to go`
+        : `that's ${national.length}`;
+    return { valid: false, message: `Enter the 10-digit mobile number (${detail}).` };
   }
-  if (digits > MAX_DIGITS) {
-    return { valid: false, message: 'That phone number has too many digits.' };
+  if (!VALID_FIRST_DIGIT.test(national)) {
+    return { valid: false, message: 'An Indian mobile number starts with 6, 7, 8 or 9.' };
   }
   return { valid: true };
 }

@@ -33,6 +33,12 @@ export default function PlacesPage() {
               <div className="flex items-center gap-2 font-heading font-bold text-ink">
                 <MapPin className="h-4 w-4 text-marigold" /> {place.name}
               </div>
+              {place.category ? (
+                <div className="mt-1 inline-block rounded-full bg-paper px-2 py-0.5 text-xs text-ink-soft">
+                  {place.category}
+                  {place.subcategory ? ` / ${place.subcategory}` : ''}
+                </div>
+              ) : null}
               <div className="mt-2 flex gap-4 text-sm text-ink-soft">
                 <span>{place.nearby_observation_count} nearby</span>
                 <span>{place.pending_review_count} pending</span>

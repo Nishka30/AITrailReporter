@@ -38,6 +38,7 @@ interface LocalCaptureRow {
   occurred_at: string | null;
   occurred_at_precision: string;
   date_source: string;
+  external_place_id: string | null;
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
@@ -61,6 +62,11 @@ export interface CaptureProvenanceInput {
   occurredAt?: string | null;
   occurredAtPrecision?: DatePrecision;
   dateSource?: DateSource;
+  /** A Google Place ID, ONLY when this capture's place came from the guide
+   * picking one via PlaceAutocomplete (locationSource: 'user_selected') --
+   * see MemoryContributeScreen.handleSelectPlace. Lets the backend resolve
+   * an exact Location by id instead of only spatial proximity. */
+  externalPlaceId?: string | null;
 }
 
 // Statuses eligible for a sync attempt: never-yet-sent, previously-failed
@@ -103,6 +109,7 @@ function mapRow(row: LocalCaptureRow): LocalCapture {
     occurredAt: row.occurred_at,
     occurredAtPrecision: row.occurred_at_precision as DatePrecision,
     dateSource: row.date_source as DateSource,
+    externalPlaceId: row.external_place_id,
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
@@ -267,10 +274,10 @@ async function insertExploreLikeCapture(
         place_question_id, reward_points,
         latitude, longitude, location_source, location_accuracy_meters,
         location_captured_at, location_label, location_evidence,
-        occurred_at, occurred_at_precision, date_source,
+        occurred_at, occurred_at_precision, date_source, external_place_id,
         sync_status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              'pending', ?, ?)`,
     localGuideId,
     clientSubmissionId,
@@ -297,6 +304,7 @@ async function insertExploreLikeCapture(
     options.occurredAt ?? null,
     options.occurredAtPrecision ?? 'unknown',
     options.dateSource ?? 'unknown',
+    options.externalPlaceId ?? null,
     now,
     now
   );

@@ -137,29 +137,37 @@ class Settings(BaseSettings):
     # choices to make rather than rubber-stamping whatever came back first.
     poi_discovery_candidate_limit: int = 40
 
-    # --- OpenStreetMap ----------------------------------------------------
-    # Overpass supplies the FACTS for discovery: what named places exist and
-    # exactly where. Coordinates never come from a language model, which is
-    # what makes an invented landmark structurally impossible rather than
-    # merely discouraged (see services/poi_discovery_research/osm_provider.py).
+    # --- Google Places (app/services/places/) ------------------------------
+    # Replaces OpenStreetMap/Nominatim as the place-identification layer:
+    # Nearby Search supplies discovery candidates, Text Search backs the
+    # place-autocomplete feature, and the classic Geocoding API supplies
+    # locality naming. Coordinates for a DISCOVERED place still never come
+    # from a language model -- Google's Places responses are the facts, same
+    # role OSM played before; only the source of facts changed.
     #
-    # Free and keyless, but a donated service: this project sends one request
-    # per grid cell and caches the result for poi_discovery_refresh_days.
-    # Overridable so a self-hosted or commercial Overpass instance can be used
-    # without a code change.
-    osm_overpass_url: str = "https://overpass-api.de/api/interpreter"
-    osm_request_timeout_seconds: float = 60.0
-    # Reverse geocoding, used only to name the locality a place sits in
-    # ("Koramangala, Bengaluru"). That name matters more than it looks: web
-    # research for "Ganesh Temple" alone is hopeless, while the same query with
-    # its locality attached returns the right temple. One call per place, then
-    # stored on the Location forever.
-    osm_nominatim_url: str = "https://nominatim.openstreetmap.org/reverse"
-    # Forward geocoding ("Kedarnath" -> coordinates), for the place-autocomplete
-    # feature. A separate URL/setting from the reverse endpoint above because
-    # Nominatim exposes them as distinct paths and a self-hosted deployment
-    # could reasonably run one without the other.
-    osm_nominatim_search_url: str = "https://nominatim.openstreetmap.org/search"
+    # Backend-only, exactly like the Anthropic/Sarvam/Perplexity keys above --
+    # never sent to, or read by, the mobile app. `None` is a valid local-dev
+    # state: discovery/search report a clean failure rather than crashing at
+    # import time.
+    google_maps_api_key: str | None = None
+    # Timeout for the backgroundable paths (nearby-search discovery from
+    # /popular-questions, place-search autocomplete) where a slow response
+    # just delays a refresh, not a guide's own request.
+    google_places_request_timeout_seconds: float = 20.0
+    # A SEPARATE, much shorter timeout for the discovery/resolve call made
+    # inline during extraction (see extractions.py) -- that call sits in the
+    # critical path of a guide's own request, so its worst case must not
+    # import the full 20s above on top of the LLM extraction call's own
+    # budget. A slow Google response there should degrade gracefully within a
+    # tight window, not compound the request's total latency.
+    google_places_inline_timeout_seconds: float = 5.0
+    # Postgres pg_trgm similarity threshold (0-1) for the dedup name-match
+    # check: two places within poi_discovery_dedup_radius_meters of each
+    # other are only treated as the SAME place if their names are at least
+    # this similar. Below it, they're kept as distinct Locations -- this is
+    # what lets "Tea Stall A" and "Tea Stall B" 40m apart both survive rather
+    # than being merged just for being close. See poi_discovery.py.
+    google_places_name_similarity_threshold: float = 0.45
 
     # How far apart (in hours) a GuideLocation sample may be from a
     # submission's occurred_at and still be trusted as that submission's

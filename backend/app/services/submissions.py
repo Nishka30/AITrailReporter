@@ -163,6 +163,7 @@ def create_or_get_submission(db: Session, data: SubmissionCreate) -> tuple[Submi
         location_captured_at=data.location_captured_at,
         location_label=data.location_label,
         location_evidence=data.location_evidence,
+        external_place_id=data.external_place_id,
         occurred_at=occurred_at,
         occurred_at_precision=occurred_at_precision,
         date_source=date_source,

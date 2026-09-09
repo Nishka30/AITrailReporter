@@ -62,16 +62,28 @@ class PlaceQuestionList(BaseModel):
 
 
 class GuidePlaceQuestions(BaseModel):
-    """What the mobile Questions tab reads for its 'Popular questions about
-    this place' section. `location_*` is null when the guide has no recorded
-    location, or when no known place is within range -- in which case
-    `questions` is empty and the app says so plainly rather than showing
-    questions about somewhere the guide isn't."""
+    """The place questions for wherever the guide currently is. `location_*` is
+    null when the guide has no recorded location, or when nowhere could be
+    named -- in which case `questions` is empty and the app says so plainly
+    rather than showing questions about somewhere the guide isn't."""
 
     location_id: UUID | None
     location_name: str | None
     distance_meters: float | None
     questions: list[PlaceQuestionRead]
+    # Whether this place's research is now due for a refresh, which is what
+    # decides WHERE the app shows these questions rather than whether it shows
+    # them at all. They are the same rows either way; what differs is what the
+    # guide is being asked to do with them:
+    #
+    #   fresh -> Explore  "tell us about this place"        (contribute)
+    #   stale -> Questions "is this still true?"            (verify)
+    #
+    # The split exists because those are different jobs with different mental
+    # states, and mixing them made Explore read as a pile of unrelated asks.
+    # A background refresh is already scheduled whenever this is true, so a
+    # question moves back to Explore on its own once re-researched.
+    research_stale: bool = False
 
 
 class PlaceQuestionAnswerCreate(BaseModel):

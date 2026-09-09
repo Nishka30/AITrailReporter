@@ -240,8 +240,12 @@ export default function QuestionsScreen({
 
   const needsAttention = questions?.filter((q) => q.assignment?.status !== 'completed') ?? [];
   const answered = questions?.filter((q) => q.assignment?.status === 'completed') ?? [];
-  const popularQuestions = popular?.questions ?? [];
-  const hasAnything = (questions?.length ?? 0) > 0 || popularQuestions.length > 0;
+  // Only questions whose research has gone STALE belong here: this tab is
+  // where a guide is asked to confirm whether something we were told before
+  // is still true. Fresh ones are an invitation to describe a place for the
+  // first time, which is Explore's job -- see GuidePlaceQuestions.researchStale.
+  const staleQuestions = popular?.researchStale ? popular.questions : [];
+  const hasAnything = (questions?.length ?? 0) > 0 || staleQuestions.length > 0;
 
   return (
     <Screen
@@ -252,7 +256,9 @@ export default function QuestionsScreen({
     >
       <View style={styles.header}>
         <Text style={styles.title}>Questions</Text>
-        <Text style={styles.subtitle}>Sent by the server when it needs a report from your area.</Text>
+        <Text style={styles.subtitle}>
+          Things the team is waiting on, plus anything near you that needs checking again.
+        </Text>
       </View>
 
       {!guide.serverGuideId ? (
@@ -289,14 +295,17 @@ export default function QuestionsScreen({
             </>
           ) : null}
 
-          {/* Popular questions come AFTER the priority queue, always — they
-              are a secondary source and must never displace it. They still
-              appear when the queue is empty, so a guide always has something
-              useful to contribute. */}
-          {popularQuestions.length > 0 ? (
+          {/* Stale place questions come AFTER the priority queue, always —
+              they are a secondary source and must never displace it. They
+              still appear when the queue is empty, so a guide always has
+              something useful to do. The framing is deliberately "is this
+              still true?" rather than "tell us about this place": what makes
+              these worth surfacing is precisely that the answer we hold has
+              aged, and only somebody standing there can settle it. */}
+          {staleQuestions.length > 0 ? (
             <View style={styles.popularSection}>
               <SectionHeader
-                title={popular?.locationName ? `You're near ${popular.locationName}` : "You're here"}
+                title="Still true?"
                 meta={
                   popular?.distanceMeters != null
                     ? `~${Math.round(popular.distanceMeters)}m away`
@@ -304,11 +313,12 @@ export default function QuestionsScreen({
                 }
               />
               <Text style={styles.popularIntro}>
-                Since you're right here, we'd love to know a bit more. Optional — answer any you
-                can right now.
+                {popular?.locationName
+                  ? `What we know about ${popular.locationName} is getting old. You're there now — a quick yes or no keeps it accurate for everyone else.`
+                  : "What we know about this place is getting old. You're there now — a quick yes or no keeps it accurate for everyone else."}
               </Text>
               <View style={styles.popularGroup}>
-                {popularQuestions.map((q) => (
+                {staleQuestions.map((q) => (
                   <PopularQuestionRow
                     key={q.id}
                     question={q}
