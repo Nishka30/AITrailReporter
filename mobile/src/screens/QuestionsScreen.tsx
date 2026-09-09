@@ -19,8 +19,9 @@ import {
 } from '../components/ui';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { listAnswersForGuide } from '../repositories/answerRepository';
+import { getAnsweredPlaceQuestionStatuses } from '../repositories/captureRepository';
 import { colors, radii, spacing, type } from '../theme/theme';
-import type { LocalAnswer, LocalGuide } from '../types/models';
+import type { LocalAnswer, LocalGuide, SyncStatus } from '../types/models';
 
 type Props = {
   guide: LocalGuide;
@@ -141,25 +142,66 @@ function QuestionCard({
 function PopularQuestionRow({
   question,
   localAnswer,
+  captureStatus,
   onPress,
 }: {
   question: PlaceQuestion;
   localAnswer: LocalAnswer | null;
+  /** Sync status of an Explore contribution made against this place question,
+   * if there is one — the path most place answers actually take. */
+  captureStatus: SyncStatus | null;
   onPress: () => void;
 }) {
-  const answered = localAnswer != null;
+  // A place question can be answered through EITHER path: the answer composer
+  // (a local_answer row) or the Explore composer (a capture carrying
+  // place_question_id). Only checking the first meant every answer given the
+  // normal way looked unanswered forever, so the guide got no acknowledgement
+  // and could keep re-answering the same question.
+  const status = localAnswer?.syncStatus ?? captureStatus;
+  const answered = status != null;
+  const sent = status === 'uploaded' || status === 'synced';
+
+  // Once answered the row stops being tappable, matching what
+  // AnswerQuestionScreen already enforces for the other question source
+  // ("there is no edit/re-answer flow"). Before this, an answered row still
+  // opened an empty composer with no sign the guide had already replied, and
+  // saving created a SECOND contribution against the same question.
+  const Row = answered ? View : Pressable;
+  const rowProps = answered
+    ? { style: [styles.popularRow, styles.popularRowAnswered] }
+    : {
+        onPress,
+        accessibilityRole: 'button' as const,
+        accessibilityLabel: question.questionText,
+        style: ({ pressed }: { pressed: boolean }) => [
+          styles.popularRow,
+          pressed && styles.popularRowPressed,
+        ],
+      };
+
   return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={question.questionText}
-      style={({ pressed }) => [styles.popularRow, pressed && styles.popularRowPressed]}
-    >
+    <Row {...rowProps}>
       <View style={styles.popularIcon}>
         <Ionicons
-          name={answered ? 'checkmark' : placeQuestionKindIcon(question.contributionKind)}
+          name={
+            !answered
+              ? placeQuestionKindIcon(question.contributionKind)
+              : status === 'failed'
+                ? 'alert-circle-outline'
+                : sent
+                  ? 'checkmark-circle'
+                  : 'cloud-upload-outline'
+          }
           size={17}
-          color={answered ? colors.ok : colors.inkSoft}
+          color={
+            !answered
+              ? colors.inkSoft
+              : status === 'failed'
+                ? colors.fix
+                : sent
+                  ? colors.ok
+                  : colors.info
+          }
         />
       </View>
       <View style={styles.popularBody}>
@@ -171,14 +213,31 @@ function PopularQuestionRow({
         ) : null}
         <View style={styles.popularMetaRow}>
           {answered ? (
-            <Text style={styles.popularAnswered}>You answered this</Text>
+            // Distinguishes "on the server" from "still on this phone" rather
+            // than calling both of them done -- the same honesty the rest of
+            // the app applies to sync state.
+            <Text
+              style={
+                status === 'failed'
+                  ? styles.popularAnsweredFailed
+                  : sent
+                    ? styles.popularAnswered
+                    : styles.popularAnsweredPending
+              }
+            >
+              {status === 'failed'
+                ? 'You answered this — send failed, will retry'
+                : sent
+                  ? 'You answered this'
+                  : 'You answered this — waiting to send'}
+            </Text>
           ) : question.rewardPoints > 0 ? (
             <RewardChip points={question.rewardPoints} />
           ) : null}
         </View>
       </View>
       {!answered ? <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} /> : null}
-    </Pressable>
+    </Row>
   );
 }
 
@@ -193,6 +252,9 @@ export default function QuestionsScreen({
   const [questions, setQuestions] = useState<Question[] | null>(null);
   const [popular, setPopular] = useState<GuidePlaceQuestions | null>(null);
   const [localAnswers, setLocalAnswers] = useState<LocalAnswer[]>([]);
+  const [answeredPlaceQuestions, setAnsweredPlaceQuestions] = useState<Map<string, SyncStatus>>(
+    new Map()
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -204,12 +266,14 @@ export default function QuestionsScreen({
     setLoading(true);
     setError(null);
     try {
-      const [result, answers] = await Promise.all([
+      const [result, answers, placeAnswered] = await Promise.all([
         listAssignedQuestions(guide.serverGuideId),
         listAnswersForGuide(db, guide.id),
+        getAnsweredPlaceQuestionStatuses(db, guide.id),
       ]);
       setQuestions(result);
       setLocalAnswers(answers);
+      setAnsweredPlaceQuestions(placeAnswered);
       onCountChange(result.filter((q) => q.assignment && q.assignment.status !== 'completed').length);
     } catch (err) {
       const message =
@@ -323,6 +387,7 @@ export default function QuestionsScreen({
                     key={q.id}
                     question={q}
                     localAnswer={localAnswers.find((a) => a.serverQuestionId === q.id) ?? null}
+                    captureStatus={answeredPlaceQuestions.get(q.id) ?? null}
                     onPress={() => onSelectPopularQuestion(q, popular?.locationName ?? null)}
                   />
                 ))}
@@ -414,12 +479,17 @@ const styles = StyleSheet.create({
     minHeight: 56,
   },
   popularRowPressed: { backgroundColor: colors.neutralSoft },
+  // Answered rows recede rather than disappear: the guide should still be able
+  // to see what they already covered here.
+  popularRowAnswered: { opacity: 0.7 },
   popularIcon: { width: 26, alignItems: 'center' },
   popularBody: { flex: 1 },
   popularText: { ...type.body, color: colors.ink, lineHeight: 21 },
   popularContextNote: { ...type.caption, color: colors.inkFaint, marginTop: 2, lineHeight: 16 },
   popularMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6 },
   popularAnswered: { ...type.caption, color: colors.ok },
+  popularAnsweredPending: { ...type.caption, color: colors.info },
+  popularAnsweredFailed: { ...type.caption, color: colors.fix },
 
   answeredSection: { marginTop: spacing.lg },
 });

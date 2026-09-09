@@ -77,6 +77,15 @@ export default function ExploreContributeScreen({ guide, prompt, onDone }: Props
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
 
+  // This composer serves two arrivals: a generic Explore prompt, and a real
+  // backend place question opened from the Questions tab (the only thing that
+  // sets placeQuestionId -- see explore/placeQuestionPrompts.ts). The flow is
+  // identical, but calling a question you were just asked "a discovery", and
+  // then offering "Back to Explore" to someone who came from Questions, made
+  // the app feel like it had lost track of what the guide was doing.
+  const isPlaceAnswer = prompt.placeQuestionId != null;
+  const noun = isPlaceAnswer ? 'answer' : 'discovery';
+
   function applyPhotoResult(result: PhotoPickResult) {
     switch (result.status) {
       case 'success':
@@ -117,7 +126,7 @@ export default function ExploreContributeScreen({ guide, prompt, onDone }: Props
       setError(
         photo
           ? 'Add a few words or a voice note about this photo — on its own, a photo cannot become usable knowledge.'
-          : 'Write something or record a voice note before saving.'
+          : `Write something or record a voice note before saving your ${noun}.`
       );
       return;
     }
@@ -173,9 +182,21 @@ export default function ExploreContributeScreen({ guide, prompt, onDone }: Props
           </View>
           <Text style={styles.savedTitle}>Saved on this device</Text>
           <Text style={styles.savedBody}>{describeSaved()}</Text>
+          {/* Answering a question earns a real, backend-issued number — worth
+              confirming here, where the guide has just done the work, rather
+              than only on the Rewards screen they may never open. Provisional
+              until sync, and labelled as such. */}
+          {isPlaceAnswer && prompt.resolvedRewardPoints ? (
+            <Text style={styles.savedPoints}>
+              {prompt.resolvedRewardPoints} points once this reaches the server.
+            </Text>
+          ) : null}
           <Badge label="Waiting to send" tone="info" icon="cloud-upload-outline" />
           <View style={styles.savedButton}>
-            <Button label="Back to Explore" onPress={onDone} />
+            <Button
+              label={isPlaceAnswer ? 'Back to Questions' : 'Back to Explore'}
+              onPress={onDone}
+            />
           </View>
         </Card>
       </Screen>
@@ -295,7 +316,7 @@ export default function ExploreContributeScreen({ guide, prompt, onDone }: Props
 
         <View style={styles.saveButton}>
           <Button
-            label={saving ? 'Saving…' : 'Save discovery'}
+            label={saving ? 'Saving…' : isPlaceAnswer ? 'Save answer' : 'Save discovery'}
             onPress={handleSave}
             loading={saving}
           />
@@ -401,6 +422,7 @@ const styles = StyleSheet.create({
   savedCard: { alignItems: 'center', gap: spacing.sm, marginTop: spacing.xl },
   savedIcon: { marginBottom: spacing.xxs },
   savedTitle: { ...type.title, color: colors.ink, textAlign: 'center' },
+  savedPoints: { ...type.small, color: colors.marigoldDeep, textAlign: 'center' },
   savedBody: { ...type.body, color: colors.inkSoft, textAlign: 'center', lineHeight: 22 },
   savedButton: { alignSelf: 'stretch', marginTop: spacing.sm },
 });

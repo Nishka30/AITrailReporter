@@ -12,6 +12,7 @@ import { Badge, type BadgeTone, Button, Card, EmptyState, Screen, SectionHeader 
 import { listAnswersForGuide } from '../repositories/answerRepository';
 import { listCaptures } from '../repositories/captureRepository';
 import { listLocations } from '../repositories/locationRepository';
+import { syncAll } from '../sync/syncService';
 import { colors, spacing, type } from '../theme/theme';
 import type { LocalAnswer, LocalCapture, LocalGuide, LocalLocation, SyncStatus } from '../types/models';
 
@@ -545,6 +546,8 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
   const [answers, setAnswers] = useState<LocalAnswer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -574,12 +577,47 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
   // initial mount, which must not draw the pull indicator.
   const { pulling, onPull } = usePullToRefresh(load);
 
+  /**
+   * Send from here, rather than making the guide navigate to Home.
+   *
+   * This is the screen that shows "Waiting to send" on every card, so it is
+   * where the intent to send actually forms — but the only sync control lived
+   * on Home, which meant reading the problem in one place and fixing it in
+   * another. Same syncAll() Home calls, so the two can never diverge, and
+   * syncAll's own in-flight guard means a tap here while Home's sync is still
+   * running joins that run instead of starting a second one.
+   */
+  async function handleSyncNow() {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      const result = await syncAll(db);
+      setSyncMessage(result.guideError ? `Sync could not run: ${result.guideError}` : result.message);
+    } catch (err) {
+      console.error('[PendingItemsScreen] Sync failed:', err);
+      setSyncMessage('Sync could not run. Please try again.');
+    } finally {
+      setSyncing(false);
+      // Re-read regardless of outcome: statuses and error messages on the
+      // cards below have almost certainly changed, including on failure.
+      await load();
+    }
+  }
+
   const notes = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'note'));
   const voiceCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'voice'));
   const exploreCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'explore'));
   const memoryCaptures = byNeedsAttentionFirst(captures.filter((c) => c.captureType === 'memory'));
   const sortedAnswers = byNeedsAttentionFirst(answers);
   const sortedLocations = byNeedsAttentionFirst(locations);
+  // What is genuinely still on this device. 'uploading' counts: a run that was
+  // killed mid-flight leaves rows stuck there, and they DO need sending again
+  // (see SYNCABLE_STATUSES in the repositories).
+  const unsent = [...captures, ...locations, ...answers].filter(
+    (item) => item.syncStatus === 'pending' || item.syncStatus === 'failed' || item.syncStatus === 'uploading'
+  );
+  const failedCount = unsent.filter((item) => item.syncStatus === 'failed').length;
   const isEmpty =
     notes.length === 0 &&
     voiceCaptures.length === 0 &&
@@ -594,6 +632,44 @@ export default function PendingItemsScreen({ guide, refreshKey }: Props) {
         <Text style={styles.title}>Activity</Text>
         <Text style={styles.subtitle}>Everything saved on this device — status shows what's actually reached the server.</Text>
       </View>
+
+      {/* Only when there is genuinely something to send. When everything has
+          reached the server this bar disappears entirely rather than sitting
+          there as a button that would do nothing — the cards below already
+          say "Sent to server", which is the honest answer. */}
+      {unsent.length > 0 ? (
+        <Card style={styles.syncBar}>
+          <View style={styles.syncBarRow}>
+            <Ionicons
+              name={failedCount > 0 ? 'alert-circle-outline' : 'cloud-upload-outline'}
+              size={19}
+              color={failedCount > 0 ? colors.fix : colors.info}
+            />
+            <View style={styles.syncBarText}>
+              <Text style={styles.syncBarTitle}>
+                {unsent.length} item{unsent.length === 1 ? '' : 's'} waiting to send
+              </Text>
+              <Text style={styles.syncBarSubtitle}>
+                {failedCount > 0
+                  ? `${failedCount} failed earlier — nothing is lost, they retry on every sync.`
+                  : 'Nothing is lost. Send whenever you have a connection.'}
+              </Text>
+            </View>
+            <Button
+              label={syncing ? 'Syncing…' : 'Sync now'}
+              onPress={handleSyncNow}
+              loading={syncing}
+              variant="secondary"
+              fullWidth={false}
+            />
+          </View>
+          {syncMessage ? <Text style={styles.syncBarResult}>{syncMessage}</Text> : null}
+        </Card>
+      ) : syncMessage ? (
+        // Everything went out on that last tap -- report it, then let the
+        // green "Sent to server" badges below carry the state.
+        <Text style={styles.syncBarResultAlone}>{syncMessage}</Text>
+      ) : null}
 
       {error ? (
         <Text style={styles.errorText}>{error}</Text>
@@ -659,6 +735,18 @@ const styles = StyleSheet.create({
   title: { ...type.display, fontSize: 26, color: colors.ink },
   subtitle: { ...type.small, color: colors.inkFaint, marginTop: 4, lineHeight: 18 },
   emptyText: { ...type.small, color: colors.inkFaint, marginBottom: spacing.sm },
+  syncBar: { marginBottom: spacing.md },
+  syncBarRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  syncBarText: { flex: 1 },
+  syncBarTitle: { ...type.smallBold, color: colors.ink },
+  syncBarSubtitle: { ...type.caption, color: colors.inkFaint, marginTop: 2, lineHeight: 16 },
+  syncBarResult: { ...type.caption, color: colors.inkSoft, marginTop: spacing.sm, lineHeight: 16 },
+  syncBarResultAlone: {
+    ...type.caption,
+    color: colors.inkSoft,
+    marginBottom: spacing.md,
+    lineHeight: 16,
+  },
   errorText: { ...type.small, color: colors.fix, marginTop: spacing.xl, textAlign: 'center' },
   item: { marginBottom: spacing.sm },
   itemHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },

@@ -373,6 +373,36 @@ export async function listCaptures(
   return rows.map(mapRow);
 }
 
+/**
+ * Backend PlaceQuestion ids this guide has already contributed an answer to on
+ * this device, mapped to that contribution's sync status.
+ *
+ * A place question answered from the composer becomes an EXPLORE CAPTURE
+ * carrying `place_question_id` — not a `local_answer` row (see
+ * RootNavigator's onSelectPopularQuestion). Anything wanting to show "you
+ * answered this" for a place question therefore has to read it from here;
+ * looking only at local_answer silently misses every one of them, which let a
+ * guide answer the same question over and over with no acknowledgement.
+ *
+ * Returns the status rather than a bare set so callers can distinguish "sent"
+ * from "still waiting to send", exactly as they already do for answers.
+ */
+export async function getAnsweredPlaceQuestionStatuses(
+  db: SQLiteDatabase,
+  localGuideId: number
+): Promise<Map<string, SyncStatus>> {
+  const rows = await db.getAllAsync<{ place_question_id: string; sync_status: string }>(
+    `SELECT place_question_id, sync_status FROM local_capture
+     WHERE local_guide_id = ? AND place_question_id IS NOT NULL
+     ORDER BY created_at ASC`,
+    localGuideId
+  );
+  // Insertion order is oldest-first, so a later re-answer of the same question
+  // overwrites the earlier one and the map ends up holding the most recent
+  // attempt -- the one whose status the guide cares about.
+  return new Map(rows.map((row) => [row.place_question_id, row.sync_status as SyncStatus]));
+}
+
 export async function getCaptureById(
   db: SQLiteDatabase,
   id: number
