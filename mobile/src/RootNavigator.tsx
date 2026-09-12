@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 
+import type { PlaceCandidate } from './api/placeCandidates';
 import type { PlaceQuestion } from './api/placeQuestions';
 import type { Question } from './api/questions';
 import { colors, spacing, type } from './theme/theme';
@@ -20,6 +21,7 @@ import ExploreScreen from './screens/ExploreScreen';
 import HomeScreen from './screens/HomeScreen';
 import MemoryContributeScreen from './screens/MemoryContributeScreen';
 import PendingItemsScreen from './screens/PendingItemsScreen';
+import PlacePickerScreen from './screens/PlacePickerScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import QuestionsScreen from './screens/QuestionsScreen';
 import RewardsScreen from './screens/RewardsScreen';
@@ -68,6 +70,26 @@ export default function RootNavigator() {
   const [explorePromptOrigin, setExplorePromptOrigin] = useState<TabKey>('explore');
   const [questionBadgeCount, setQuestionBadgeCount] = useState<number | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // The place the guide CHOSE to contribute to -- the subject of everything
+  // Explore and Questions then show. Null means "not chosen yet", which is
+  // what puts the picker in front of those two tabs.
+  //
+  // Session state rather than a stored preference, deliberately: a guide who
+  // reopens the app has usually moved, and silently reusing yesterday's
+  // choice would attach today's reports to somewhere they have left. Home and
+  // Activity stay reachable without choosing, because neither is about a
+  // place -- Home is about this device, Activity about what it holds.
+  const [selectedPlace, setSelectedPlace] = useState<PlaceCandidate | null>(null);
+  // Set when the guide opens the picker to CHANGE an existing choice, so
+  // backing out returns them to where they were instead of clearing it.
+  const [changingPlace, setChangingPlace] = useState(false);
+  // The guide got as far as the picker and could not choose -- offline, no
+  // location permission, or nowhere mapped nearby. Remembering that stops the
+  // picker reappearing on every tab switch and trapping them in a loop they
+  // have no way to satisfy. Explore and Questions then behave exactly as they
+  // did before this step existed, resolving the place from GPS.
+  const [skippedPlace, setSkippedPlace] = useState(false);
 
   const activityCount = useLocalActivityCount(db, guide?.id ?? null, refreshKey);
 
@@ -172,6 +194,10 @@ export default function RootNavigator() {
       <ExploreContributeScreen
         guide={guide}
         prompt={selectedPrompt}
+        // What the guide CHOSE, so the saved capture records the subject they
+        // picked rather than leaving Activity unable to say what the report
+        // was about. Never a device guess: this is a real backend Location.
+        place={selectedPlace}
         onDone={() => closePushed(explorePromptOrigin)}
       />
     );
@@ -179,6 +205,35 @@ export default function RootNavigator() {
 
   if (pushed === 'memoryContribute') {
     return <MemoryContributeScreen guide={guide} onDone={() => closePushed('explore')} />;
+  }
+
+  // The place-selection step. Gates ONLY the two place-scoped tabs: pushing
+  // it in front of Home or Activity would make a guide choose a subject
+  // before they can even see what is waiting to sync, which has nothing to do
+  // with where they are standing.
+  const needsPlace =
+    (activeTab === 'explore' || activeTab === 'questions') && !selectedPlace && !skippedPlace;
+  if (needsPlace || changingPlace) {
+    return (
+      <PlacePickerScreen
+        guide={guide}
+        onSelect={(place) => {
+          setSelectedPlace(place);
+          setChangingPlace(false);
+          setSkippedPlace(false);
+          // Both place-scoped tabs re-read on refreshKey, so this is what
+          // makes them reload against the NEW subject rather than keep
+          // showing the previous place's questions.
+          setRefreshKey((k) => k + 1);
+        }}
+        onSkip={() => {
+          setSkippedPlace(true);
+          setChangingPlace(false);
+          setRefreshKey((k) => k + 1);
+        }}
+        onCancel={changingPlace ? () => setChangingPlace(false) : undefined}
+      />
+    );
   }
 
   return (
@@ -197,6 +252,8 @@ export default function RootNavigator() {
         ) : activeTab === 'explore' ? (
           <ExploreScreen
             guide={guide}
+            place={selectedPlace}
+            onChangePlace={() => setChangingPlace(true)}
             onStartContribution={(prompt) => {
               setSelectedPrompt(prompt);
               setExplorePromptOrigin('explore');
@@ -208,6 +265,8 @@ export default function RootNavigator() {
         ) : activeTab === 'questions' ? (
           <QuestionsScreen
             guide={guide}
+            place={selectedPlace}
+            onChangePlace={() => setChangingPlace(true)}
             onSelectQuestion={(question) => {
               setAnswerTarget(targetFromQuestion(question));
               setPushed('answerQuestion');

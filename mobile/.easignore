@@ -1,0 +1,67 @@
+# What NOT to upload to EAS Build.
+#
+# IMPORTANT: when this file exists, EAS uses it INSTEAD OF .gitignore -- not in
+# addition to it. So everything .gitignore excludes that also must not be
+# uploaded has to be repeated here. Keep the two in sync when either changes.
+#
+# The build server runs `npm ci` from package.json + package-lock.json itself,
+# so shipping node_modules (~170MB compressed, the whole reason the upload was
+# timing out) is pure waste -- it is re-installed from scratch on the builder
+# regardless of what we send.
+
+# ---- dependencies: reinstalled on the build server -------------------------
+node_modules/
+
+# ---- Expo/Metro local state ------------------------------------------------
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.metro-health-check*
+
+# ---- native folders: managed workflow regenerates these via prebuild -------
+/ios
+/android
+.kotlin/
+
+# ---- secrets and local config ----------------------------------------------
+# Build-time config comes from eas.json's `env` block (EXPO_PUBLIC_API_BASE_URL),
+# NOT from a .env file -- so this never needs to leave the machine.
+.env
+.env.*
+!.env.example
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+
+# ---- version control / editor / OS -----------------------------------------
+.git/
+.gitignore
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- logs and build artefacts ----------------------------------------------
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.tsbuildinfo
+coverage/
+
+# ---- docs and source assets not needed to build ----------------------------
+# Kept on disk, just not uploaded. `.original-expo-icons` holds the untouched
+# Expo template icons that scripts/build-icons.js derives the real ones from --
+# the generated icons in assets/ are what app.json actually references.
+assets/.original-expo-icons/
+assets/README.md
+README.md
+AGENTS.md
+CLAUDE.md
+LICENSE

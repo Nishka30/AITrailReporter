@@ -103,14 +103,25 @@ function placeQuestionFromWire(wire: PlaceQuestionWire): PlaceQuestion {
 /**
  * GET /api/v1/guides/{guideId}/popular-questions.
  *
- * Read-only from this app's perspective. The backend resolves which known
- * place the guide is at and refreshes its research if stale — that refresh is
- * best-effort server-side, so this call still returns whatever questions
- * already exist even if a research run fails.
+ * Read-only from this app's perspective. The backend refreshes the place's
+ * research if stale — that refresh is best-effort server-side, so this call
+ * still returns whatever questions already exist even if a research run
+ * fails.
+ *
+ * `locationId` is the place the guide CHOSE (see api/placeCandidates.ts).
+ * Passing it is what makes the Questions tab ask about the shop they picked
+ * rather than the hotel their GPS happened to land nearest to. Omitted, the
+ * backend falls back to resolving the place from the guide's position, which
+ * is exactly what this endpoint has always done — so a guide who has not
+ * chosen yet still gets sensible questions.
  */
-export async function listPopularQuestions(guideId: string): Promise<GuidePlaceQuestions> {
+export async function listPopularQuestions(
+  guideId: string,
+  locationId?: string | null
+): Promise<GuidePlaceQuestions> {
+  const query = locationId ? `?location_id=${encodeURIComponent(locationId)}` : '';
   const wire = await apiRequest<GuidePlaceQuestionsWire>(
-    `/api/v1/guides/${guideId}/popular-questions`
+    `/api/v1/guides/${guideId}/popular-questions${query}`
   );
   return {
     locationId: wire.location_id,

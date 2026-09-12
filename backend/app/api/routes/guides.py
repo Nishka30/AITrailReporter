@@ -21,6 +21,7 @@ from app.services import guide_locations as guide_location_service
 from app.services import guides as guide_service
 from app.services import knowledge_decisions as knowledge_decision_service
 from app.services import knowledge_state as knowledge_state_service
+from app.services import locations as location_service
 from app.services import place_questions as place_question_service
 from app.services import poi_discovery as poi_discovery_service
 from app.services import questions as question_service
@@ -282,6 +283,15 @@ def get_guide_questions(
 def get_guide_popular_questions(
     guide_id: UUID,
     background: BackgroundTasks,
+    location_id: UUID | None = Query(
+        default=None,
+        description=(
+            "Ask about THIS place instead of whichever one the guide's GPS "
+            "resolves to. Set by the app once the guide has chosen a place "
+            "from GET /api/v1/locations/candidates. Omitted, the endpoint "
+            "behaves exactly as it always has."
+        ),
+    ),
     db: Session = Depends(get_db),
 ):
     """Popular questions about the place the guide is currently at (Step 18).
@@ -309,19 +319,39 @@ def get_guide_popular_questions(
     )
 
     location = guide_location_service.get_latest_location(db, guide_id)
-    if location is None:
-        return empty
 
-    latitude, longitude = float(location.latitude), float(location.longitude)
-    # Same resolution the Explore hero uses, so questions are always about the
-    # place the app is telling the guide they are at -- never a different one.
-    # Cost-gated inside: a place resolved by /context moments earlier is a DB
-    # lookup here, not a second round of Google calls.
-    place = _resolve_position_place(db, latitude, longitude)
-    if place is None:
-        # Even a real, inline attempt just now could name nothing here (a
-        # Google outage, or mid-ocean) -- an honest empty result.
-        return empty
+    if location_id is not None:
+        # The guide CHOSE this place, so it wins outright over anything GPS
+        # would have picked -- that choice is the whole point of the selection
+        # step (see services/place_candidates.py). No discovery call is needed:
+        # a chosen place is by definition one we already stored.
+        chosen = location_service.get_location(db, location_id)
+        if chosen is None:
+            raise HTTPException(status_code=404, detail="Location not found")
+        # Distance is still measured from the guide's real position, never
+        # assumed to be zero -- they may well have walked on since choosing.
+        distance_meters: float | None = None
+        if location is not None:
+            distance_meters = location_service.distance_to_location(
+                db, float(location.latitude), float(location.longitude), chosen
+            )
+        place = NearestKnownPlace(
+            id=chosen.id, name=chosen.name, distance_meters=distance_meters or 0.0
+        )
+    else:
+        if location is None:
+            return empty
+        latitude, longitude = float(location.latitude), float(location.longitude)
+        # Same resolution the Explore hero uses, so questions are always about
+        # the place the app is telling the guide they are at -- never a
+        # different one. Cost-gated inside: a place resolved by /context
+        # moments earlier is a DB lookup here, not a second round of Google
+        # calls.
+        place = _resolve_position_place(db, latitude, longitude)
+        if place is None:
+            # Even a real, inline attempt just now could name nothing here (a
+            # Google outage, or mid-ocean) -- an honest empty result.
+            return empty
 
     # Scheduled rather than awaited: research takes minutes and is cached for
     # 30 days afterwards, so blocking this request would stall the app for one

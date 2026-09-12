@@ -5,6 +5,11 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { ApiError, NetworkError } from '../api/client';
 import { getGuideContext, type GuideContext } from '../api/guideContext';
+import {
+  describeCandidateDistance,
+  describeCandidateKind,
+  type PlaceCandidate,
+} from '../api/placeCandidates';
 import { getRewardConfig, type RewardConfig } from '../api/rewards';
 import {
   Badge,
@@ -27,6 +32,13 @@ import type { LocalGuide } from '../types/models';
 
 type Props = {
   guide: LocalGuide;
+  /** The place the guide CHOSE to contribute to. Non-null by construction:
+   * RootNavigator shows the picker before this tab can render. Explore is
+   * about this subject, not about whichever POI happens to be nearest. */
+  place: PlaceCandidate | null;
+  /** Reopens the picker so the guide can switch subject without leaving the
+   * tab — they may have walked on, or picked the wrong thing first time. */
+  onChangePlace: () => void;
   onStartContribution: (prompt: ExplorePrompt) => void;
   /** Opens the "Share a Memory" composer — a distinct flow from
    * onStartContribution because a memory carries its own location/date
@@ -120,7 +132,14 @@ function PromptCard({
  *   - context available   -> grounded prompts naming the real place/gaps
  *   - request failed      -> ErrorState with retry, never a silent empty deck
  */
-export default function ExploreScreen({ guide, onStartContribution, onStartMemory, refreshKey }: Props) {
+export default function ExploreScreen({
+  guide,
+  place,
+  onChangePlace,
+  onStartContribution,
+  onStartMemory,
+  refreshKey,
+}: Props) {
   const db = useSQLiteContext();
   const [context, setContext] = useState<GuideContext | null>(null);
   const [loading, setLoading] = useState(false);
@@ -193,8 +212,23 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
   // `null` for knowledge states is what keeps gap-derived prompts out (see
   // buildPrompts), and with no place questions competing for the space the
   // deck runs at its full length rather than trimmed.
-  const prompts = buildPrompts(context, null);
-  const place = context?.nearestKnownPlace;
+  // Prompts still ground themselves in the backend context (coordinates,
+  // recency) but name the CHOSEN place, so a card never says "Avasa Hotel"
+  // when the guide picked the shop next door. Synthesising the shape
+  // buildPrompts already expects keeps that function unchanged.
+  const prompts = buildPrompts(
+    context && place
+      ? {
+          ...context,
+          nearestKnownPlace: {
+            id: place.id,
+            name: place.name,
+            distanceMeters: place.distanceMeters,
+          },
+        }
+      : context,
+    null
+  );
 
   /** What an Explore contribution answering THIS prompt is currently worth.
    * A prompt asking for a photo is labelled with the media-inclusive total,
@@ -233,19 +267,51 @@ export default function ExploreScreen({ guide, onStartContribution, onStartMemor
             syncs from the Home screen.
           </Text>
         </Card>
-      ) : context ? (
+      ) : !place && context ? (
+        // No chosen place: the guide skipped the picker because choosing was
+        // impossible (offline, no permission, nowhere mapped). This is the
+        // ORIGINAL hero, unchanged -- GPS's own answer, with no "Change"
+        // affordance because there is nothing chosen to change.
         <View style={styles.hero}>
           <View style={styles.heroTopRow}>
             <Ionicons name="location" size={15} color={colors.marigold} />
             <Text style={styles.heroEyebrow}>AROUND YOU</Text>
           </View>
-          <Text style={styles.heroPlace}>{place ? place.name : 'An unnamed spot'}</Text>
+          <Text style={styles.heroPlace}>
+            {context.nearestKnownPlace ? context.nearestKnownPlace.name : 'An unnamed spot'}
+          </Text>
           <Text style={styles.heroMeta}>
-            {place
-              ? `about ${Math.round(place.distanceMeters)}m away · location ${describeAge(context.recordedAt)}`
+            {context.nearestKnownPlace
+              ? `about ${Math.round(context.nearestKnownPlace.distanceMeters)}m away · location ${describeAge(context.recordedAt)}`
               : `No known place nearby · location ${describeAge(context.recordedAt)}`}
           </Text>
         </View>
+      ) : place ? (
+        // The guide's OWN choice, not a GPS guess -- so this states it as
+        // settled fact and offers the way to change it, rather than reporting
+        // a distance to something they never picked.
+        <Pressable
+          onPress={onChangePlace}
+          accessibilityRole="button"
+          accessibilityLabel={`Contributing to ${place.name}. Tap to choose a different place.`}
+          style={({ pressed }) => [styles.hero, pressed && styles.heroPressed]}
+        >
+          <View style={styles.heroTopRow}>
+            <Ionicons name="location" size={15} color={colors.marigold} />
+            <Text style={styles.heroEyebrow}>CONTRIBUTING TO</Text>
+            <Text style={styles.heroChange}>Change</Text>
+          </View>
+          <Text style={styles.heroPlace}>{place.name}</Text>
+          <Text style={styles.heroMeta}>
+            {[
+              describeCandidateKind(place),
+              describeCandidateDistance(place),
+              context ? `location ${describeAge(context.recordedAt)}` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </Text>
+        </Pressable>
       ) : loading && !loaded ? (
         <Card variant="flat" style={styles.heroLoading}>
           <Text style={styles.heroLoadingText}>Checking where you are…</Text>
@@ -377,8 +443,15 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     ...shadow.card,
   },
+  heroPressed: { opacity: 0.85 },
   heroTopRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   heroEyebrow: { ...type.captionBold, color: colors.marigold, letterSpacing: 0.7 },
+  heroChange: {
+    ...type.captionBold,
+    color: colors.marigold,
+    marginLeft: 'auto',
+    textDecorationLine: 'underline',
+  },
   heroPlace: { ...type.title, color: colors.white, marginTop: spacing.xxs },
   heroMeta: { ...type.small, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
 

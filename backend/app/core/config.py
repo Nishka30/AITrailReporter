@@ -137,6 +137,36 @@ class Settings(BaseSettings):
     # choices to make rather than rubber-stamping whatever came back first.
     poi_discovery_candidate_limit: int = 40
 
+    # --- Place candidates (app/services/place_candidates.py) ---------------
+    # GPS tells us where the guide IS; it does not tell us what they want to
+    # report on. Standing outside a hotel that happens to be the closest
+    # listed POI does not mean the hotel is the subject -- the shop next door,
+    # the metro entrance across the road, or the mall behind it are all
+    # equally plausible, and only the guide knows which. So the position
+    # resolves to a SHORTLIST the guide picks from, rather than to one place
+    # chosen for them.
+    #
+    # How many to offer. Small on purpose: a list long enough to need
+    # scrolling turns a one-tap decision into a search task.
+    place_candidate_limit: int = 6
+    # Hard ceiling a caller may request, so this can never become an
+    # unbounded query.
+    place_candidate_max_limit: int = 20
+    # How far out to look. Wider than geographic_context_radius_meters (500m,
+    # which answers the much stricter "is the guide AT this place?") because a
+    # place worth reporting on can be a few minutes' walk away, and narrower
+    # than poi_discovery_accept_radius_meters (2500m) because anything that
+    # far is not "near you" in any useful sense.
+    place_candidate_radius_meters: int = 1200
+    # Two candidates whose names are this similar AND which sit within
+    # place_candidate_dedup_radius_meters of each other are treated as the
+    # same real-world place, so the list never offers "Forum Mall" and "Forum
+    # Sujana Mall" as separate choices. Deliberately stricter than the 0.45
+    # used when CREATING locations: merging the wrong two rows is permanent,
+    # whereas hiding one duplicate from a picker is not.
+    place_candidate_name_similarity: float = 0.62
+    place_candidate_dedup_radius_meters: int = 150
+
     # --- Google Places (app/services/places/) ------------------------------
     # Replaces OpenStreetMap/Nominatim as the place-identification layer:
     # Nearby Search supplies discovery candidates, Text Search backs the

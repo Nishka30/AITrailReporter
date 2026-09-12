@@ -4,6 +4,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
 import { ApiError, NetworkError } from '../api/client';
+import { describeCandidateKind, type PlaceCandidate } from '../api/placeCandidates';
 import { listPopularQuestions, type GuidePlaceQuestions, type PlaceQuestion } from '../api/placeQuestions';
 import { listAssignedQuestions, type Question } from '../api/questions';
 import { placeQuestionKindIcon } from '../explore/placeQuestionPrompts';
@@ -25,6 +26,10 @@ import type { LocalAnswer, LocalGuide, SyncStatus } from '../types/models';
 
 type Props = {
   guide: LocalGuide;
+  /** The place the guide CHOSE. Drives which place questions load — the whole
+   * point of the selection step is that this is NOT re-derived from GPS. */
+  place: PlaceCandidate | null;
+  onChangePlace: () => void;
   onSelectQuestion: (question: Question) => void;
   /** Popular questions are answered through the same screen, but carry a
    * different id space and sync endpoint — see LocalAnswer.questionKind. */
@@ -243,6 +248,8 @@ function PopularQuestionRow({
 
 export default function QuestionsScreen({
   guide,
+  place,
+  onChangePlace,
   onSelectQuestion,
   onSelectPopularQuestion,
   onCountChange,
@@ -287,12 +294,15 @@ export default function QuestionsScreen({
     // badge: they are a secondary source, so a failure here must degrade to
     // "no popular questions" rather than break the priority queue's screen.
     try {
-      setPopular(await listPopularQuestions(guide.serverGuideId));
+      // Scoped to the CHOSEN place. Without this id the backend falls back to
+      // resolving the guide's position, which is precisely the behaviour the
+      // selection step exists to replace.
+      setPopular(await listPopularQuestions(guide.serverGuideId, place?.id ?? null));
     } catch {
       setPopular(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db, guide.id, guide.serverGuideId]);
+  }, [db, guide.id, guide.serverGuideId, place?.id]);
 
   useEffect(() => {
     refresh();
@@ -335,9 +345,32 @@ export default function QuestionsScreen({
       <View style={styles.header}>
         <Text style={styles.title}>Questions</Text>
         <Text style={styles.subtitle}>
-          About where you are right now, and what needs checking again.
+          About the place you chose, and what needs checking again.
         </Text>
       </View>
+
+      {/* Names the chosen subject and offers the way to switch it, so a guide
+          looking at unexpected questions can see WHY and fix it in one tap
+          instead of assuming the app is wrong about where they are. */}
+      {place ? (
+        <Pressable
+          onPress={onChangePlace}
+          accessibilityRole="button"
+          accessibilityLabel={`Questions about ${place.name}. Tap to choose a different place.`}
+          style={({ pressed }) => [styles.placeBar, pressed && styles.placeBarPressed]}
+        >
+          <Ionicons name="location" size={14} color={colors.marigoldDeep} />
+          <View style={styles.placeBarText}>
+            <Text style={styles.placeBarName} numberOfLines={1}>
+              {place.name}
+            </Text>
+            {describeCandidateKind(place) ? (
+              <Text style={styles.placeBarKind}>{describeCandidateKind(place)}</Text>
+            ) : null}
+          </View>
+          <Text style={styles.placeBarChange}>Change</Text>
+        </Pressable>
+      ) : null}
 
       {!guide.serverGuideId ? (
         <EmptyState
@@ -440,6 +473,21 @@ export default function QuestionsScreen({
 
 const styles = StyleSheet.create({
   header: { marginBottom: spacing.md },
+  placeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: colors.marigoldSoft,
+    marginBottom: spacing.xs,
+  },
+  placeBarPressed: { opacity: 0.85 },
+  placeBarText: { flex: 1 },
+  placeBarName: { ...type.smallBold, color: colors.ink },
+  placeBarKind: { ...type.caption, color: colors.inkFaint, marginTop: 1 },
+  placeBarChange: { ...type.captionBold, color: colors.marigoldDeep, textDecorationLine: 'underline' },
   title: { ...type.display, fontSize: 26, color: colors.ink },
   subtitle: { ...type.small, color: colors.inkFaint, marginTop: 4 },
   loadingWrap: { marginTop: spacing.xl },

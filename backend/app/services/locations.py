@@ -64,3 +64,23 @@ def find_nearest_location(
     )
     row = db.execute(stmt).first()
     return dict(row._mapping) if row is not None else None
+
+
+def distance_to_location(
+    db: Session, latitude: float, longitude: float, location: Location
+) -> float:
+    """Metres between a coordinate and a known Location, via PostGIS.
+
+    Used when the guide has CHOSEN a place rather than had one resolved from
+    their position: the choice fixes which place the contribution is about,
+    but the distance shown must still be measured from where they actually
+    are. Reporting zero would claim they are standing at a place they may have
+    picked and then walked away from.
+    """
+    stmt = select(
+        func.ST_Distance(
+            make_point(latitude, longitude),
+            make_point(float(location.latitude), float(location.longitude)),
+        )
+    )
+    return float(db.execute(stmt).scalar_one())

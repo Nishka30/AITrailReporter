@@ -119,7 +119,13 @@ GEOCODE_AREA_TYPE_MAP: dict[str, tuple[str, str]] = {
     "administrative_area_level_2": (AREA_CATEGORY, "District"),
 }
 
-_DEFAULT_CATEGORY = ("Other", "Other")
+# What classify() returns when nothing in the maps above matches. Public so a
+# consumer can recognise "we could not say what this is" without re-deriving
+# the literal -- see services/place_candidates.py, which ranks such places
+# slightly lower rather than hiding them.
+DEFAULT_CATEGORY: tuple[str, str] = ("Other", "Other")
+
+_DEFAULT_CATEGORY = DEFAULT_CATEGORY
 
 # A "cafe"-typed place whose name says "tea" is a tea stall, not a coffee
 # shop -- a small, honest name-based refinement layered on top of the

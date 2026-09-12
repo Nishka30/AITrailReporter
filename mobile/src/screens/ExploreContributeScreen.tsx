@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { RecordedAudio } from '../audio/audioRecordingService';
 import VoiceNoteComposer from '../components/VoiceNoteComposer';
 import { AppHeader, Badge, Button, Card, RewardChip, Screen } from '../components/ui';
+import type { PlaceCandidate } from '../api/placeCandidates';
 import type { ExplorePrompt } from '../explore/explorePrompts';
 import { choosePhoto, takePhoto, type PhotoPickResult } from '../photo/photoPickerService';
 import { createExploreCapture } from '../repositories/captureRepository';
@@ -15,6 +16,10 @@ import type { LocalGuide } from '../types/models';
 type Props = {
   guide: LocalGuide;
   prompt: ExplorePrompt;
+  /** The place the guide chose to contribute to. Recorded on the capture so
+   * Activity, extraction and the knowledge pipeline all know what this report
+   * is ABOUT — not merely where the phone was when it was written. */
+  place: PlaceCandidate | null;
   onDone: () => void;
 };
 
@@ -66,7 +71,7 @@ function SectionLabel({
  * system reads images, so a photo-only contribution could never become
  * knowledge. The copy says so plainly rather than accepting a silent dead end.
  */
-export default function ExploreContributeScreen({ guide, prompt, onDone }: Props) {
+export default function ExploreContributeScreen({ guide, prompt, place, onDone }: Props) {
   const db = useSQLiteContext();
   const [text, setText] = useState('');
   const [photo, setPhoto] = useState<AttachedPhoto | null>(null);
@@ -147,6 +152,25 @@ export default function ExploreContributeScreen({ guide, prompt, onDone }: Props
         // server (api/submissions.ts), unlike promptId/promptTitle above.
         placeQuestionId: prompt.placeQuestionId ?? null,
         rewardPoints: prompt.resolvedRewardPoints ?? null,
+        // The guide picked this place explicitly, which is exactly what
+        // 'user_selected' already means everywhere else in this app (see
+        // MemoryContributeScreen). Recording the PLACE's coordinates rather
+        // than the phone's is the point: the report is about that place, and
+        // a guide standing 80m away has still reported on it.
+        //
+        // externalPlaceId is what lets the backend reuse the exact same
+        // shared Location record instead of re-deriving one from proximity --
+        // two guides choosing this place contribute to one row, which is the
+        // whole shared-entity guarantee.
+        ...(place
+          ? {
+              latitude: place.latitude,
+              longitude: place.longitude,
+              locationSource: 'user_selected' as const,
+              locationLabel: place.name,
+              externalPlaceId: place.externalPlaceId,
+            }
+          : {}),
       });
       setSaved(true);
     } catch (err) {
