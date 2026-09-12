@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
@@ -264,6 +264,16 @@ export default function QuestionsScreen({
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Whether the PLACE-scoped fetch (the one behind Google -> Perplexity ->
+  // Claude research) has completed at least once for the current place.
+  // Tracked separately from `questions === null` because the two data
+  // sources finish independently -- without this, the screen fell through to
+  // "No questions right now" as soon as the (fast, place-independent)
+  // assigned-questions fetch resolved, even while the place-specific research
+  // was still in flight. Reset to false whenever the chosen place changes, so
+  // a new place gets its own honest loading state rather than reusing the
+  // previous place's.
+  const [popularLoaded, setPopularLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!guide.serverGuideId) {
@@ -300,6 +310,11 @@ export default function QuestionsScreen({
       setPopular(await listPopularQuestions(guide.serverGuideId, place?.id ?? null));
     } catch {
       setPopular(null);
+    } finally {
+      // Marks THIS data source as having reported in at least once, whatever
+      // the outcome -- see popularLoaded's own comment for why this can't
+      // just be `questions === null` (that guards the OTHER fetch).
+      setPopularLoaded(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, guide.id, guide.serverGuideId, place?.id]);
@@ -307,6 +322,14 @@ export default function QuestionsScreen({
   useEffect(() => {
     refresh();
   }, [refresh, refreshKey]);
+
+  // A new chosen place deserves its own honest "have we heard back yet?"
+  // state, not a leftover `true` from whatever was selected before. `refresh`
+  // above already re-runs on a place change (place?.id is one of its deps),
+  // so this only needs to clear the flag -- the effect above puts it back.
+  useEffect(() => {
+    setPopularLoaded(false);
+  }, [place?.id]);
 
   // Spinner shows only for a real pull; background loads use the inline
   // "Loading questions…" state below.
@@ -333,7 +356,63 @@ export default function QuestionsScreen({
   const placeQuestions = popular?.questions ?? [];
   const researchAged = popular?.researchStale ?? false;
   const needsChecking = needsAttention.length;
-  const hasAnything = (questions?.length ?? 0) > 0 || placeQuestions.length > 0;
+
+  // A place was resolved (GPS or chosen), the backend says its research is
+  // due/never-run, and it has produced zero questions YET. This is the
+  // in-progress state of the Google -> Perplexity -> Claude pipeline, not a
+  // final answer -- `researchAged` only clears once that pipeline actually
+  // completes (place_questions.py sets researched_at on success), so once it
+  // does, this flips to false on its own and either real questions or a
+  // genuine "no questions" result takes over. Gated on `popularLoaded` so it
+  // is never true before the FIRST response for this place has even arrived.
+  const stillResearching =
+    popularLoaded && popular?.locationId != null && researchAged && placeQuestions.length === 0;
+
+  // Counts as "something to show" even with an empty list: a calm
+  // "researching…" message is the honest state here, not the same
+  // "No questions right now" shown when there is truly nothing left to ask.
+  const hasAnything = (questions?.length ?? 0) > 0 || placeQuestions.length > 0 || stillResearching;
+
+  // Bounded, self-terminating auto-refresh while research is in flight -- an
+  // optimization, not a requirement: the pipeline runs regardless of whether
+  // anyone is polling it (see backend/app/api/routes/guides.py's
+  // background.add_task), and a guide can always pull-to-refresh instead.
+  // This just means most guides never have to.
+  //
+  // Capped at a handful of attempts a few seconds apart rather than polling
+  // indefinitely -- a slow or stuck run should settle into the researching
+  // message rather than spin forever. Each attempt is a plain GET; repeating
+  // it while a run is already 'processing' is a no-op server-side (see
+  // ensure_researched's SELECT ... FOR UPDATE guard), so this never causes a
+  // second research run to start.
+  const researchPoll = useRef<{ timer: ReturnType<typeof setTimeout> | null; attempts: number }>({
+    timer: null,
+    attempts: 0,
+  });
+
+  useEffect(() => {
+    // A newly chosen place gets its own fresh attempt budget -- not
+    // whatever was left over from the place before it.
+    researchPoll.current.attempts = 0;
+    if (researchPoll.current.timer) {
+      clearTimeout(researchPoll.current.timer);
+      researchPoll.current.timer = null;
+    }
+  }, [place?.id]);
+
+  useEffect(() => {
+    const MAX_ATTEMPTS = 6;
+    const POLL_DELAY_MS = 4000;
+    if (!stillResearching || researchPoll.current.attempts >= MAX_ATTEMPTS) {
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      researchPoll.current.attempts += 1;
+      refresh();
+    }, POLL_DELAY_MS);
+    researchPoll.current.timer = timer;
+    return () => clearTimeout(timer);
+  }, [stillResearching, refresh]);
 
   return (
     <Screen
@@ -380,9 +459,23 @@ export default function QuestionsScreen({
         />
       ) : error ? (
         <ErrorState message={error} onRetry={refresh} retrying={loading} />
-      ) : loading && questions === null ? (
+      ) : loading && (questions === null || !popularLoaded) ? (
+        // Stays up until BOTH sources have reported in at least once for
+        // this place -- the assigned-questions fetch (fast, place-
+        // independent) and the place-scoped one behind the research pipeline
+        // (which can genuinely take a little while for a freshly chosen
+        // place). Previously this only waited on the first of the two, so
+        // the screen could flip to "No questions right now" while the second
+        // was still in flight.
         <View style={styles.loadingWrap}>
-          <EmptyState icon="hourglass-outline" title="Loading questions…" />
+          <EmptyState
+            icon="hourglass-outline"
+            title={
+              place && !popularLoaded
+                ? 'Finding questions for this location…'
+                : 'Loading questions…'
+            }
+          />
         </View>
       ) : !hasAnything ? (
         <EmptyState
@@ -424,6 +517,26 @@ export default function QuestionsScreen({
                     onPress={() => onSelectPopularQuestion(q, popular?.locationName ?? null)}
                   />
                 ))}
+              </View>
+            </View>
+          ) : stillResearching ? (
+            // The pipeline is genuinely still working, not genuinely empty --
+            // see stillResearching's own comment. Same section header as the
+            // real thing so this reads as "the same section, not ready yet"
+            // rather than a different, unexplained state.
+            <View style={styles.popularSection}>
+              <SectionHeader title="About this place" />
+              <View style={styles.researchingRow}>
+                <Ionicons name="sparkles-outline" size={17} color={colors.marigoldDeep} />
+                <View style={styles.researchingTextWrap}>
+                  <Text style={styles.researchingTitle}>Researching this location…</Text>
+                  <Text style={styles.researchingBody}>
+                    {popular?.locationName
+                      ? `We're looking up what's worth asking about ${popular.locationName}.`
+                      : "We're looking up what's worth asking about this place."}{' '}
+                    This usually takes under a minute — pull down to check again sooner.
+                  </Text>
+                </View>
               </View>
             </View>
           ) : null}
@@ -509,6 +622,19 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     lineHeight: 18,
   },
+  // Same recessed treatment as popularGroup below -- reads as "this section,
+  // not ready yet" rather than a visually different, alarming state.
+  researchingRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: colors.paperMuted,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+  },
+  researchingTextWrap: { flex: 1 },
+  researchingTitle: { ...type.smallBold, color: colors.ink },
+  researchingBody: { ...type.caption, color: colors.inkFaint, marginTop: 3, lineHeight: 17 },
   // One grouped, recessed surface rather than N elevated cards — visually
   // subordinate to the priority queue by construction, not just by position.
   popularGroup: {
