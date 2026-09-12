@@ -6,7 +6,8 @@ import { ApiError, NetworkError } from '../api/client';
 import {
   describeCandidateDistance,
   describeCandidateKind,
-  listPlaceCandidates,
+  invalidatePlaceCandidatesCache,
+  listPlaceCandidatesCached,
   type PlaceCandidate,
 } from '../api/placeCandidates';
 import { Button, EmptyState, ErrorState, LoadingState, Screen } from '../components/ui';
@@ -129,7 +130,7 @@ export default function PlacePickerScreen({
   const [error, setError] = useState<string | null>(null);
   const [gpsDenied, setGpsDenied] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { forceRefresh?: boolean }) => {
     setLoading(true);
     setError(null);
     setGpsDenied(false);
@@ -149,7 +150,17 @@ export default function PlacePickerScreen({
         setCandidates(null);
         return;
       }
-      const result = await listPlaceCandidates(
+      if (options?.forceRefresh) {
+        // An explicit refresh gesture (button tap or pull) means "check
+        // again for real" -- never silently hand back the cached list.
+        invalidatePlaceCandidatesCache();
+      }
+      // Reuses a just-fetched result for practically the same spot instead
+      // of repeating the Google/backend round trip -- this is what makes
+      // reopening "Change Location" moments after closing it feel instant.
+      // See placeCandidates.ts's own cache doc for the reuse rule; a stale or
+      // too-distant cache falls straight through to a real fetch here.
+      const result = await listPlaceCandidatesCached(
         fix.location.latitude,
         fix.location.longitude
       );
@@ -167,12 +178,20 @@ export default function PlacePickerScreen({
   }, []);
 
   useEffect(() => {
+    // The automatic load on mount is the one allowed to reuse the cache --
+    // this is precisely the "just opened Change Location again" case the
+    // cache exists for.
     load();
   }, [load]);
 
+  // Every explicit "check again" -- pull-to-refresh, the Refresh button, a
+  // Try again after an error/denied permission -- always hits the network,
+  // exactly as it did before the cache existed.
+  const forceReload = useCallback(() => load({ forceRefresh: true }), [load]);
+
   // Spinner only for a genuine pull — `loading` also covers the initial mount,
   // which must not draw the pull indicator.
-  const { pulling, onPull } = usePullToRefresh(load);
+  const { pulling, onPull } = usePullToRefresh(forceReload);
 
   // Specific places and "the area itself" are different kinds of answer, so
   // they get different groups rather than one undifferentiated list. The area
@@ -229,7 +248,7 @@ export default function PlacePickerScreen({
             message="TrailMind needs your location to find the places around you. You can allow it in your device settings, then try again."
           />
           <View style={styles.stateButton}>
-            <Button label="Try again" onPress={load} variant="secondary" />
+            <Button label="Try again" onPress={forceReload} variant="secondary" />
             <View style={styles.stateButtonSpacer}>
               <Button label="Continue without choosing" onPress={onSkip} variant="ghost" />
             </View>
@@ -237,7 +256,7 @@ export default function PlacePickerScreen({
         </View>
       ) : error ? (
         <View style={styles.stateWrap}>
-          <ErrorState message={error} onRetry={load} retrying={loading} />
+          <ErrorState message={error} onRetry={forceReload} retrying={loading} />
           {/* Offline is the common cause here, and this app has always let a
               guide write and save with no connection at all. Blocking that
               behind a lookup that needs the network would be a step
@@ -277,7 +296,7 @@ export default function PlacePickerScreen({
               : 'We could not confirm any specific places around you — the area itself is still a real thing to report on.'}
           </Text>
           <View style={styles.actions}>
-            <Button label="Refresh" onPress={load} variant="ghost" />
+            <Button label="Refresh" onPress={forceReload} variant="ghost" />
             {onCancel ? (
               <Button label="Keep current place" onPress={onCancel} variant="ghost" />
             ) : null}
@@ -295,7 +314,7 @@ export default function PlacePickerScreen({
               app did before this step existed -- an honest "somewhere around
               here" rather than a place we cannot confirm. */}
           <View style={styles.stateButton}>
-            <Button label="Try again" onPress={load} variant="secondary" />
+            <Button label="Try again" onPress={forceReload} variant="secondary" />
             <View style={styles.stateButtonSpacer}>
               <Button label="Continue without choosing" onPress={onSkip} variant="ghost" />
             </View>
