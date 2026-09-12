@@ -118,6 +118,11 @@ export default function RootNavigator() {
 
   const goToTab = useCallback((tab: TabKey) => {
     setActiveTab(tab);
+    // Leaving the tab abandons an in-progress "change place" -- otherwise the
+    // picker would follow the guide to Home, since `changingPlace` is not
+    // tab-scoped. The existing choice is untouched, exactly as if they had
+    // tapped "Keep current place".
+    setChangingPlace(false);
     setRefreshKey((k) => k + 1);
   }, []);
 
@@ -207,39 +212,48 @@ export default function RootNavigator() {
     return <MemoryContributeScreen guide={guide} onDone={() => closePushed('explore')} />;
   }
 
-  // The place-selection step. Gates ONLY the two place-scoped tabs: pushing
-  // it in front of Home or Activity would make a guide choose a subject
-  // before they can even see what is waiting to sync, which has nothing to do
-  // with where they are standing.
+  // The place-selection step. Applies ONLY to the two place-scoped tabs:
+  // putting it in front of Home or Activity would make a guide choose a
+  // subject before they can even see what is waiting to sync, which has
+  // nothing to do with where they are standing.
+  //
+  // Rendered INSIDE the tab shell, below, rather than as a full-screen
+  // takeover -- it keeps the tab bar. It is a state of Explore/Questions, not
+  // a destination the guide asked for, so removing their way out would strand
+  // anyone who cannot choose right now (offline, no permission, nowhere
+  // mapped) with no route back to Home or Activity. Pushed screens still take
+  // the full screen, and should: those are tasks the guide deliberately
+  // started, where focus is the point.
   const needsPlace =
     (activeTab === 'explore' || activeTab === 'questions') && !selectedPlace && !skippedPlace;
-  if (needsPlace || changingPlace) {
-    return (
-      <PlacePickerScreen
-        guide={guide}
-        onSelect={(place) => {
-          setSelectedPlace(place);
-          setChangingPlace(false);
-          setSkippedPlace(false);
-          // Both place-scoped tabs re-read on refreshKey, so this is what
-          // makes them reload against the NEW subject rather than keep
-          // showing the previous place's questions.
-          setRefreshKey((k) => k + 1);
-        }}
-        onSkip={() => {
-          setSkippedPlace(true);
-          setChangingPlace(false);
-          setRefreshKey((k) => k + 1);
-        }}
-        onCancel={changingPlace ? () => setChangingPlace(false) : undefined}
-      />
-    );
-  }
+  const showPlacePicker = needsPlace || changingPlace;
 
   return (
     <View style={styles.shell}>
       <View style={styles.content}>
-        {activeTab === 'home' ? (
+        {showPlacePicker ? (
+          <PlacePickerScreen
+            guide={guide}
+            // Which tab asked, so the picker can say what choosing will do
+            // next instead of appearing as an unexplained interruption.
+            forTab={activeTab === 'questions' ? 'questions' : 'explore'}
+            onSelect={(place) => {
+              setSelectedPlace(place);
+              setChangingPlace(false);
+              setSkippedPlace(false);
+              // Both place-scoped tabs re-read on refreshKey, so this is what
+              // makes them reload against the NEW subject rather than keep
+              // showing the previous place's questions.
+              setRefreshKey((k) => k + 1);
+            }}
+            onSkip={() => {
+              setSkippedPlace(true);
+              setChangingPlace(false);
+              setRefreshKey((k) => k + 1);
+            }}
+            onCancel={changingPlace ? () => setChangingPlace(false) : undefined}
+          />
+        ) : activeTab === 'home' ? (
           <HomeScreen
             guide={guide}
             onCreateNote={() => setPushed('createNote')}

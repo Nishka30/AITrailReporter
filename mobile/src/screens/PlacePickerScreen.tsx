@@ -10,12 +10,17 @@ import {
   type PlaceCandidate,
 } from '../api/placeCandidates';
 import { Button, EmptyState, ErrorState, LoadingState, Screen } from '../components/ui';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { captureCurrentLocation } from '../location/locationService';
 import { colors, radii, spacing, type } from '../theme/theme';
 import type { LocalGuide } from '../types/models';
 
 type Props = {
   guide: LocalGuide;
+  /** Which tab the guide is standing in. Only changes the one line explaining
+   * what happens after they choose — the list and its behaviour are identical,
+   * because the choice itself is shared by both tabs. */
+  forTab: 'explore' | 'questions';
   onSelect: (place: PlaceCandidate) => void;
   /** Shown only when a place is ALREADY chosen — i.e. the guide opened this
    * deliberately to change it, and backing out must leave the old choice
@@ -112,7 +117,13 @@ function PlaceRow({
  * so a freshly discovered place is selectable straight away and its questions
  * fill in shortly after.
  */
-export default function PlacePickerScreen({ guide, onSelect, onCancel, onSkip }: Props) {
+export default function PlacePickerScreen({
+  guide,
+  forTab,
+  onSelect,
+  onCancel,
+  onSkip,
+}: Props) {
   const [candidates, setCandidates] = useState<PlaceCandidate[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -159,13 +170,49 @@ export default function PlacePickerScreen({ guide, onSelect, onCancel, onSkip }:
     load();
   }, [load]);
 
+  // Spinner only for a genuine pull — `loading` also covers the initial mount,
+  // which must not draw the pull indicator.
+  const { pulling, onPull } = usePullToRefresh(load);
+
+  // Specific places and "the area itself" are different kinds of answer, so
+  // they get different groups rather than one undifferentiated list. The area
+  // is a legitimate choice ("the shops along this street are all shut") but
+  // almost never the one a guide means, and mixing it in made it look like
+  // just another nearby place.
+  const places = candidates?.filter((c) => !c.isArea) ?? [];
+  const area = candidates?.find((c) => c.isArea) ?? null;
+
   return (
-    <Screen>
+    // footerSpace matches the other tab screens so the last row never sits
+    // under the tab bar; pull-to-refresh is the gesture a guide reaches for
+    // after walking a few metres, and costs nothing to wire to the same load.
+    <Screen onRefresh={onPull} refreshing={pulling} footerSpace={8}>
       <View style={styles.header}>
+        {/* Says which tab this belongs to, so the step reads as the first
+            thing Explore/Questions needs rather than an unexplained screen
+            that replaced the one they tapped. */}
+        <View style={styles.eyebrowRow}>
+          <Ionicons
+            name={forTab === 'questions' ? 'chatbubble-ellipses-outline' : 'compass-outline'}
+            size={13}
+            color={colors.marigoldDeep}
+          />
+          <Text style={styles.eyebrow}>
+            {forTab === 'questions' ? 'QUESTIONS' : 'EXPLORE'}
+          </Text>
+          {area ? (
+            <Text style={styles.eyebrowArea} numberOfLines={1}>
+              · you're in {area.name}
+            </Text>
+          ) : null}
+        </View>
+
         <Text style={styles.title}>What would you like to contribute to?</Text>
         <Text style={styles.subtitle}>
           {candidates && candidates.length > 0
-            ? 'We found these places near you.'
+            ? forTab === 'questions'
+              ? "We found these places near you. Pick one and we'll show what's worth checking there."
+              : "We found these places near you. Pick one and we'll show what's worth sharing about it."
             : 'Checking what’s around you…'}
         </Text>
       </View>
@@ -201,22 +248,39 @@ export default function PlacePickerScreen({ guide, onSelect, onCancel, onSkip }:
         </View>
       ) : candidates && candidates.length > 0 ? (
         <>
-          <View style={styles.list}>
-            {candidates.map((candidate) => (
-              <PlaceRow
-                key={candidate.id}
-                candidate={candidate}
-                onPress={() => onSelect(candidate)}
-              />
-            ))}
-          </View>
+          {places.length > 0 ? (
+            <View style={styles.list}>
+              {places.map((candidate) => (
+                <PlaceRow
+                  key={candidate.id}
+                  candidate={candidate}
+                  onPress={() => onSelect(candidate)}
+                />
+              ))}
+            </View>
+          ) : null}
+
+          {area ? (
+            <>
+              <Text style={styles.groupLabel}>
+                {places.length > 0 ? 'Or the area in general' : 'The area you’re in'}
+              </Text>
+              <View style={styles.list}>
+                <PlaceRow candidate={area} onPress={() => onSelect(area)} />
+              </View>
+            </>
+          ) : null}
+
           <Text style={styles.footnote}>
-            Not seeing the right place? Move a little closer to it and refresh — we only
-            show places we can actually confirm are here.
+            {places.length > 0
+              ? 'Only places we can actually confirm are here. If yours is missing, move a little closer and refresh.'
+              : 'We could not confirm any specific places around you — the area itself is still a real thing to report on.'}
           </Text>
           <View style={styles.actions}>
             <Button label="Refresh" onPress={load} variant="ghost" />
-            {onCancel ? <Button label="Keep current place" onPress={onCancel} variant="ghost" /> : null}
+            {onCancel ? (
+              <Button label="Keep current place" onPress={onCancel} variant="ghost" />
+            ) : null}
           </View>
         </>
       ) : (
@@ -249,8 +313,19 @@ export default function PlacePickerScreen({ guide, onSelect, onCancel, onSkip }:
 
 const styles = StyleSheet.create({
   header: { marginBottom: spacing.lg },
+  eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: spacing.xs },
+  eyebrow: { ...type.captionBold, color: colors.marigoldDeep, letterSpacing: 0.7 },
+  eyebrowArea: { ...type.caption, color: colors.inkFaint, flexShrink: 1 },
   title: { ...type.display, fontSize: 25, color: colors.ink, lineHeight: 33 },
   subtitle: { ...type.small, color: colors.inkFaint, marginTop: 6, lineHeight: 19 },
+  groupLabel: {
+    ...type.captionBold,
+    color: colors.inkFaint,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
+  },
 
   // One grouped, recessed surface rather than N elevated cards — the same
   // treatment the Questions tab gives its place-question group, so the two
