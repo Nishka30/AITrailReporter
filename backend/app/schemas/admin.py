@@ -148,8 +148,23 @@ class PlaceDetail(BaseModel):
     provider: str | None
     external_place_id: str | None
     formatted_address: str | None
+    # The multi-category classification (see
+    # app/services/places/category_catalog.py). Additive alongside the single
+    # category/subcategory pair above, which is unchanged -- these are the
+    # several things this place is at once, each with how much it defines it.
+    categories: list["PlaceCategoryDetail"] = []
     created_at: datetime
     recent_observations: list[ReviewQueueItem]
+
+
+class PlaceCategoryDetail(BaseModel):
+    kind: str
+    slug: str
+    display_name: str
+    relevance: int
+    confidence: float
+    is_primary: bool
+    source: str
 
 
 class ContributorSummary(BaseModel):

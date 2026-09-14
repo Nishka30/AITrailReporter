@@ -52,6 +52,7 @@ from app.services.place_question_research import (
     research_plan,
     validation,
 )
+from app.services.places import category_assignment
 from app.services.places.google_provider import get_place_provider
 from app.services.research import perplexity_provider
 from app.services.research.base import ResearchFinding, ResearchProviderError
@@ -532,6 +533,9 @@ def ensure_researched(db: Session, location_id: UUID, force: bool = False) -> Pl
             _previously_asked(db, location_id),
             location.category,
             location.subcategory,
+            category_assignment.describe_categories_for_prompt(
+                category_assignment.list_location_categories(db, location_id)
+            ),
         )
         researched = validation.validate_research_output(raw, allowed_urls)
     except (

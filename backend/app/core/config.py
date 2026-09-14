@@ -199,6 +199,18 @@ class Settings(BaseSettings):
     # than being merged just for being close. See poi_discovery.py.
     google_places_name_similarity_threshold: float = 0.45
 
+    # --- Location categories (app/services/places/category_*.py) ------------
+    # Whether the constrained model fallback may classify a place the
+    # deterministic rules could not describe. Rules always run regardless;
+    # this only governs the paid fallback, which is why it can be switched
+    # off without leaving places uncategorised -- they simply keep whatever
+    # the rules established.
+    location_category_ai_enabled: bool = True
+    # Ceiling on model classifications per background sweep, so a one-off
+    # backfill over a large table cannot turn into an unbounded spend. A
+    # sweep that hits the cap simply stops; the next one continues.
+    location_category_ai_max_per_run: int = 25
+
     # How far apart (in hours) a GuideLocation sample may be from a
     # submission's occurred_at and still be trusted as that submission's
     # location. This is the ENTIRE safeguard against the failure this feature

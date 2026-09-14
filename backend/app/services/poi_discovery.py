@@ -43,7 +43,7 @@ from app.db.geo import make_point
 from app.db.models.location import Location
 from app.db.models.poi_discovery import PoiDiscovery
 from app.services import locations as location_service
-from app.services.places import categories
+from app.services.places import categories, category_assignment
 from app.services.places.base import DiscoveredPlace, PlaceProviderError
 from app.services.places.google_provider import PROVIDER_NAME, get_place_provider
 
@@ -279,6 +279,12 @@ def _find_or_create_location(
     # Flushed immediately so a subsequent iteration/call in the same
     # transaction sees this row for its own dedup check.
     db.flush()
+    # Multi-category classification, alongside the single category/subcategory
+    # pair set above rather than instead of it (see
+    # services/places/category_assignment.py). Best-effort by construction: a
+    # place must still be discovered and offered to a guide even if working
+    # out what KIND of place it is fails.
+    category_assignment.maybe_assign_categories(db, location)
     return location, True
 
 

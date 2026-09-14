@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.location import (
+    CategorisedLocationRead,
+    LocationCategoriesResponse,
+    LocationCategoryRead,
     LocationCreate,
     LocationRead,
     NearbyLocationResult,
@@ -15,6 +18,7 @@ from app.schemas.location import (
 from app.services import locations as location_service
 from app.services import place_candidates as place_candidate_service
 from app.services import poi_discovery as poi_discovery_service
+from app.services.places import category_assignment
 
 router = APIRouter(prefix="/api/v1/locations", tags=["locations"])
 
@@ -74,6 +78,62 @@ def get_place_candidates(
     )
 
 
+# Registered before "/{location_id}", same reason as "/nearby" above.
+@router.get("/by-category", response_model=list[CategorisedLocationRead])
+def get_locations_by_category(
+    slug: str = Query(description="Category slug, e.g. 'wildlife', 'teahouse', 'gear_shop'."),
+    kind: str | None = Query(
+        default=None,
+        description="Restrict to 'theme' or 'place_type'. Needed only for the few slugs that exist as both.",
+    ),
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+    radius_meters: float | None = Query(default=None, gt=0),
+    min_relevance: int = Query(default=0, ge=0, le=100),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Places in a category -- "teahouses near here", "what is worth seeing
+    for wildlife".
+
+    Ordered nearest-first when a coordinate is supplied, by relevance
+    otherwise. Never 404s: an empty list is the honest answer for a category
+    nothing has been classified into yet.
+    """
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(
+            status_code=422,
+            detail="latitude and longitude must be supplied together.",
+        )
+    if radius_meters is not None and latitude is None:
+        raise HTTPException(
+            status_code=422,
+            detail="radius_meters requires latitude and longitude.",
+        )
+    results = category_assignment.find_locations_by_category(
+        db,
+        slug=slug,
+        kind=kind,
+        latitude=latitude,
+        longitude=longitude,
+        radius_meters=radius_meters,
+        min_relevance=min_relevance,
+        limit=limit,
+    )
+    return [
+        CategorisedLocationRead(
+            id=row.location.id,
+            name=row.location.name,
+            latitude=float(row.location.latitude),
+            longitude=float(row.location.longitude),
+            relevance=row.relevance,
+            confidence=row.confidence,
+            distance_meters=row.distance_meters,
+        )
+        for row in results
+    ]
+
+
 @router.post("/discover", response_model=list[NearbyLocationResult])
 def discover_locations(
     latitude: float = Query(ge=-90, le=90),
@@ -115,3 +175,28 @@ def get_location(location_id: UUID, db: Session = Depends(get_db)):
     if location is None:
         raise HTTPException(status_code=404, detail="Location not found")
     return location
+
+
+@router.get("/{location_id}/categories", response_model=LocationCategoriesResponse)
+def get_location_categories(location_id: UUID, db: Session = Depends(get_db)):
+    """What KIND of place this is -- several answers at once, each with how
+    much it defines this particular place.
+
+    A place is rarely one thing: a bazaar is Shopping and Food and Local Life.
+    The `relevance` on each is what a future live-information view would rank
+    by; see app/services/places/category_catalog.py.
+
+    An empty `categories` list is a legitimate answer for a place nothing has
+    classified yet, not an error.
+    """
+    location = location_service.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+    return LocationCategoriesResponse(
+        location_id=location.id,
+        location_name=location.name,
+        categories=[
+            LocationCategoryRead(**vars(category))
+            for category in category_assignment.list_location_categories(db, location_id)
+        ],
+    )

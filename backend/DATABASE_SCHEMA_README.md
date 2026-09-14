@@ -1,12 +1,12 @@
 # AI Trail Reporter — Comprehensive Database Reference & Schema README
 
-This document provides a comprehensive, exhaustive reference for all **21 tables** and **247 columns** in the local PostgreSQL database (`postgresql://postgres:***@localhost:5432/postgres`), as configured in `backend/.env`.
+This document provides a comprehensive, exhaustive reference for all **23 tables** and **275 columns** in the local PostgreSQL database (`postgresql://postgres:***@localhost:5432/postgres`), as configured in `backend/.env`.
 
 ---
 
 ## 1. Architectural System Overview
 
-The database is built on top of **PostgreSQL + PostGIS + pg_trgm** and is organized around eight decoupled lifecycle pipelines:
+The database is built on top of **PostgreSQL + PostGIS + pg_trgm** and is organized around nine decoupled lifecycle pipelines plus shared infrastructure:
 
 1. **Guide Identity & Live GPS Tracking**: Guides register (`guides`) and stream GPS location samples (`guide_locations`).
 2. **Offline-First Submissions & Media**: Field reports (`submissions`) capture text, voice, or photos with extensive timestamp and geospatial provenance (`photo_exif`, `gps_live`, `historical_inferred`, etc.).
@@ -14,9 +14,10 @@ The database is built on top of **PostgreSQL + PostGIS + pg_trgm** and is organi
 4. **LLM Structured Extraction Lifecycle**: Entity and condition extraction pipeline (`extractions`) driven by Anthropic Claude.
 5. **Knowledge & Moderation Layer**: Verified extracted facts (`observations`) categorized by knowledge policy (`knowledge_type_config`) and moderated by admins (`observation_moderation`).
 6. **Locations, POIs & Web Research**: Spatial POIs (`locations`), focal exploration anchors (`curated_hubs`), grid-cell discovery (`poi_discovery`), and web grounding (`place_question_research`, `place_research_findings`, `place_questions`).
-7. **Knowledge Gap & Question Dispatching**: Data-gap questions (`questions`) assigned to guides on the trail (`question_assignments`) and answered (`question_answers`).
-8. **Reward Ledger & Gamification**: Append-only point reward ledger (`reward_ledger`) governed by configurable point values (`reward_rules`).
-9. **Infrastructure**: Database versioning (`alembic_version`) and PostGIS projection metadata (`spatial_ref_sys`).
+7. **Location Classification**: A controlled category vocabulary (`location_categories`) applied many-to-one onto places (`location_category_assignments`), so a Location can be several things at once — Nature *and* Wildlife *and* Adventure — each with its own per-place relevance. Additive to `locations.category`/`subcategory`, which are unchanged.
+8. **Knowledge Gap & Question Dispatching**: Data-gap questions (`questions`) assigned to guides on the trail (`question_assignments`) and answered (`question_answers`).
+9. **Reward Ledger & Gamification**: Append-only point reward ledger (`reward_ledger`) governed by configurable point values (`reward_rules`).
+10. **Infrastructure**: Database versioning (`alembic_version`) and PostGIS projection metadata (`spatial_ref_sys`).
 
 ---
 
@@ -221,7 +222,44 @@ Identifies central anchor locations (e.g. Thamel or Lukla) with a defined operat
 
 ---
 
-### 10. `poi_discovery`
+### 10. `location_categories`
+TrailMind's controlled category vocabulary — the closed list every category assignment must point at. A catalog (~231 rows), not per-place data; seeded from `app/services/places/category_catalog.py`. Split into two `kind`s: **themes** (what a place is ABOUT — Nature, Religious, Practical) and **place types** (what it literally IS — Temple, Waterfall, Teahouse). That split is what lets one Google type deterministically imply a whole honest category set.
+
+| Column | Type | Nullable | Default | Constraints | Description |
+|---|---|---|---|---|---|
+| `id` | `uuid` | **No** | `uuid_generate_v4()` | **PK** | Unique primary key for the category. |
+| `slug` | `character varying(50)` | **No** | None | **UNIQUE** (`kind`, `slug`) | Stable machine name (`wildlife`, `temple`, `teahouse`). What rules and the AI classifier emit; never matched on display name. Unique per `kind`, not globally — `trail`, `area` and `other` deliberately exist as both a theme and a place type because they name different things. |
+| `kind` | `character varying(20)` | **No** | None | **UNIQUE** (`kind`, `slug`), **INDEXED** | `'theme'` or `'place_type'`. |
+| `display_name` | `character varying(100)` | **No** | None | - | Human-facing name. For the 16 categories that already existed as `locations.category` values this is byte-identical to the legacy string, so a place's primary theme always reads the same as its legacy category. |
+| `default_priority` | `integer` | **No** | None | **CHECK** 0–100 | How much this category matters *in general* — the fallback when nothing place-specific is known. Distinct from an assignment's `relevance`. |
+| `description` | `text` | Yes | None | - | Plain-language meaning. Load-bearing rather than decorative: this is the vocabulary definition shown to the AI classifier. |
+| `touristlink_id` | `integer` | Yes | None | - | Provenance back to the third-party inventory this vocabulary started from. Never a foreign key; `NULL` marks a category TrailMind added because that inventory lacked it (all trekking, safety and practical vocabulary). |
+| `active` | `boolean` | **No** | `true` | - | Retire a category without deleting it — assignments reference it with `RESTRICT`, so deletion would destroy history. |
+| `created_at` | `timestamp with time zone` | **No** | `now()` | - | Record creation timestamp. |
+| `updated_at` | `timestamp with time zone` | **No** | `now()` | - | Record update timestamp. |
+
+---
+
+### 11. `location_category_assignments`
+Applies a category to a Location, carrying how much it matters *there*. This is the table that makes a place able to be several things at once — a bazaar is Shopping **and** Food **and** Local Life. Strictly additive: `locations.category`/`subcategory` are unchanged and still written by the same code; the primary assignment of each kind simply mirrors that legacy pair.
+
+| Column | Type | Nullable | Default | Constraints | Description |
+|---|---|---|---|---|---|
+| `id` | `uuid` | **No** | `uuid_generate_v4()` | **PK** | Unique primary key for the assignment. |
+| `location_id` | `uuid` | **No** | None | **FK** &rarr; `locations.id` (CASCADE), **UNIQUE** (`location_id`, `category_id`), **INDEXED** | The place being classified. |
+| `category_id` | `uuid` | **No** | None | **FK** &rarr; `location_categories.id` (**RESTRICT**), **INDEXED** | The category applied. RESTRICT, not CASCADE: deleting a catalog entry must never silently delete the assignments that explain places. |
+| `kind` | `character varying(20)` | **No** | None | part of partial UNIQUE index | Denormalised from the catalog row, solely so the partial unique index below can enforce one primary *per kind*. A category's kind is fixed at creation, so it cannot drift. |
+| `relevance` | `integer` | **No** | None | **CHECK** 0–100 | How much this category matters **for this place**. The place-type assignment anchors the scale at 100; implied themes carry the relevance the catalog declares for that implication. This is what a future live-information view ranks by. |
+| `confidence` | `numeric(3,2)` | **No** | None | **CHECK** 0–1 | How trustworthy the *evidence* was — Google's own `primaryType` (0.95) outranks a guess from the place's name (0.75). Deliberately separate from `relevance`: "definitely a cafe, and that barely matters here" and "possibly a viewpoint, and if so it's the whole point" are different statements. |
+| `is_primary` | `boolean` | **No** | `false` | **UNIQUE** partial index (`location_id`, `kind`) `WHERE is_primary` | Marks the single most-defining category of each kind. The database guarantees at most one primary theme and one primary place type per Location. |
+| `source` | `character varying(20)` | **No** | None | - | How this was established: `seed_type`, `google_type`, `name_rule`, `rule_implied`, `ai`, `manual`. Also an **authority tier** — a pass may only replace assignments of its own tier or below (rules < ai < manual), so the free rule-based pass can never delete a paid model classification or a curator's judgement. |
+| `rationale` | `text` | Yes | None | - | Why this was assigned, in words (`"Google type 'hindu_temple'"`, `"implied by place type 'Temple'"`), so a wrong-looking assignment can be traced to the rule that produced it. |
+| `created_at` | `timestamp with time zone` | **No** | `now()` | - | Record creation timestamp. |
+| `updated_at` | `timestamp with time zone` | **No** | `now()` | - | Record update timestamp. |
+
+---
+
+### 12. `poi_discovery`
 Tracks grid-cell web research runs that discover unknown places on the map.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -244,7 +282,7 @@ Tracks grid-cell web research runs that discover unknown places on the map.
 
 ---
 
-### 11. `place_question_research`
+### 13. `place_question_research`
 Tracks the lifecycle of web research conducted about what travellers frequently want to know about a specific place.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -264,7 +302,7 @@ Tracks the lifecycle of web research conducted about what travellers frequently 
 
 ---
 
-### 12. `place_research_findings`
+### 14. `place_research_findings`
 Stores factual statements, summaries, and source citations retrieved from web research regarding a location.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -284,7 +322,7 @@ Stores factual statements, summaries, and source citations retrieved from web re
 
 ---
 
-### 13. `place_questions`
+### 15. `place_questions`
 Targeted place-specific inquiries presented to guides when they are physically at that location.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -306,7 +344,7 @@ Targeted place-specific inquiries presented to guides when they are physically a
 
 ---
 
-### 14. `knowledge_type_config`
+### 16. `knowledge_type_config`
 Configures policy, refresh intervals, and safety criticality for each knowledge category.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -325,7 +363,7 @@ Configures policy, refresh intervals, and safety criticality for each knowledge 
 
 ---
 
-### 15. `questions`
+### 17. `questions`
 Questions dynamically generated to fill detected knowledge gaps on the trail network.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -356,7 +394,7 @@ Questions dynamically generated to fill detected knowledge gaps on the trail net
 
 ---
 
-### 16. `question_assignments`
+### 18. `question_assignments`
 Dispatches questions to individual guides on the trail.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -372,7 +410,7 @@ Dispatches questions to individual guides on the trail.
 
 ---
 
-### 17. `question_answers`
+### 19. `question_answers`
 Stores the guide's explicit text answer to an assigned question.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -390,7 +428,7 @@ Stores the guide's explicit text answer to an assigned question.
 
 ---
 
-### 18. `reward_rules`
+### 20. `reward_rules`
 Defines point reward rates and criteria for different contributions.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -405,7 +443,7 @@ Defines point reward rates and criteria for different contributions.
 
 ---
 
-### 19. `reward_ledger`
+### 21. `reward_ledger`
 Immutable, append-only ledger tracking points granted to guides.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -422,7 +460,7 @@ Immutable, append-only ledger tracking points granted to guides.
 
 ---
 
-### 20. `alembic_version`
+### 22. `alembic_version`
 Internal version tracking for Alembic schema migrations.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -431,7 +469,7 @@ Internal version tracking for Alembic schema migrations.
 
 ---
 
-### 21. `spatial_ref_sys`
+### 23. `spatial_ref_sys`
 Standard PostGIS spatial reference system lookup catalog.
 
 | Column | Type | Nullable | Default | Constraints | Description |
@@ -445,7 +483,7 @@ Standard PostGIS spatial reference system lookup catalog.
 ---
 
 ## 3. Summary Metrics
-- **Total Base Tables**: 21
-- **Domain Tables**: 19
+- **Total Base Tables**: 23
+- **Domain Tables**: 21
 - **Infrastructure / Spatial Tables**: 2 (`alembic_version`, `spatial_ref_sys`)
-- **Total Columns Documented**: 247
+- **Total Columns Documented**: 275

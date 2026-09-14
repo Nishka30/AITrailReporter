@@ -155,6 +155,7 @@ def build_user_message(
     already_asked: list[str],
     category: str | None = None,
     subcategory: str | None = None,
+    categories_summary: str | None = None,
 ) -> str:
     """Assembles the reasoning input.
 
@@ -178,6 +179,14 @@ def build_user_message(
     if category:
         category_line = f"Category: {category} / {subcategory}" if subcategory else f"Category: {category}"
         lines.append(category_line)
+    # The richer multi-category view, when this place has been classified
+    # (see services/places/category_assignment.py). Additive alongside the
+    # single Category line above rather than replacing it: a place is often
+    # several things at once, and the number after each theme says how much
+    # that aspect actually defines THIS place -- which is what tells the model
+    # to ask a market about its produce before its architecture.
+    if categories_summary:
+        lines.append(f"Categories (theme relevance 0-100): {categories_summary}")
     if description:
         lines.append(f"Known description: {description}")
 

@@ -1,3 +1,15 @@
+"""!!! STALE -- DO NOT RUN WITHOUT READING THIS FIRST !!!
+
+This script OVERWRITES DATABASE_SCHEMA_README.md wholesale from the hardcoded
+string below. That string is a snapshot from before the location-category
+taxonomy was added, so running this AS IS would silently delete the
+documentation for `location_categories` and `location_category_assignments`
+and revert the table numbering and summary counts.
+
+DATABASE_SCHEMA_README.md is currently maintained BY HAND. Either update the
+string below in the same edit as the .md file, or retire this script.
+"""
+
 import os
 
 readme_path = r"c:\Users\user\OneDrive\Desktop\AITrailReporter\backend\DATABASE_SCHEMA_README.md"

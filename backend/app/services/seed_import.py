@@ -65,7 +65,7 @@ from app.db.models.curated_hub import DEFAULT_HUB_RADIUS_METERS, CuratedHub
 from app.db.models.location import Location
 from app.db.models.place_question import PlaceQuestion
 from app.services.place_questions import normalize_question
-from app.services.places import categories
+from app.services.places import categories, category_assignment
 from app.services.poi_discovery import find_similar_nearby_location
 
 logger = logging.getLogger(__name__)
@@ -325,6 +325,10 @@ def import_seed_place(db: Session, row: SeedPlaceRow, stats: ImportStats) -> Loc
         existing.formatted_address = row.area_street or existing.formatted_address
         existing.coordinate_confidence = row.confidence or existing.coordinate_confidence
         existing.coordinate_type = row.coordinate_type or existing.coordinate_type
+        # Curated data is better evidence than whatever originally classified
+        # this row, so re-run multi-category classification too. A curator's
+        # own manual assignments still win -- see category_assignment.
+        category_assignment.maybe_assign_categories(db, existing)
         stats.locations_matched += 1
         return existing
 
@@ -352,6 +356,7 @@ def import_seed_place(db: Session, row: SeedPlaceRow, stats: ImportStats) -> Loc
     )
     db.add(location)
     db.flush()
+    category_assignment.maybe_assign_categories(db, location)
     stats.locations_created += 1
     return location
 

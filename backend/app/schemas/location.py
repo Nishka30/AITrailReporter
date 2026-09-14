@@ -78,6 +78,57 @@ class PlaceCandidate(BaseModel):
     is_area: bool = False
 
 
+class LocationCategoryRead(BaseModel):
+    """One category assigned to a Location, from
+    GET /api/v1/locations/{id}/categories.
+
+    A Location has several of these at once -- a bazaar is Shopping and Food
+    and Local Life -- which is the whole point of the table behind it. See
+    app/services/places/category_catalog.py.
+    """
+
+    # 'theme' (what the place is ABOUT) or 'place_type' (what it IS).
+    kind: str
+    # Stable machine name -- match on this, never on display_name.
+    slug: str
+    display_name: str
+    # 0-100, how much this category matters FOR THIS PLACE. What a future
+    # live-information view would rank by.
+    relevance: int
+    # 0-1, how trustworthy the evidence behind the classification was.
+    # Distinct from relevance on purpose: "definitely a cafe, and that barely
+    # matters here" and "possibly a viewpoint, and if so it is the whole
+    # point" are different statements.
+    confidence: float
+    # True for the single most-defining category of each kind. The primary
+    # pair mirrors the legacy (category, subcategory) columns.
+    is_primary: bool
+    # How this was established: google_type / seed_type / name_rule /
+    # rule_implied / ai / manual.
+    source: str
+
+
+class LocationCategoriesResponse(BaseModel):
+    location_id: UUID
+    location_name: str
+    categories: list[LocationCategoryRead]
+
+
+class CategorisedLocationRead(BaseModel):
+    """A place found BY category, from GET /api/v1/locations/by-category."""
+
+    id: UUID
+    name: str
+    latitude: float
+    longitude: float
+    # How much the requested category defines THIS place, so results can be
+    # ranked by fit and not merely listed.
+    relevance: int
+    confidence: float
+    # Null when the query supplied no coordinate to measure from.
+    distance_meters: float | None = None
+
+
 class PlaceCandidateResponse(BaseModel):
     latitude: float
     longitude: float

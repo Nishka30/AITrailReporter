@@ -10,7 +10,8 @@ from app.core.config import settings
 from app.db.models.location import Location
 from app.db.models.observation import Observation
 from app.db.models.observation_moderation import ObservationModeration
-from app.schemas.admin import PlaceDetail, PlaceSummary
+from app.schemas.admin import PlaceCategoryDetail, PlaceDetail, PlaceSummary
+from app.services.places import category_assignment
 from app.services.admin_review import ReviewQueueFilters, list_review_queue
 
 
@@ -91,6 +92,12 @@ def get_place_detail(db: Session, location_id: UUID, limit: int = 25) -> PlaceDe
         provider=location.provider,
         external_place_id=location.external_place_id,
         formatted_address=location.formatted_address,
+        categories=[
+            PlaceCategoryDetail(**vars(category))
+            for category in category_assignment.list_location_categories(
+                db, location.id
+            )
+        ],
         created_at=location.created_at,
         recent_observations=result.items,
     )
