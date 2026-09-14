@@ -42,6 +42,22 @@ PLACE_QUESTION_CONTRIBUTION_KINDS = (
 
 DEFAULT_CONTRIBUTION_KIND = "observation"
 
+# Where a PlaceQuestion's TEXT actually came from -- distinct from
+# `contribution_kind` above, which is about how the guide is asked to answer,
+# not who wrote the question.
+#   'ai_research' -- the existing Perplexity -> Claude pipeline
+#                     (services/place_questions.py). The default, and the
+#                     only kind that existed before curated seed data.
+#   'seed'        -- a human-curated question loaded from a spreadsheet
+#                     (services/seed_import.py). Never touched by research
+#                     refreshes: `ensure_researched` only ever deactivates
+#                     and replaces rows IT generated for a Location, ranked
+#                     by `display_order` within its own batch -- a seed row's
+#                     `research_batch_id` is always null, so it is never a
+#                     member of any AI batch and is left alone by every
+#                     refresh, forever.
+PLACE_QUESTION_SOURCES = ("ai_research", "seed")
+
 
 class PlaceQuestion(Base):
     """A location-specific invitation to contribute about a known Location,
@@ -135,6 +151,11 @@ class PlaceQuestion(Base):
     # Groups every question produced by ONE research run, so a refresh can
     # deactivate a previous batch wholesale without deleting history.
     research_batch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # One of PLACE_QUESTION_SOURCES. server_default 'ai_research' so the
+    # column could be added NOT NULL without a backfill guessing at intent --
+    # every row that existed before this column did was genuinely produced
+    # by the research pipeline (see the migration that added this).
+    source: Mapped[str] = mapped_column(String(20), nullable=False, server_default="ai_research")
     # Set False rather than deleting when a refresh supersedes a question --
     # an already-answered question must never vanish from its answer's
     # provenance (submissions.source_place_question_id is ON DELETE SET NULL

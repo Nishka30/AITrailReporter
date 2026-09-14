@@ -167,7 +167,14 @@ def _find_by_external_id(db: Session, provider: str, external_place_id: str) -> 
     return db.execute(stmt).scalars().first()
 
 
-def _find_similar_nearby_location(db: Session, latitude: float, longitude: float, name: str) -> Location | None:
+def find_similar_nearby_location(
+    db: Session,
+    latitude: float,
+    longitude: float,
+    name: str,
+    *,
+    radius_meters: float | None = None,
+) -> Location | None:
     """An already-known place within the dedup radius whose NAME is also
     similar enough to be the same physical thing.
 
@@ -183,6 +190,17 @@ def _find_similar_nearby_location(db: Session, latitude: float, longitude: float
     pg_trgm.similarity_threshold GUC, set for this query only) rather than a
     bare `similarity(...) >= x` function call, which the GIN trigram index on
     `locations.name` cannot use.
+
+    Public (not `_`-prefixed) because this is the ONE dedup-by-name-and-
+    proximity primitive in the codebase, and it is reused as-is by
+    app/services/seed_import.py for curated data -- see that module's own
+    docstring for why matching curated rows against existing Locations must
+    use the identical rule discovery already uses, not a second
+    implementation of "is this the same place?" `radius_meters` defaults to
+    the standard discovery dedup radius but is overridable per-call, e.g. a
+    curated row whose coordinate is only Low-confidence deliberately widens
+    it (see seed_import.py) rather than risk missing a genuine match because
+    the supplied pin might be a little off.
     """
     # SET LOCAL's value position is a GUC literal, not a bind parameter --
     # Postgres rejects `SET LOCAL x = $1` outright. Safe to inline directly:
@@ -190,10 +208,13 @@ def _find_similar_nearby_location(db: Session, latitude: float, longitude: float
     threshold = float(settings.google_places_name_similarity_threshold)
     db.execute(text(f"SET LOCAL pg_trgm.similarity_threshold = {threshold}"))
     target = make_point(latitude, longitude)
+    effective_radius = (
+        radius_meters if radius_meters is not None else settings.poi_discovery_dedup_radius_meters
+    )
     stmt = (
         select(Location)
         .where(
-            func.ST_DWithin(Location.geog, target, settings.poi_discovery_dedup_radius_meters),
+            func.ST_DWithin(Location.geog, target, effective_radius),
             Location.name.op("%")(name),
         )
         .order_by(func.ST_Distance(Location.geog, target))
@@ -229,7 +250,7 @@ def _find_or_create_location(
         if existing is not None:
             return existing, False
 
-    duplicate = _find_similar_nearby_location(db, latitude, longitude, name)
+    duplicate = find_similar_nearby_location(db, latitude, longitude, name)
     if duplicate is not None:
         logger.info("Skipped %r: already known as %r.", name, duplicate.name)
         return duplicate, False

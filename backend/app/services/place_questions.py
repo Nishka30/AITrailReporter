@@ -36,11 +36,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.db.geo import make_point
+from app.db.models.curated_hub import CuratedHub
 from app.db.models.location import Location
 from app.db.models.place_question import PlaceQuestion, PlaceQuestionResearch
 from app.db.models.place_research_finding import PlaceResearchFinding
@@ -95,6 +97,80 @@ def list_place_questions(db: Session, location_id: UUID) -> list[PlaceQuestion]:
 
 def get_place_question(db: Session, place_question_id: UUID) -> PlaceQuestion | None:
     return db.get(PlaceQuestion, place_question_id)
+
+
+def hub_eligible_questions(
+    db: Session, latitude: float, longitude: float
+) -> list[PlaceQuestion]:
+    """Active curated seed questions from any CURATED HUB the given
+    coordinate falls within that hub's own eligibility radius of (see
+    db/models/curated_hub.py).
+
+    A hub's seed questions are stored as ordinary PlaceQuestion rows under
+    the HUB's own location_id (its Area Location -- for the Thamel/Lukla
+    launch data, the same real, Google-sourced Location the existing
+    reverse-geocode mechanism already produces). Takes a raw coordinate
+    rather than a Location object because a guide's SELECTED subject can be
+    resolved either from a full Location row or from a slim
+    NearestKnownPlace (see schemas/geographic_context.py) that never carries
+    latitude/longitude -- this way neither caller has to fetch a Location
+    it doesn't otherwise need just to ask "is this near a hub?".
+
+    Distance is computed by PostGIS (ST_DWithin), the same convention every
+    other geographic decision in this codebase already follows -- never
+    Python math. The coordinate exactly at a hub's own anchor is included
+    (distance 0 is always <= any positive radius), which is correct: a guide
+    who chose "Thamel" itself should see Thamel's hub questions.
+    """
+    target = make_point(latitude, longitude)
+    stmt = (
+        select(PlaceQuestion)
+        .join(CuratedHub, CuratedHub.location_id == PlaceQuestion.location_id)
+        .join(Location, Location.id == CuratedHub.location_id)
+        .where(
+            PlaceQuestion.active.is_(True),
+            PlaceQuestion.source == "seed",
+            func.ST_DWithin(Location.geog, target, CuratedHub.radius_meters),
+        )
+        .order_by(PlaceQuestion.display_order, PlaceQuestion.created_at)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def list_all_place_questions(
+    db: Session, location_id: UUID, latitude: float, longitude: float
+) -> list[PlaceQuestion]:
+    """Every popular question a guide who selected/is at the Location
+    identified by `location_id` should see: its own active questions
+    (AI-researched and any curated seed questions specific to this exact
+    place -- both already share one table and one `active` flag, so
+    `list_place_questions` already returns both together) PLUS any curated
+    hub's seed questions `(latitude, longitude)` falls within range of (see
+    hub_eligible_questions). The coordinate is passed separately from the id
+    because callers resolve it from different shapes (a full Location row,
+    or the guide's own live position) and neither should have to fetch a
+    Location purely to ask the hub-proximity question.
+
+    Cross-source de-duplication happens HERE, once, by the same
+    `normalized_text` key the database's own UNIQUE constraint is built on --
+    reusing that exact key rather than a second comparison rule is what makes
+    "prevent duplicate questions" mean the same thing everywhere in this
+    system. Own-Location questions always win a collision (they are strictly
+    more specific than a hub-wide question), so ties are resolved in the
+    order the task itself describes: "Selected Location questions + curated
+    seed questions".
+    """
+    own = list_place_questions(db, location_id)
+    hub = hub_eligible_questions(db, latitude, longitude)
+
+    seen = {q.normalized_text for q in own}
+    merged = list(own)
+    for question in hub:
+        if question.normalized_text in seen:
+            continue
+        seen.add(question.normalized_text)
+        merged.append(question)
+    return merged
 
 
 def is_abandoned(research: PlaceQuestionResearch) -> bool:
@@ -235,16 +311,28 @@ def _persist_questions(
     researched: list[validation.ResearchedQuestion],
     findings_by_topic: dict[str, PlaceResearchFinding] | None = None,
 ) -> int:
-    """Replaces this place's active question set with the new batch.
+    """Replaces this place's active AI-RESEARCHED question set with the new
+    batch. Curated seed questions (PlaceQuestion.source == 'seed') for this
+    same Location are never read, deactivated or touched by this function in
+    any way -- they are a different provenance with a different owner
+    (services/seed_import.py), and a research refresh superseding its OWN
+    previous batch must never be able to silently retire someone else's
+    curated content. See PLACE_QUESTION_SOURCES's own comment.
 
-    Superseded questions are DEACTIVATED, never deleted: a question that has
-    already been answered must keep existing so the answer's provenance
+    Superseded AI questions are DEACTIVATED, never deleted: a question that
+    has already been answered must keep existing so the answer's provenance
     (submissions.source_place_question_id) still resolves to something real.
 
     In-batch duplicates are dropped by normalized key before insert, and the
     UNIQUE (location_id, normalized_text) constraint is the backstop -- a
     reactivating UPDATE handles the case where this exact question already
-    exists from a previous batch, so a refresh never fails on a repeat.
+    exists from a previous AI batch, so a refresh never fails on a repeat.
+    The one case that update path deliberately does NOT cover is a text
+    collision against a SEED question (same location, same normalized text,
+    but source == 'seed') -- that row is left exactly as it is and the
+    AI-generated duplicate of it is simply skipped, because inserting would
+    violate the same UNIQUE constraint and overwriting would mean an
+    automated run quietly replacing a human curator's question.
     """
     batch_id = uuid.uuid4()
 
@@ -261,13 +349,17 @@ def _persist_questions(
         )
         return 0
 
-    existing_by_key = {
-        q.normalized_text: q
-        for q in db.execute(
-            select(PlaceQuestion).where(PlaceQuestion.location_id == location_id)
-        ).scalars().all()
-    }
-    for question in existing_by_key.values():
+    all_existing = db.execute(
+        select(PlaceQuestion).where(PlaceQuestion.location_id == location_id)
+    ).scalars().all()
+    # Keyed for the update-in-place path below -- AI rows only, so a seed
+    # row can never be mistaken for "the previous batch's version" of a
+    # freshly generated question.
+    existing_ai_by_key = {q.normalized_text: q for q in all_existing if q.source == "ai_research"}
+    # Keyed only to detect (and skip) a collision against curated content --
+    # never written to.
+    seed_keys = {q.normalized_text for q in all_existing if q.source == "seed"}
+    for question in existing_ai_by_key.values():
         question.active = False
 
     seen: set[str] = set()
@@ -277,6 +369,10 @@ def _persist_questions(
         if not key or key in seen:
             continue
         seen.add(key)
+        if key in seed_keys:
+            # A curator already asked this exact question for this place.
+            # The seed row stands; nothing to add.
+            continue
         if kept >= settings.place_question_max_count:
             break
 
@@ -287,7 +383,7 @@ def _persist_questions(
         finding = (findings_by_topic or {}).get(item.finding_topic or "")
         finding_id = finding.id if finding is not None else None
 
-        existing = existing_by_key.get(key)
+        existing = existing_ai_by_key.get(key)
         if existing is not None:
             existing.question_text = item.question_text
             existing.contribution_kind = item.contribution_kind
@@ -309,6 +405,7 @@ def _persist_questions(
                     source_urls=source_urls,
                     source_finding_id=finding_id,
                     research_batch_id=batch_id,
+                    source="ai_research",
                     active=True,
                 )
             )

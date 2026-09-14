@@ -91,11 +91,13 @@ class Location(Base):
     # reviewed or reverted as a unit. Null for manually created rows.
     discovery_cell_key: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Which place-identification backend supplied this row: "openstreetmap"
-    # (legacy, backfilled onto pre-Google discovered rows), "google", or null
-    # for manual rows. A DIFFERENT thing from PoiDiscovery.provider, which
-    # records which backend a whole discovery RUN used -- this one records
-    # which backend identified THIS SPECIFIC place, since a place found via
-    # user-selected search never goes through a PoiDiscovery row at all.
+    # (legacy, backfilled onto pre-Google discovered rows), "google", "seed"
+    # (a curated spreadsheet row -- see services/seed_import.py), or null for
+    # a hand-created manual row with no such backend at all. A DIFFERENT
+    # thing from PoiDiscovery.provider, which records which backend a whole
+    # discovery RUN used -- this one records which backend identified THIS
+    # SPECIFIC place, since a place found via user-selected search or seed
+    # import never goes through a PoiDiscovery row at all.
     provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
     # The provider's own stable id for this place (e.g. a Google Place ID).
     # Paired with `provider` in a UNIQUE constraint below -- this is what lets
@@ -106,6 +108,15 @@ class Location(Base):
     # "hindu_temple"). Preserved verbatim even though `category`/`subcategory`
     # below are TrailMind's own vocabulary derived from it -- so
     # classification can be improved later without re-fetching anything.
+    #
+    # `provider` also holds "seed" for a row created by
+    # services/seed_import.py from curated spreadsheet data (see that
+    # module's docstring) -- a THIRD kind of place identification alongside
+    # "openstreetmap"/"google", distinguished the same way those two already
+    # are. `google_primary_type` stays genuinely Google-only for such rows
+    # (null); the curated data's own free-text type/category lives in
+    # `place_kind` below instead, exactly like a discovered row's raw type
+    # does.
     google_primary_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     google_types: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     # TrailMind's OWN taxonomy (see app/services/places/categories.py),
@@ -117,7 +128,32 @@ class Location(Base):
     # Google's formatted address string, kept for admin display -- NOT used
     # as the locality passed into place research (see `locality` above, which
     # is deliberately just neighbourhood+city, not a full postal address).
+    #
+    # For a `provider='seed'` row this instead holds the curator's own
+    # "Area / street" text (e.g. "Tridevi Sadak") -- not Google's, but the
+    # same admin-display role: a short, human-written location fragment, not
+    # the neighbourhood+city string `locality` needs for research queries.
     formatted_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # How much the SUPPLIER of this coordinate trusted it, verbatim from
+    # curated seed data ("High"/"Medium"/"Low" -- see
+    # services/seed_import.py). Null for every row that isn't seed-sourced:
+    # Google-discovered coordinates carry no such self-reported confidence,
+    # and a manually placed pin is trusted by construction. Preserved as
+    # supplied rather than collapsed into a score, so a human reviewing this
+    # data later sees exactly what the curator wrote. `services/
+    # place_candidates.py` reads this to rank a Low-confidence seed place
+    # slightly below an equally-distant place we are more sure of -- see
+    # that module's `_CONFIDENCE_PENALTY_METERS` for exactly how.
+    coordinate_confidence: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # What KIND of point the coordinate represents, verbatim from curated
+    # seed data ("Venue point" -- a specific doorway/counter -- vs "Point /
+    # area anchor" -- a representative point for a broader square, complex or
+    # bazaar that has no single front door). Descriptive metadata only, kept
+    # for admin display and future refinement; nothing currently branches on
+    # its value. Null for every non-seed row, and for seed rows whose source
+    # sheet didn't supply this column at all (the Lukla sheet has no such
+    # column, unlike Thamel's).
+    coordinate_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -338,6 +338,10 @@ def get_guide_popular_questions(
         place = NearestKnownPlace(
             id=chosen.id, name=chosen.name, distance_meters=distance_meters or 0.0
         )
+        # The CHOSEN place's own coordinates -- see list_all_place_questions'
+        # docstring for why hub eligibility is measured from the subject
+        # being asked about, not the guide's raw GPS.
+        place_latitude, place_longitude = float(chosen.latitude), float(chosen.longitude)
     else:
         if location is None:
             return empty
@@ -352,6 +356,16 @@ def get_guide_popular_questions(
             # Even a real, inline attempt just now could name nothing here (a
             # Google outage, or mid-ocean) -- an honest empty result.
             return empty
+        # The RESOLVED place's own coordinates, same reasoning as the chosen-
+        # place branch above -- falls back to the guide's raw position only
+        # in the defensive, should-be-unreachable case that the just-resolved
+        # Location vanished between calls.
+        resolved_location = location_service.get_location(db, place.id)
+        if resolved_location is not None:
+            place_latitude = float(resolved_location.latitude)
+            place_longitude = float(resolved_location.longitude)
+        else:
+            place_latitude, place_longitude = latitude, longitude
 
     # Scheduled rather than awaited: research takes minutes and is cached for
     # 30 days afterwards, so blocking this request would stall the app for one
@@ -363,7 +377,16 @@ def get_guide_popular_questions(
     if research_stale:
         background.add_task(_research_place_questions_job, place.id)
 
-    questions = place_question_service.list_place_questions(db, place.id)
+    # Own questions (AI-researched + this Location's own curated seed
+    # questions) PLUS any curated hub's seed questions this place is within
+    # range of, de-duplicated -- see list_all_place_questions. Seed questions
+    # never depend on Perplexity/Claude finishing: this reads whatever
+    # already exists, exactly like list_place_questions always did: the
+    # background research task above, if scheduled, is unrelated to this
+    # read and never blocks it.
+    questions = place_question_service.list_all_place_questions(
+        db, place.id, place_latitude, place_longitude
+    )
 
     return GuidePlaceQuestions(
         location_id=place.id,

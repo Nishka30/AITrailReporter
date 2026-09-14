@@ -133,6 +133,67 @@ _DEFAULT_CATEGORY = DEFAULT_CATEGORY
 _TEA_NAME_RE = re.compile(r"\btea\b", re.IGNORECASE)
 
 
+# Curated seed data (services/seed_import.py) supplies its own free-text
+# "Type"/"category" column -- a human's word, not Google's, and a much
+# smaller, hand-picked vocabulary than Google's. Kept as its OWN table rather
+# than folded into GOOGLE_TYPE_MAP for the same reason GEOCODE_AREA_TYPE_MAP
+# is separate: these keys come from a different source with a different
+# shape, and merging tables would risk a curator's "Shop" colliding with an
+# unrelated Google type string that happens to match.
+#
+# Reuses TrailMind's EXISTING category names wherever the fit is real
+# (Food & Drink, Lodging, Culture & Heritage, Scenic Spot -- the same
+# vocabulary GOOGLE_TYPE_MAP already uses, including "Shopping"/"Transport",
+# which the mobile picker's icon switch already anticipates even though
+# no Google type maps to them yet). Introduces a few new, self-explanatory
+# categories only where the launch data genuinely has no existing analogue
+# (Health, Finance, Safety, Postal, Nightlife, Services) -- an unmapped
+# category renders with a plain default pin on mobile, never an error, so
+# adding one here is always safe.
+#
+# Matched case-insensitively (see classify_seed_type) since a spreadsheet's
+# casing is a human convention, not a stable API contract the way Google's
+# type strings are.
+SEED_TYPE_MAP: dict[str, tuple[str, str]] = {
+    "restaurant": ("Food & Drink", "Restaurant"),
+    "cafe / restaurant": ("Food & Drink", "Cafe"),
+    "bakery / food": ("Food & Drink", "Bakery"),
+    "lodge / restaurant": ("Lodging", "Guesthouse"),
+    "upgrade lodge": ("Lodging", "Guesthouse"),
+    "shop": ("Shopping", "Shop"),
+    "gift shop": ("Shopping", "Gift Shop"),
+    "tour operator": ("Services", "Tour Operator"),
+    "nightlife": ("Nightlife", "Bar"),
+    "pub / nightlife": ("Nightlife", "Pub"),
+    # Most curated "Attraction" rows in the launch data are heritage sites
+    # (temples, stupas, Durbar Square, museums); a minority (e.g. Garden of
+    # Dreams) are closer to a scenic break, but the CSV supplies only one
+    # type per row with no finer split, so the majority-consistent mapping is
+    # used uniformly -- never a misrepresentation, occasionally imprecise.
+    "attraction": ("Culture & Heritage", "Historical Site"),
+    "cultural site": ("Culture & Heritage", "Religious Site"),
+    "airport": ("Transport", "Airport"),
+    "airline office": ("Transport", "Airline Office"),
+    "travel / ticketing": ("Transport", "Ticketing"),
+    "landmark / trail orientation": ("Scenic Spot", "Viewpoint"),
+    "hospital / medical": ("Health", "Hospital"),
+    "bank / atm candidate": ("Finance", "Bank"),
+    "safety / police": ("Safety", "Police"),
+    "post office": ("Postal", "Post Office"),
+}
+
+
+def classify_seed_type(raw_type: str | None) -> tuple[str, str]:
+    """TrailMind (category, subcategory) for a curated seed row's own free-
+    text type/category column. Same never-discard contract as classify():
+    an unrecognised type is ("Other", "Other"), never a reason to drop the
+    place -- the raw string survives regardless, in `place_kind` (see
+    services/seed_import.py)."""
+    if not raw_type:
+        return DEFAULT_CATEGORY
+    return SEED_TYPE_MAP.get(raw_type.strip().lower(), DEFAULT_CATEGORY)
+
+
 def classify(
     primary_type: str | None, types: list[str] | None, name: str | None
 ) -> tuple[str, str]:

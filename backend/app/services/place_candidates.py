@@ -46,6 +46,17 @@ _UNCLASSIFIED = {None, "", categories.DEFAULT_CATEGORY[0]}
 # closer.
 _UNCLASSIFIED_PENALTY_METERS = 150.0
 
+# Added when a seed-imported candidate's own supplier flagged its coordinate
+# as "Low" confidence -- see services/seed_import.py and
+# Location.coordinate_confidence's own comment. Smaller than the
+# unclassified penalty: an unclassified place tells us nothing about what it
+# IS, while a Low-confidence one tells us exactly what it is and roughly
+# where -- the uncertainty is narrower, so the penalty is too. This is the
+# "do not treat low-confidence coordinates as equally authoritative" rule,
+# made concrete: a Low-confidence place a little closer than a High-
+# confidence one can still win, but not by treating the two as equal.
+_LOW_CONFIDENCE_PENALTY_METERS = 60.0
+
 # Added per place already chosen from the same category, so six hotels in a
 # row become a hotel, a mall, a station, a hotel... Deliberately small: the
 # task is explicit that diversity must not push obviously closer relevant
@@ -88,6 +99,8 @@ class PlaceCandidateResult:
     external_place_id: str | None
     provider: str | None
     formatted_address: str | None
+    coordinate_confidence: str | None
+    coordinate_type: str | None
     is_area: bool
 
 
@@ -236,6 +249,8 @@ def _base_score(row) -> float:
     score = float(row.distance_meters)
     if row.category in _UNCLASSIFIED:
         score += _UNCLASSIFIED_PENALTY_METERS
+    if row.coordinate_confidence == "Low":
+        score += _LOW_CONFIDENCE_PENALTY_METERS
     return score
 
 
@@ -287,6 +302,8 @@ def _to_result(row, *, is_area: bool) -> PlaceCandidateResult:
         external_place_id=row.external_place_id,
         provider=row.provider,
         formatted_address=row.formatted_address,
+        coordinate_confidence=row.coordinate_confidence,
+        coordinate_type=row.coordinate_type,
         is_area=is_area,
     )
 
@@ -306,6 +323,8 @@ def _query_nearby(db: Session, latitude: float, longitude: float, radius_meters:
             Location.external_place_id,
             Location.provider,
             Location.formatted_address,
+            Location.coordinate_confidence,
+            Location.coordinate_type,
             distance,
         )
         .where(func.ST_DWithin(Location.geog, target, radius_meters))
@@ -382,6 +401,8 @@ def find_place_candidates(
             external_place_id=area.external_place_id,
             provider=area.provider,
             formatted_address=area.formatted_address,
+            coordinate_confidence=area.coordinate_confidence,
+            coordinate_type=area.coordinate_type,
             is_area=True,
         )
         if len(results) >= limit:

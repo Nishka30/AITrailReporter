@@ -1,3 +1,4 @@
+from app.db.models.curated_hub import CuratedHub
 from app.db.models.extraction import Extraction
 from app.db.models.guide import Guide
 from app.db.models.guide_location import GuideLocation
@@ -16,6 +17,7 @@ from app.db.models.submission import Submission
 from app.db.models.transcription import Transcription
 
 __all__ = [
+    "CuratedHub",
     "Extraction",
     "Guide",
     "GuideLocation",

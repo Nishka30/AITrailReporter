@@ -61,6 +61,17 @@ class PlaceCandidate(BaseModel):
     external_place_id: str | None = None
     provider: str | None = None
     formatted_address: str | None = None
+    # For a curated seed row (provider='seed' -- see services/seed_import.py)
+    # only: how much the curator trusted this coordinate ("High"/"Medium"/
+    # "Low"), and what kind of point it represents ("Venue point" vs "Point /
+    # area anchor"). Preserved verbatim, null for every other row. Not
+    # currently rendered by the app -- confidence already affects backend
+    # ranking (a Low-confidence candidate sorts slightly behind an equally-
+    # distant one we're more sure of); these are exposed for the same reason
+    # every other provenance field on this schema is, so a consumer can
+    # inspect what's known about a candidate without a second round trip.
+    coordinate_confidence: str | None = None
+    coordinate_type: str | None = None
     # True for a reverse-geocoded AREA (a neighbourhood/village the coordinate
     # falls inside) rather than a specific POI. The app uses this to label and
     # order the broadest option honestly -- see services/place_candidates.py.
