@@ -32,7 +32,21 @@ export default function PlaceDetailPage() {
         <MapPin className="h-6 w-6 text-marigold" />
         <h1 className="font-heading text-2xl font-extrabold text-ink">{data.name}</h1>
       </div>
-      {data.category ? (
+      {data.categories.length > 0 ? (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {data.categories.map((c) => (
+            <span
+              key={`${c.kind}:${c.slug}`}
+              className={`rounded-full px-2 py-0.5 text-xs ${
+                c.is_primary ? 'bg-marigold-soft font-bold text-marigold-deep' : 'bg-paper-elevated text-ink-soft'
+              }`}
+              title={`${c.kind === 'place_type' ? 'Place type' : 'Theme'} · relevance ${c.relevance} · ${c.source}`}
+            >
+              {c.display_name}
+            </span>
+          ))}
+        </div>
+      ) : data.category ? (
         <div className="mb-3 inline-block rounded-full bg-paper-elevated px-2 py-0.5 text-xs text-ink-soft">
           {data.category}
           {data.subcategory ? ` / ${data.subcategory}` : ''}

@@ -57,9 +57,14 @@ class PhotoConflictError(Exception):
         )
 
 
-def _award_media_bonus(db: Session, submission: Submission) -> None:
-    """Adds the Explore media bonus once, when a photo or voice note is
-    attached to an Explore contribution.
+def _award_media_bonus_ungated(db: Session, submission: Submission) -> None:
+    """The Explore media bonus's original, immediate/ungated award logic --
+    kept ONLY for the legacy case in _maybe_award_media_bonus below (a
+    submission with no SubmissionReview row at all, i.e. one created before
+    the approval-gate migration c8f4a1d9e356, which was deliberately not
+    backfilled -- see that migration). Every current submission goes through
+    _maybe_award_media_bonus instead, which gates this behind admin approval
+    via app/services/submission_review.py::award_media_bonus.
 
     Idempotency key is the submission's client id with a ':media' suffix -- a
     DIFFERENT key from the base award (which uses the bare client id), so the
@@ -96,6 +101,33 @@ def _award_media_bonus(db: Session, submission: Submission) -> None:
         ),
         source_id=submission.id,
     )
+
+
+def _maybe_award_media_bonus(db: Session, submission: Submission) -> None:
+    """Gates the Explore/memory media bonus behind admin approval, exactly
+    like the base contribution reward (financial-integrity requirement: no
+    points-awarding path may bypass admin review).
+
+    - No SubmissionReview row exists: this submission predates the
+      approval-gate migration (c8f4a1d9e356, deliberately not backfilled) and
+      its base reward was already paid immediately under the old rules --
+      its media bonus stays immediate too, for consistency with that
+      already-settled legacy behavior.
+    - review.status == 'approved': the base contribution already cleared
+      admin review, so media attached afterward is paid immediately -- see
+      submission_review.award_media_bonus's docstring.
+    - review.status == 'pending_review': withheld. Picked up automatically by
+      approve() if/when the admin approves (it re-checks the submission's
+      media fields at that time).
+    - review.status == 'rejected': withheld permanently, matching the base
+      reward -- there is no reward for a rejected contribution's media either.
+    """
+    review = submission_review_service.get_review(db, submission.id)
+    if review is None:
+        _award_media_bonus_ungated(db, submission)
+        return
+    if review.status == "approved":
+        submission_review_service.award_media_bonus(db, submission, review)
 
 
 def get_submission_by_client_id(db: Session, client_submission_id: str) -> Submission | None:
@@ -300,7 +332,7 @@ def attach_audio_to_submission(
     # atomically together — no window where audio exists but nothing tracks its
     # transcription state.
     transcription_service.ensure_pending_transcription(db, submission_id)
-    _award_media_bonus(db, submission)
+    _maybe_award_media_bonus(db, submission)
     db.commit()
     db.refresh(submission)
     # Automatic transcription (see transcriptions.py:maybe_trigger_transcription)
@@ -362,7 +394,7 @@ def attach_photo_to_submission(
     submission.photo_content_type = content_type
     submission.photo_original_filename = original_filename
     submission.photo_size_bytes = stored.size_bytes
-    _award_media_bonus(db, submission)
+    _maybe_award_media_bonus(db, submission)
     db.commit()
     db.refresh(submission)
     return submission, True

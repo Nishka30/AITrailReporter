@@ -166,6 +166,19 @@ export type ReviewDetail = {
   sibling_observations: SiblingObservation[];
 };
 
+/** One entry in a Location's multi-category classification (see
+ * backend/app/services/places/category_catalog.py) -- several of these can
+ * apply to the same place at once, each with its own strength/confidence. */
+export type PlaceCategoryDetail = {
+  kind: 'theme' | 'place_type';
+  slug: string;
+  display_name: string;
+  relevance: number;
+  confidence: number;
+  is_primary: boolean;
+  source: string;
+};
+
 export type PlaceSummary = {
   location_id: string;
   name: string;
@@ -177,6 +190,45 @@ export type PlaceSummary = {
   nearby_observation_count: number;
   pending_review_count: number;
   approved_count: number;
+  categories: PlaceCategoryDetail[];
+};
+
+export type PlaceQueueResult = {
+  items: PlaceSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type PlaceQueueFilters = {
+  q?: string;
+  /** Comma-separated place_type slugs, OR'd together. */
+  category?: string;
+  /** Comma-separated PlaceCategoryGroup keys, OR'd together (and with `category`). */
+  group?: string;
+  page?: number;
+  page_size?: number;
+};
+
+/** One filterable place_type option with how many distinct Locations
+ * currently carry it -- see backend's PlaceCategoryOption. */
+export type PlaceCategoryOption = {
+  kind: 'place_type';
+  slug: string;
+  display_name: string;
+  group: string;
+  count: number;
+  priority: number;
+};
+
+/** A user-friendly filter section (e.g. "Food & Drink"), grouping several
+ * place_types by their shared theme -- see
+ * backend/app/services/places/category_ui_groups.py. */
+export type PlaceCategoryGroupOptions = {
+  key: string;
+  label: string;
+  count: number;
+  options: PlaceCategoryOption[];
 };
 
 export type PlaceDetail = {
@@ -191,6 +243,7 @@ export type PlaceDetail = {
   provider: string | null;
   external_place_id: string | null;
   formatted_address: string | null;
+  categories: PlaceCategoryDetail[];
   created_at: string;
   recent_observations: ReviewQueueItem[];
 };
@@ -212,6 +265,18 @@ export type ContributorDetail = ContributorSummary & {
   recent_observations: ReviewQueueItem[];
 };
 
+export type ContributorQueueResult = {
+  items: ContributorSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type ContributorQueueFilters = {
+  page?: number;
+  page_size?: number;
+};
+
 export type AdminQuestionSummary = {
   question_id: string;
   knowledge_type: string;
@@ -226,6 +291,21 @@ export type AdminQuestionSummary = {
   assignment_status: string | null;
   assigned_guide_name: string | null;
   created_at: string;
+};
+
+export type AdminQuestionQueueResult = {
+  items: AdminQuestionSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type AdminQuestionQueueFilters = {
+  status?: string;
+  assignment_status?: string;
+  safety_critical?: boolean;
+  page?: number;
+  page_size?: number;
 };
 
 /** Admin-approval gate on rewards (Step 19) -- deliberately a SEPARATE

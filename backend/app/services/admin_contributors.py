@@ -13,14 +13,14 @@ per-guide maps in Python avoids that without adding a query per guide.
 
 from uuid import UUID
 
-from sqlalchemy import case, func, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models.guide import Guide
 from app.db.models.observation import Observation
 from app.db.models.observation_moderation import ObservationModeration
 from app.db.models.submission import Submission
-from app.schemas.admin import ContributorDetail, ContributorSummary
+from app.schemas.admin import ContributorDetail, ContributorQueueResult, ContributorSummary
 from app.services.admin_review import ReviewQueueFilters, list_review_queue
 
 
@@ -72,11 +72,21 @@ def _to_summary(guide: Guide, submission_stats: dict, observation_stats: dict) -
     )
 
 
-def list_contributors(db: Session) -> list[ContributorSummary]:
-    guides = db.execute(select(Guide).order_by(Guide.name)).scalars().all()
+def _base_query() -> Select:
+    return select(Guide)
+
+
+def list_contributors(db: Session, page: int = 1, page_size: int = 25) -> ContributorQueueResult:
+    stmt = _base_query()
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+
+    stmt = stmt.order_by(Guide.name).offset((page - 1) * page_size).limit(page_size)
+    guides = db.execute(stmt).scalars().all()
+
     submission_stats = _submission_stats(db)
     observation_stats = _observation_stats(db)
-    return [_to_summary(guide, submission_stats, observation_stats) for guide in guides]
+    items = [_to_summary(guide, submission_stats, observation_stats) for guide in guides]
+    return ContributorQueueResult(items=items, total=total, page=page, page_size=page_size)
 
 
 def get_contributor_detail(db: Session, guide_id: UUID, limit: int = 25) -> ContributorDetail | None:

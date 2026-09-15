@@ -16,13 +16,14 @@ from app.core.admin_auth import AdminPrincipal, require_admin
 from app.db.session import get_db
 from app.schemas.admin import (
     AdminOverview,
-    AdminQuestionSummary,
+    AdminQuestionQueueResult,
     ContributionDetail,
     ContributionQueueResult,
     ContributorDetail,
-    ContributorSummary,
+    ContributorQueueResult,
+    PlaceCategoryGroup,
     PlaceDetail,
-    PlaceSummary,
+    PlaceQueueResult,
     ReviewDetail,
     ReviewQueueResult,
 )
@@ -298,12 +299,34 @@ def reject_contribution(
         )
 
 
-@router.get("/places", response_model=list[PlaceSummary])
+@router.get("/places", response_model=PlaceQueueResult)
 def list_places(
+    q: str | None = Query(default=None),
+    category: str | None = Query(
+        default=None, description="Comma-separated place_type slugs, e.g. 'restaurant,cafe'."
+    ),
+    group: str | None = Query(
+        default=None, description="Comma-separated UI group keys, e.g. 'food_drink,shopping'."
+    ),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
     admin: AdminPrincipal = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    return place_service.list_places(db)
+    filters = place_service.PlaceFilters(q=q, category=category, group=group)
+    return place_service.list_places(db, filters, page, page_size)
+
+
+@router.get("/places/categories", response_model=list[PlaceCategoryGroup])
+def list_place_categories(
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Grouped, counted place_type filter options for the Places page
+    sidebar -- see app/services/places/category_ui_groups.py. Registered
+    ABOVE /places/{location_id} so 'categories' is never swallowed as a
+    location_id path parameter."""
+    return place_service.list_category_filter_options(db)
 
 
 @router.get("/places/{location_id}", response_model=PlaceDetail)
@@ -318,12 +341,14 @@ def get_place(
     return place
 
 
-@router.get("/contributors", response_model=list[ContributorSummary])
+@router.get("/contributors", response_model=ContributorQueueResult)
 def list_contributors(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
     admin: AdminPrincipal = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    return contributor_service.list_contributors(db)
+    return contributor_service.list_contributors(db, page, page_size)
 
 
 @router.get("/contributors/{guide_id}", response_model=ContributorDetail)
@@ -338,15 +363,19 @@ def get_contributor(
     return contributor
 
 
-@router.get("/questions", response_model=list[AdminQuestionSummary])
+@router.get("/questions", response_model=AdminQuestionQueueResult)
 def list_questions(
     status: str | None = Query(default=None),
     assignment_status: str | None = Query(default=None),
     safety_critical: bool | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
     admin: AdminPrincipal = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    return question_service.list_admin_questions(db, status, assignment_status, safety_critical)
+    return question_service.list_admin_questions(
+        db, status, assignment_status, safety_critical, page, page_size
+    )
 
 
 @router.get("/submissions/{submission_id}/audio")

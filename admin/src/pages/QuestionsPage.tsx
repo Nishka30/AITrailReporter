@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { HelpCircle } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 
 import { getAdminQuestions } from '../api/admin';
 import PageHeader from '../components/layout/PageHeader';
+import Pagination from '../components/ui/Pagination';
 import StatusBadge from '../components/ui/StatusBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/ui/States';
 
@@ -14,10 +16,27 @@ const STATUS_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> 
 };
 
 export default function QuestionsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const page = Number(searchParams.get('page') ?? '1');
+
+  const filters = {
+    page,
+    page_size: 20,
+  };
+
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['admin-questions'],
-    queryFn: () => getAdminQuestions({}),
+    queryKey: ['admin-questions', filters],
+    queryFn: () => getAdminQuestions(filters),
   });
+
+  const setParam = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    if (key !== 'page') next.delete('page');
+    setSearchParams(next);
+  };
 
   return (
     <div>
@@ -28,13 +47,13 @@ export default function QuestionsPage() {
 
       {isLoading ? <LoadingState /> : null}
       {isError ? <ErrorState message="Could not load questions." onRetry={() => refetch()} /> : null}
-      {data && data.length === 0 ? (
+      {data && data.items.length === 0 ? (
         <EmptyState title="No questions generated yet" icon={<HelpCircle className="h-8 w-8" />} />
       ) : null}
 
-      {data && data.length > 0 ? (
+      {data && data.items.length > 0 ? (
         <div className="space-y-3">
-          {data.map((q) => (
+          {data.items.map((q) => (
             <div key={q.question_id} className="rounded-lg border border-border bg-paper-elevated p-4 shadow-card">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="font-heading font-bold text-ink">{q.display_name}</div>
@@ -55,6 +74,12 @@ export default function QuestionsPage() {
               </div>
             </div>
           ))}
+          <Pagination
+            page={data.page}
+            pageSize={data.page_size}
+            total={data.total}
+            onPageChange={(p) => setParam('page', String(p))}
+          />
         </div>
       ) : null}
     </div>

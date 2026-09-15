@@ -105,8 +105,12 @@ class SubmissionReview(Base):
     reward_idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     reward_source_type: Mapped[str] = mapped_column(String(50), nullable=False)
     reward_source_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    # Set once, by approve(), to the points reward_service.award() actually
-    # returned. Nullable/None for pending or rejected -- 0 is a legitimate
+    # Set by approve() to the base reward's points, then optionally topped up
+    # afterward by submission_review.award_media_bonus() if/when a photo or
+    # voice note becomes eligible for the Explore/memory media bonus (see
+    # that function) -- so this always reflects the TOTAL actually paid for
+    # this contribution, which is what mobile displays as "you earned X
+    # points". Nullable/None for pending or rejected -- 0 is a legitimate
     # award outcome (e.g. the rule was deactivated between submission and
     # approval) and must stay distinguishable from "not decided yet".
     reward_points_awarded: Mapped[int | None] = mapped_column(Integer, nullable=True)

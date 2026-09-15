@@ -195,6 +195,43 @@ class PlaceSummary(BaseModel):
     nearby_observation_count: int
     pending_review_count: int
     approved_count: int
+    # The multi-category classification (see
+    # app/services/places/category_catalog.py), most relevant first -- same
+    # data PlaceDetail already exposes, added here too so the Places list
+    # cards can show real category chips instead of only the legacy
+    # category/subcategory pair.
+    categories: list["PlaceCategoryDetail"] = []
+
+
+class PlaceQueueResult(BaseModel):
+    items: list[PlaceSummary]
+    total: int
+    page: int
+    page_size: int
+
+
+class PlaceCategoryOption(BaseModel):
+    """One filterable place_type, with how many DISTINCT Locations currently
+    carry it -- an entry in a PlaceCategoryGroup's `options` list."""
+
+    kind: str
+    slug: str
+    display_name: str
+    group: str
+    count: int
+    priority: int
+
+
+class PlaceCategoryGroup(BaseModel):
+    """One user-friendly filter section (e.g. 'Food & Drink'), grouping
+    several place_types by their shared theme -- see
+    app/services/places/category_ui_groups.py for how the grouping is
+    derived from the existing category catalog."""
+
+    key: str
+    label: str
+    count: int
+    options: list[PlaceCategoryOption]
 
 
 class PlaceDetail(BaseModel):
@@ -245,6 +282,13 @@ class ContributorDetail(ContributorSummary):
     recent_observations: list[ReviewQueueItem]
 
 
+class ContributorQueueResult(BaseModel):
+    items: list[ContributorSummary]
+    total: int
+    page: int
+    page_size: int
+
+
 class AdminQuestionSummary(BaseModel):
     """Read-only visibility into the existing Question/QuestionAssignment
     lifecycle for admins -- does not touch or redesign that workflow."""
@@ -262,3 +306,10 @@ class AdminQuestionSummary(BaseModel):
     assignment_status: str | None
     assigned_guide_name: str | None
     created_at: datetime
+
+
+class AdminQuestionQueueResult(BaseModel):
+    items: list[AdminQuestionSummary]
+    total: int
+    page: int
+    page_size: int

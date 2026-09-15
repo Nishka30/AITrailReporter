@@ -24,6 +24,10 @@ from app.db.models.submission import Submission
 from app.db.models.submission_review import REJECTION_REASONS, SubmissionReview
 from app.services import rewards as reward_service
 
+# Rule key for the Explore/memory media bonus (see award_media_bonus below).
+# Lives here, not in submissions.py, because gating it is this module's job.
+_MEDIA_BONUS_RULE_KEY = "explore_contribution_media_bonus"
+
 
 class SubmissionReviewNotFoundError(Exception):
     """Raised when no review row exists for the given submission_id -- should
@@ -195,9 +199,68 @@ def approve(db: Session, submission_id: UUID, decided_by: str) -> tuple[Submissi
     review.decided_by = decided_by
     review.decided_at = datetime.now(timezone.utc)
     review.reward_points_awarded = points
+
+    # Pay the media bonus too, in this SAME decision, if a photo/voice note
+    # was already attached by the time the admin approved -- see
+    # award_media_bonus's docstring. No-op (returns 0) for a plain text
+    # contribution or one with no media yet.
+    submission = db.get(Submission, submission_id)
+    bonus_points = award_media_bonus(db, submission, review) if submission is not None else 0
+
     db.commit()
     db.refresh(review)
-    return review, points
+    return review, points + bonus_points
+
+
+def award_media_bonus(db: Session, submission: Submission, review: SubmissionReview) -> int:
+    """Awards the Explore/memory media bonus for an APPROVED contribution, if
+    it is eligible and has a photo or voice note attached. Returns the points
+    actually awarded (0 if ineligible, no media yet, or already paid).
+
+    This is the single place the media bonus is decided -- there is no
+    separate/second reward system. It is called from two places:
+
+    1. approve() below, for a submission whose media was already attached
+       BEFORE the admin decision (the common case).
+    2. submissions.py's attach_audio_to_submission/attach_photo_to_submission,
+       for the rarer case where media arrives AFTER the submission was
+       already approved -- the base contribution already cleared admin
+       review, so enrichment media attached afterward does not need a second
+       review cycle; it is paid the moment it exists. Those call sites only
+       reach this function when `review.status == "approved"`; pending or
+       rejected submissions withhold the bonus exactly like the base reward
+       (see submissions.py::_maybe_award_media_bonus).
+
+    Uses the SAME idempotency key (`{client_submission_id}:media`) and rule
+    key that were used when this bonus was immediate/ungated, so a
+    contribution's total paid points cannot double-count regardless of how
+    many times media is attached or approval is retried.
+
+    Adds the bonus onto `review.reward_points_awarded` (rather than a
+    separate column) so that field always reflects the TOTAL actually paid
+    for this contribution -- what mobile displays as "you earned X points".
+    Does not commit; the caller commits.
+    """
+    if submission.submission_type not in ("explore", "memory") or submission.client_submission_id is None:
+        return 0
+    if submission.source_place_question_id is not None:
+        return 0
+    if submission.client_audio_id is None and submission.client_photo_id is None:
+        return 0
+
+    bonus_points = reward_service.award(
+        db,
+        guide_id=submission.guide_id,
+        rule_key=_MEDIA_BONUS_RULE_KEY,
+        idempotency_key=f"{submission.client_submission_id}:media",
+        source_type=(
+            "memory_submission" if submission.submission_type == "memory" else "explore_submission"
+        ),
+        source_id=submission.id,
+    )
+    if bonus_points:
+        review.reward_points_awarded = (review.reward_points_awarded or 0) + bonus_points
+    return bonus_points
 
 
 def reject(

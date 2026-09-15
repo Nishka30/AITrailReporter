@@ -1,15 +1,19 @@
 import { API_BASE_URL, ApiError, NetworkError, apiRequest } from './client';
 import type {
   AdminOverview,
-  AdminQuestionSummary,
+  AdminQuestionQueueFilters,
+  AdminQuestionQueueResult,
   ContributionDetail,
   ContributionQueueFilters,
   ContributionQueueResult,
   ContributorDetail,
-  ContributorSummary,
+  ContributorQueueFilters,
+  ContributorQueueResult,
   ObservationModeration,
+  PlaceCategoryGroupOptions,
   PlaceDetail,
-  PlaceSummary,
+  PlaceQueueFilters,
+  PlaceQueueResult,
   ReviewDetail,
   ReviewQueueFilters,
   ReviewQueueResult,
@@ -128,26 +132,30 @@ export function rejectContribution(
   });
 }
 
-export function getPlaces(): Promise<PlaceSummary[]> {
-  return apiRequest('/api/v1/admin/places');
+export function getPlaces(filters: PlaceQueueFilters): Promise<PlaceQueueResult> {
+  return apiRequest(`/api/v1/admin/places${toQueryString(filters)}`);
+}
+
+export function getPlaceCategoryGroups(): Promise<PlaceCategoryGroupOptions[]> {
+  return apiRequest('/api/v1/admin/places/categories');
 }
 
 export function getPlaceDetail(locationId: string): Promise<PlaceDetail> {
   return apiRequest(`/api/v1/admin/places/${locationId}`);
 }
 
-export function getContributors(): Promise<ContributorSummary[]> {
-  return apiRequest('/api/v1/admin/contributors');
+export function getContributors(
+  filters: ContributorQueueFilters
+): Promise<ContributorQueueResult> {
+  return apiRequest(`/api/v1/admin/contributors${toQueryString(filters)}`);
 }
 
 export function getContributorDetail(guideId: string): Promise<ContributorDetail> {
   return apiRequest(`/api/v1/admin/contributors/${guideId}`);
 }
 
-export function getAdminQuestions(filters: {
-  status?: string;
-  assignment_status?: string;
-  safety_critical?: boolean;
-}): Promise<AdminQuestionSummary[]> {
+export function getAdminQuestions(
+  filters: AdminQuestionQueueFilters
+): Promise<AdminQuestionQueueResult> {
   return apiRequest(`/api/v1/admin/questions${toQueryString(filters)}`);
 }
