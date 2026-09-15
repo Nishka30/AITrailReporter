@@ -59,3 +59,14 @@ class QuestionAnswerRead(BaseModel):
     answered_at: datetime
     created_at: datetime
     updated_at: datetime
+    # Admin-approval gate (Step 19): whether this answer's reward has been
+    # approved for payment. 'pending_review' the instant it's submitted --
+    # reward_points below is NOT a claim of payment until this is 'approved'.
+    # None only for an answer that predates this feature (paid immediately
+    # under the old behavior, no review row exists).
+    review_status: str | None = None
+    rejection_reason: str | None = None
+    rejection_note: str | None = None
+    # Set only once review_status == 'approved'. The mobile app must not
+    # display a reward as earned while this is None.
+    reward_points_awarded: int | None = None

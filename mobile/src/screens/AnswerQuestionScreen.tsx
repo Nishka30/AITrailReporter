@@ -389,17 +389,42 @@ function AnsweredCard({
         ? { label: 'Sending…', tone: 'info' as const, icon: 'sync-outline' as const }
         : { label: 'Saved — waiting to send', tone: 'info' as const, icon: 'cloud-upload-outline' as const };
 
+  // Admin-approval gate (Step 19): a reward is never earned until an admin
+  // approves this specific contribution -- being SENT to the server is a
+  // different fact from being PAID for. `reviewStatus` is null until sync
+  // has happened at least once AND a subsequent poll has reported back (see
+  // sync/submissionReviewSync.ts), so it is treated the same as
+  // 'pending_review' rather than shown as anything more final.
+  const reviewStatus = answer.reviewStatus ?? 'pending_review';
+
   return (
     <Card variant="outline" style={styles.answeredCard}>
       <Text style={styles.answeredLabel}>{justSaved ? 'Saved!' : 'Your answer'}</Text>
       <Text style={styles.answeredText}>{answer.answerText}</Text>
       <Badge label={status.label} tone={status.tone} icon={status.icon} />
-      {/* Points are shown as PENDING until the server has confirmed the
-          answer — the backend is the source of truth for what was earned, and
-          this screen must never imply a reward is banked before then. */}
-      {answer.rewardPoints ? (
-        <RewardChip points={answer.rewardPoints} pending={!confirmed} />
-      ) : null}
+
+      {confirmed && reviewStatus === 'approved' ? (
+        <>
+          <Badge label="Approved" tone="success" icon="checkmark-done-circle" />
+          <RewardChip points={answer.rewardPointsAwarded ?? answer.rewardPoints ?? 0} />
+        </>
+      ) : confirmed && reviewStatus === 'rejected' ? (
+        <>
+          <Badge label="Not approved" tone="danger" icon="close-circle-outline" />
+          {answer.rejectionNote ? (
+            <Text style={styles.rejectionText}>Reason: {answer.rejectionNote}</Text>
+          ) : null}
+        </>
+      ) : (
+        <>
+          {confirmed ? <Badge label="Pending admin approval" tone="warning" icon="hourglass-outline" /> : null}
+          {/* Provisional worth only -- not yet paid either way. Always shown
+              as pending here: even once sent, nothing is earned until an
+              admin approves it. */}
+          {answer.rewardPoints ? <RewardChip points={answer.rewardPoints} pending /> : null}
+        </>
+      )}
+
       <View style={styles.doneButtonWrap}>
         <Button label="Back to questions" onPress={onDone} variant="secondary" />
       </View>
@@ -486,5 +511,6 @@ const styles = StyleSheet.create({
   answeredCard: { alignItems: 'flex-start', gap: spacing.sm },
   answeredLabel: { ...type.captionBold, color: colors.inkFaint, letterSpacing: 0.4 },
   answeredText: { ...type.body, color: colors.ink, lineHeight: 22 },
+  rejectionText: { ...type.caption, color: colors.fix, lineHeight: 18 },
   doneButtonWrap: { alignSelf: 'stretch', marginTop: spacing.xs },
 });

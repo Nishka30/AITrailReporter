@@ -12,6 +12,7 @@ from app.db.models.observation_moderation import ObservationModeration
 from app.db.models.question import Question
 from app.db.models.question_assignment import QuestionAssignment
 from app.db.models.submission import Submission
+from app.db.models.submission_review import SubmissionReview
 from app.schemas.admin import AdminOverview
 
 
@@ -59,6 +60,19 @@ def get_overview(db: Session) -> AdminOverview:
     )
     questions_pending_assignment_count = _count(db, questions_pending_assignment_stmt)
 
+    # Admin-approval gate on rewards (Step 19) -- a separate table/lifecycle
+    # from the observation counts above (see
+    # app/db/models/submission_review.py for why).
+    contribution_pending_review_count = _count(
+        db, select(SubmissionReview.id).where(SubmissionReview.status == "pending_review")
+    )
+    contribution_approved_count = _count(
+        db, select(SubmissionReview.id).where(SubmissionReview.status == "approved")
+    )
+    contribution_rejected_count = _count(
+        db, select(SubmissionReview.id).where(SubmissionReview.status == "rejected")
+    )
+
     return AdminOverview(
         total_guides=total_guides,
         total_submissions=total_submissions,
@@ -70,4 +84,7 @@ def get_overview(db: Session) -> AdminOverview:
         active_knowledge_type_count=active_knowledge_type_count,
         questions_generated_count=questions_generated_count,
         questions_pending_assignment_count=questions_pending_assignment_count,
+        contribution_pending_review_count=contribution_pending_review_count,
+        contribution_approved_count=contribution_approved_count,
+        contribution_rejected_count=contribution_rejected_count,
     )

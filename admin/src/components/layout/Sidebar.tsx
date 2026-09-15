@@ -1,6 +1,7 @@
 import {
   ClipboardCheck,
   Compass,
+  DollarSign,
   HelpCircle,
   LayoutDashboard,
   LogOut,
@@ -13,6 +14,7 @@ import { useAdminAuth } from '../../auth/AdminAuthContext';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/contributions', label: 'Contribution Review', icon: DollarSign },
   { to: '/review-queue', label: 'Review Queue', icon: ClipboardCheck },
   { to: '/knowledge', label: 'Knowledge', icon: Compass },
   { to: '/places', label: 'Places', icon: MapPin },

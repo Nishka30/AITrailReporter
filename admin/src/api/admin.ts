@@ -2,6 +2,9 @@ import { API_BASE_URL, ApiError, NetworkError, apiRequest } from './client';
 import type {
   AdminOverview,
   AdminQuestionSummary,
+  ContributionDetail,
+  ContributionQueueFilters,
+  ContributionQueueResult,
   ContributorDetail,
   ContributorSummary,
   ObservationModeration,
@@ -11,6 +14,7 @@ import type {
   ReviewQueueFilters,
   ReviewQueueResult,
   RejectionReason,
+  SubmissionReview,
 } from './types';
 
 function toQueryString(params: Record<string, unknown>): string {
@@ -94,6 +98,33 @@ export function changeObservationDecision(
   return apiRequest(`/api/v1/admin/reviews/${observationId}/change-decision`, {
     method: 'POST',
     body: { status, reason: reason || null, note: note || null },
+  });
+}
+
+export function getContributionQueue(
+  filters: ContributionQueueFilters
+): Promise<ContributionQueueResult> {
+  return apiRequest(`/api/v1/admin/contribution-queue${toQueryString(filters)}`);
+}
+
+export function getContributionDetail(submissionId: string): Promise<ContributionDetail> {
+  return apiRequest(`/api/v1/admin/contribution-queue/${submissionId}`);
+}
+
+export function approveContribution(submissionId: string): Promise<SubmissionReview> {
+  return apiRequest(`/api/v1/admin/contribution-queue/${submissionId}/approve`, {
+    method: 'POST',
+  });
+}
+
+export function rejectContribution(
+  submissionId: string,
+  reason: RejectionReason,
+  note?: string
+): Promise<SubmissionReview> {
+  return apiRequest(`/api/v1/admin/contribution-queue/${submissionId}/reject`, {
+    method: 'POST',
+    body: { reason, note: note || null },
   });
 }
 

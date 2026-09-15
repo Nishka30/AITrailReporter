@@ -14,7 +14,14 @@ import { listCaptures } from '../repositories/captureRepository';
 import { listLocations } from '../repositories/locationRepository';
 import { syncAll } from '../sync/syncService';
 import { colors, spacing, type } from '../theme/theme';
-import type { LocalAnswer, LocalCapture, LocalGuide, LocalLocation, SyncStatus } from '../types/models';
+import type {
+  LocalAnswer,
+  LocalCapture,
+  LocalGuide,
+  LocalLocation,
+  SubmissionReviewStatus,
+  SyncStatus,
+} from '../types/models';
 
 type Props = {
   guide: LocalGuide;
@@ -39,6 +46,27 @@ function syncBadge(status: SyncStatus): { label: string; tone: BadgeTone; icon: 
       return { label: 'Could not be sent', tone: 'danger', icon: 'close-circle-outline' };
     default:
       return { label: status, tone: 'neutral', icon: 'ellipse-outline' };
+  }
+}
+
+// Admin-approval status (Step 19), rendered on any capture/answer that
+// earned a reward (see reward_points_awarded/review_status on both local
+// tables). A capture/answer that never earns anything (a plain note) has no
+// review row at all, so callers only reach this once they already know a
+// reward is at stake -- see the `rewardPoints != null` gate at each call
+// site below, mirroring the existing convention for the reward badge itself.
+function reviewBadge(status: SubmissionReviewStatus | null): {
+  label: string;
+  tone: BadgeTone;
+  icon: keyof typeof Ionicons.glyphMap;
+} {
+  switch (status ?? 'pending_review') {
+    case 'approved':
+      return { label: 'Approved', tone: 'success', icon: 'checkmark-done-circle' };
+    case 'rejected':
+      return { label: 'Not approved', tone: 'danger', icon: 'close-circle-outline' };
+    default:
+      return { label: 'Pending admin approval', tone: 'warning', icon: 'hourglass-outline' };
   }
 }
 
@@ -240,7 +268,26 @@ function ExploreItem({
         ) : item.locationSource === 'user_selected' ? (
           <Badge label="Place selected" tone="neutral" icon="location-outline" />
         ) : null}
+        {/* Admin-approval gate (Step 19) -- see the identical reasoning on
+            AnswerItem above. A discovery earns nothing until an admin
+            approves it, regardless of how long ago it reached the server. */}
+        {uploaded && item.rewardPoints != null && item.rewardPoints > 0 ? (
+          <Badge {...reviewBadge(item.reviewStatus)} />
+        ) : null}
+        {item.reviewStatus === 'approved' ? (
+          <Badge
+            label={`${item.rewardPointsAwarded ?? item.rewardPoints} pts`}
+            tone="success"
+            icon="ribbon-outline"
+          />
+        ) : item.rewardPoints != null && item.rewardPoints > 0 && item.reviewStatus !== 'rejected' ? (
+          <Badge label={`${item.rewardPoints} pts if approved`} tone="neutral" icon="ribbon-outline" />
+        ) : null}
       </View>
+
+      {item.reviewStatus === 'rejected' && item.rejectionNote ? (
+        <Text style={styles.nestedErrorText}>Reason: {item.rejectionNote}</Text>
+      ) : null}
 
       {item.syncStatus === 'failed' && item.lastSyncError ? (
         <Text style={styles.nestedErrorText}>{item.lastSyncError}</Text>
@@ -466,17 +513,30 @@ function AnswerItem({ item }: { item: LocalAnswer }) {
             icon="image-outline"
           />
         ) : null}
-        {/* Provisional until the server confirms — the authoritative total
-            always comes from GET /guides/{id}/rewards, never from arithmetic
-            here (see LocalAnswer.rewardPoints). */}
-        {item.rewardPoints != null && item.rewardPoints > 0 ? (
+        {/* Admin-approval gate (Step 19): a reward is never earned until an
+            admin approves this contribution -- reaching the server is a
+            different fact from being paid. Points are shown as PAID only
+            once review.status === 'approved'; otherwise this always reads
+            as provisional/pending, regardless of sync status, and
+            rewardPointsAwarded (not the provisional rewardPoints) is what's
+            shown once approved, since a rule's value can differ by then. */}
+        {uploaded && item.rewardPoints != null && item.rewardPoints > 0 ? (
+          <Badge {...reviewBadge(item.reviewStatus)} />
+        ) : null}
+        {item.reviewStatus === 'approved' ? (
           <Badge
-            label={uploaded ? `${item.rewardPoints} pts` : `${item.rewardPoints} pts pending`}
-            tone={uploaded ? 'success' : 'neutral'}
+            label={`${item.rewardPointsAwarded ?? item.rewardPoints} pts`}
+            tone="success"
             icon="ribbon-outline"
           />
+        ) : item.rewardPoints != null && item.rewardPoints > 0 && item.reviewStatus !== 'rejected' ? (
+          <Badge label={`${item.rewardPoints} pts if approved`} tone="neutral" icon="ribbon-outline" />
         ) : null}
       </View>
+
+      {item.reviewStatus === 'rejected' && item.rejectionNote ? (
+        <Text style={styles.nestedErrorText}>Reason: {item.rejectionNote}</Text>
+      ) : null}
 
       {item.syncStatus === 'failed' && item.lastSyncError ? (
         <Text style={styles.nestedErrorText}>{item.lastSyncError}</Text>

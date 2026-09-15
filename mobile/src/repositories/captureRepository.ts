@@ -42,6 +42,10 @@ interface LocalCaptureRow {
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
+  review_status: string | null;
+  rejection_reason: string | null;
+  rejection_note: string | null;
+  reward_points_awarded: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -113,6 +117,10 @@ function mapRow(row: LocalCaptureRow): LocalCapture {
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
+    reviewStatus: row.review_status as LocalCapture['reviewStatus'],
+    rejectionReason: row.rejection_reason,
+    rejectionNote: row.rejection_note,
+    rewardPointsAwarded: row.reward_points_awarded,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -401,6 +409,34 @@ export async function getAnsweredPlaceQuestionStatuses(
   // overwrites the earlier one and the map ends up holding the most recent
   // attempt -- the one whose status the guide cares about.
   return new Map(rows.map((row) => [row.place_question_id, row.sync_status as SyncStatus]));
+}
+
+/**
+ * Records the admin-approval decision reported for this capture (Step 19),
+ * matched by `clientSubmissionId` -- the same id generated at capture time
+ * and echoed back by the server on every read (see
+ * sync/submissionReviewSync.ts, the only caller). A no-op if the id doesn't
+ * match any local row (e.g. a review for a submission this device didn't
+ * create, in the unlikely case guide accounts are ever shared).
+ */
+export async function updateCaptureReviewStatus(
+  db: SQLiteDatabase,
+  clientSubmissionId: string,
+  status: LocalCapture['reviewStatus'],
+  rejectionReason: string | null,
+  rejectionNote: string | null,
+  rewardPointsAwarded: number | null
+): Promise<void> {
+  await db.runAsync(
+    `UPDATE local_capture
+     SET review_status = ?, rejection_reason = ?, rejection_note = ?, reward_points_awarded = ?
+     WHERE client_submission_id = ?`,
+    status,
+    rejectionReason,
+    rejectionNote,
+    rewardPointsAwarded,
+    clientSubmissionId
+  );
 }
 
 export async function getCaptureById(

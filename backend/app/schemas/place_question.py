@@ -118,8 +118,12 @@ class PlaceQuestionAnswerRead(BaseModel):
     guide_id: UUID
     answer_text: str
     answered_at: datetime
-    # Points granted by THIS request: 0 on an idempotent replay, because the
-    # guide was already credited the first time. The app should treat its own
-    # provisional total as superseded by GET /guides/{id}/rewards, not add
-    # this number a second time.
+    # Admin-approval gate (Step 19): always 0 now. Rewarding is no longer
+    # immediate -- see review_status below and
+    # app/services/submission_review.py. Kept (rather than removed) so an
+    # older app build's assumption "this is my provisional total" simply
+    # never adds anything, instead of breaking on a missing field.
     points_awarded: int
+    # 'pending_review' on every fresh answer. The app must show this as
+    # "pending admin approval", never as an earned reward.
+    review_status: str = "pending_review"

@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 13;
+const DATABASE_VERSION = 14;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -447,7 +447,30 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 13;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 13) { ...; currentDbVersion = 14; }`
+  if (currentDbVersion === 13) {
+    // v13 -> v14: admin-approval status (Step 19). A guide's contribution now
+    // goes through a real review before it is paid -- previously
+    // `reward_points`/`rewardPoints` was shown as earned the instant a sync
+    // upload confirmed, with no such review existing at all. These columns
+    // hold what the backend's submission-review poll (see
+    // api/submissionReviews.ts) most recently reported, so the UI can show
+    // "pending admin approval" / "approved, N points" / "not approved:
+    // <reason>" instead. Null on every row until the first poll runs --
+    // treated the same as 'pending_review' by the UI, never as "approved".
+    await db.execAsync(`
+      ALTER TABLE local_capture ADD COLUMN review_status TEXT;
+      ALTER TABLE local_capture ADD COLUMN rejection_reason TEXT;
+      ALTER TABLE local_capture ADD COLUMN rejection_note TEXT;
+      ALTER TABLE local_capture ADD COLUMN reward_points_awarded INTEGER;
+      ALTER TABLE local_answer ADD COLUMN review_status TEXT;
+      ALTER TABLE local_answer ADD COLUMN rejection_reason TEXT;
+      ALTER TABLE local_answer ADD COLUMN rejection_note TEXT;
+      ALTER TABLE local_answer ADD COLUMN reward_points_awarded INTEGER;
+    `);
+    currentDbVersion = 14;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 14) { ...; currentDbVersion = 15; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

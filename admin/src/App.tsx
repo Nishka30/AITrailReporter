@@ -2,6 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 
 import { useAdminAuth } from './auth/AdminAuthContext';
 import AdminShell from './components/layout/AdminShell';
+import ContributionDetailPage from './pages/ContributionDetailPage';
+import ContributionQueuePage from './pages/ContributionQueuePage';
 import ContributorDetailPage from './pages/ContributorDetailPage';
 import ContributorsPage from './pages/ContributorsPage';
 import KnowledgePage from './pages/KnowledgePage';
@@ -31,6 +33,8 @@ export default function App() {
         }
       >
         <Route index element={<OverviewPage />} />
+        <Route path="contributions" element={<ContributionQueuePage />} />
+        <Route path="contributions/:submissionId" element={<ContributionDetailPage />} />
         <Route path="review-queue" element={<ReviewQueuePage />} />
         <Route path="review/:observationId" element={<ReviewDetailPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />

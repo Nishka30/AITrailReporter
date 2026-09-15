@@ -9,6 +9,7 @@ import { uploadSubmissionPhoto } from '../api/photos';
 import { submitPlaceQuestionAnswer } from '../api/placeQuestions';
 import { submitAnswer } from '../api/questionAnswers';
 import { createOrGetSubmission } from '../api/submissions';
+import { syncSubmissionReviews } from './submissionReviewSync';
 import {
   listSyncableAnswers,
   markAnswerFailed,
@@ -101,6 +102,10 @@ export interface SyncResult {
   /** Answers to assigned questions (Step 13) — synced independently of
    * notes/voice/locations; one failed answer never blocks the others. */
   answers: AnswerSyncSummary;
+  /** Step 19: non-fatal — a failure here never fails the sync as a whole
+   * (see sync/submissionReviewSync.ts). Null when the check succeeded or
+   * simply didn't run (no server guide yet). */
+  reviewCheckError: string | null;
   /** Short, user-facing summary — the UI should show this, not re-derive its own. */
   message: string;
 }
@@ -128,6 +133,7 @@ function emptyResult(message: string): SyncResult {
     memories: emptySummary<CaptureSyncOutcome>(),
     locations: emptySummary<LocationSyncOutcome>(),
     answers: emptySummary<AnswerSyncOutcome>(),
+    reviewCheckError: null,
     message,
   };
 }
@@ -676,6 +682,12 @@ async function performSync(db: SQLiteDatabase): Promise<SyncResult> {
     outcomes: answerOutcomes,
   };
 
+  // Step 19: pull admin-approval status for this guide's contributions.
+  // Deliberately LAST and best-effort — a failure here must never mark the
+  // sync run itself as failed, and it never blocks or is blocked by anything
+  // above (see sync/submissionReviewSync.ts).
+  const { error: reviewCheckError } = await syncSubmissionReviews(db, serverGuideId);
+
   return {
     ranAt: new Date().toISOString(),
     guideSynced: true,
@@ -687,6 +699,7 @@ async function performSync(db: SQLiteDatabase): Promise<SyncResult> {
     memories,
     locations,
     answers,
+    reviewCheckError,
     message: buildSummaryMessage(notes, voice, explore, memories, locations, answers, profileError),
   };
 }

@@ -17,6 +17,8 @@ from app.db.session import get_db
 from app.schemas.admin import (
     AdminOverview,
     AdminQuestionSummary,
+    ContributionDetail,
+    ContributionQueueResult,
     ContributorDetail,
     ContributorSummary,
     PlaceDetail,
@@ -29,12 +31,15 @@ from app.schemas.observation_moderation import (
     ObservationModerationRead,
     RejectObservationRequest,
 )
+from app.schemas.submission_review import RejectSubmissionRequest, SubmissionReviewRead
 from app.services import admin_contributors as contributor_service
 from app.services import admin_overview as overview_service
 from app.services import admin_places as place_service
 from app.services import admin_questions as question_service
 from app.services import admin_review as review_service
+from app.services import admin_submission_reviews as contribution_service
 from app.services import observation_moderation as moderation_service
+from app.services import submission_review as submission_review_service
 from app.services import submissions as submission_service
 from app.services.storage import get_audio_storage, get_photo_storage
 
@@ -198,6 +203,99 @@ def change_observation_decision(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/contribution-queue", response_model=ContributionQueueResult)
+def get_contribution_queue(
+    status: str | None = Query(default="pending_review"),
+    guide_id: UUID | None = Query(default=None),
+    submission_type: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=255),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Contributions awaiting a PAYMENT decision -- deliberately separate from
+    /review-queue above, which reviews extracted knowledge for accuracy, not
+    contributions for reward eligibility. See
+    app/db/models/submission_review.py for why these are two different
+    reviews of two different things. Defaults to pending_review; pass
+    status='' (empty) to browse all decisions, same convention as /knowledge
+    vs /review-queue."""
+    filters = contribution_service.ContributionQueueFilters(
+        status=status or None,
+        guide_id=guide_id,
+        submission_type=submission_type,
+        q=q,
+    )
+    return contribution_service.list_contribution_queue(db, filters, page, page_size)
+
+
+@router.get("/contribution-queue/{submission_id}", response_model=ContributionDetail)
+def get_contribution_detail(
+    submission_id: UUID,
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    detail = contribution_service.get_contribution_detail(db, submission_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Contribution not found")
+    return detail
+
+
+@router.post("/contribution-queue/{submission_id}/approve", response_model=SubmissionReviewRead)
+def approve_contribution(
+    submission_id: UUID,
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Approves a contribution AND pays it, atomically, exactly once -- see
+    app/services/submission_review.py:approve. Safe to call repeatedly: a
+    retried/duplicate request returns the same approved state with no
+    additional reward_ledger row."""
+    try:
+        review, _points = submission_review_service.approve(db, submission_id, admin.name)
+        return review
+    except submission_review_service.SubmissionReviewNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending contribution review exists for this submission.",
+        )
+    except submission_review_service.AlreadyDecidedError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This contribution was already rejected. Rewards cannot be "
+                "reversed once a decision has been made."
+            ),
+        )
+
+
+@router.post("/contribution-queue/{submission_id}/reject", response_model=SubmissionReviewRead)
+def reject_contribution(
+    submission_id: UUID,
+    payload: RejectSubmissionRequest,
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        return submission_review_service.reject(
+            db, submission_id, admin.name, payload.reason, payload.note
+        )
+    except submission_review_service.SubmissionReviewNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending contribution review exists for this submission.",
+        )
+    except submission_review_service.AlreadyDecidedError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This contribution was already approved and paid. Rewards "
+                "cannot be reversed once a decision has been made."
+            ),
+        )
 
 
 @router.get("/places", response_model=list[PlaceSummary])

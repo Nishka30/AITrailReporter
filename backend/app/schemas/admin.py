@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from app.schemas.knowledge_state import KnowledgeStateResult
 from app.schemas.observation_moderation import ObservationModerationRead
 from app.schemas.submission import SubmissionAudioRead, SubmissionPhotoRead
+from app.schemas.submission_review import SubmissionReviewRead
 from app.schemas.transcription import TranscriptionRead
 
 
@@ -32,6 +33,12 @@ class AdminOverview(BaseModel):
     active_knowledge_type_count: int
     questions_generated_count: int
     questions_pending_assignment_count: int
+    # Admin-approval gate on rewards (Step 19) -- counts from submission_reviews,
+    # a completely separate table/lifecycle from the observation counts above
+    # (see app/db/models/submission_review.py for why).
+    contribution_pending_review_count: int
+    contribution_approved_count: int
+    contribution_rejected_count: int
 
 
 class ReviewQueueItem(BaseModel):
@@ -121,6 +128,60 @@ class ReviewDetail(BaseModel):
     knowledge_context: KnowledgeStateResult | None
     related_observations: list[RelatedObservation]
     sibling_observations: list[SiblingObservation]
+
+
+class ContributionQueueItem(BaseModel):
+    """One row in the Contribution Review queue -- one Submission/answer being
+    reviewed for PAYMENT, not for knowledge accuracy (that is the separate
+    Review Queue/ObservationModeration above). See
+    app/db/models/submission_review.py for why these are two different
+    reviews of two different things."""
+
+    submission_id: UUID
+    submission_type: str
+    guide_id: UUID
+    guide_name: str
+    raw_text: str | None
+    submitted_at: datetime
+    latitude: float | None
+    longitude: float | None
+    # The place this contribution concerns, when resolvable -- directly for a
+    # place-question answer (via its location_id), otherwise left null rather
+    # than guessed from raw lat/lon (a nearby-place guess belongs in a human's
+    # judgement while reviewing, not in this list row).
+    location_id: UUID | None
+    location_name: str | None
+    # The exact text of the question this answers, if it answers one at all
+    # (a free-form 'explore'/'memory' contribution has none of these).
+    question_text: str | None
+    has_audio: bool
+    has_photo: bool
+    review: SubmissionReviewRead
+    # What this is worth if approved -- resolved live from reward_rules by
+    # the SAME rule_key frozen on the review row, so an admin sees the
+    # CURRENT rate even if it has changed since the guide contributed (the
+    # rate actually paid is whatever is active at the moment of approval,
+    # per reward_service.award's existing, unchanged behavior).
+    current_rule_points: int
+
+
+class ContributionQueueResult(BaseModel):
+    items: list[ContributionQueueItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class ContributionDetail(BaseModel):
+    """Full detail for one contribution under review -- everything an admin
+    needs to decide, without a second request: the content, the place, the
+    question (if any), and the contributor."""
+
+    item: ContributionQueueItem
+    audio: SubmissionAudioRead | None
+    photo: SubmissionPhotoRead | None
+    transcript: TranscriptionRead | None
+    guide_phone_number: str | None
 
 
 class PlaceSummary(BaseModel):

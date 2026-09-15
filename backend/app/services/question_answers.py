@@ -22,6 +22,7 @@ from app.db.models.question_assignment import QuestionAssignment
 from app.db.models.submission import Submission
 from app.services import extractions as extraction_service
 from app.services import rewards as reward_service
+from app.services import submission_review as submission_review_service
 
 
 class QuestionNotFoundError(Exception):
@@ -259,17 +260,21 @@ def submit_answer(
     # INSERT time, not at object construction).
     db.flush()
 
-    # Reward (Step 18), in this SAME transaction so the answer and its award
-    # commit together. Keyed on client_answer_id -- the id that already makes
-    # this whole function idempotent -- so a retried offline sync credits the
-    # guide exactly once (see app/services/rewards.py:award).
-    reward_service.award(
+    # Admin-approval gate (Step 18/19), in this SAME transaction so the answer
+    # and its pending review commit together. Keyed on client_answer_id --
+    # the id that already makes this whole function idempotent -- so a
+    # retried offline sync queues the same review row rather than a second
+    # one (see app/services/submission_review.py). No reward_service.award()
+    # call here anymore -- an admin approving this review is what actually
+    # awards it, with these exact same arguments.
+    submission_review_service.ensure_pending_review(
         db,
+        submission_id=submission.id,
         guide_id=guide_id,
-        rule_key=reward_rule_key_for_question(db, question),
-        idempotency_key=client_answer_id,
-        source_type="question_answer",
-        source_id=answer.id,
+        reward_rule_key=reward_rule_key_for_question(db, question),
+        reward_idempotency_key=client_answer_id,
+        reward_source_type="question_answer",
+        reward_source_id=answer.id,
     )
 
     db.commit()

@@ -25,6 +25,7 @@ from app.services import knowledge_decisions as knowledge_decision_service
 from app.services import knowledge_types as knowledge_type_service
 from app.services import question_answers as question_answer_service
 from app.services import rewards as reward_service
+from app.services import submission_review as submission_review_service
 from app.services.question_generation.anthropic_provider import (
     QuestionGenerationProviderError,
     generate_question_text,
@@ -108,7 +109,24 @@ def build_question_read(db: Session, question: Question) -> QuestionRead:
             answered_at=assignment_row.answered_at,
         )
     answer_row = question_answer_service.get_latest_answer_for_question(db, question.id)
-    answer = QuestionAnswerRead.model_validate(answer_row) if answer_row is not None else None
+    answer = None
+    if answer_row is not None:
+        answer = QuestionAnswerRead.model_validate(answer_row)
+        # Admin-approval gate (Step 19): attach the review decision, if any,
+        # so the app can distinguish "pending admin approval" from "approved,
+        # you earned N points" from "not approved: <reason>" without a second
+        # request. review is None only for an answer that predates this
+        # feature (paid immediately, under the old behavior).
+        review = submission_review_service.get_review(db, answer_row.submission_id)
+        if review is not None:
+            answer = answer.model_copy(
+                update={
+                    "review_status": review.status,
+                    "rejection_reason": review.rejection_reason,
+                    "rejection_note": review.rejection_note,
+                    "reward_points_awarded": review.reward_points_awarded,
+                }
+            )
     return QuestionRead(
         id=question.id,
         knowledge_type_id=question.knowledge_type_id,

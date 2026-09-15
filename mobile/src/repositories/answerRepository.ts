@@ -24,6 +24,10 @@ interface LocalAnswerRow {
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
+  review_status: string | null;
+  rejection_reason: string | null;
+  rejection_note: string | null;
+  reward_points_awarded: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -65,6 +69,10 @@ function mapRow(row: LocalAnswerRow): LocalAnswer {
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
+    reviewStatus: row.review_status as LocalAnswer['reviewStatus'],
+    rejectionReason: row.rejection_reason,
+    rejectionNote: row.rejection_note,
+    rewardPointsAwarded: row.reward_points_awarded,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -152,6 +160,32 @@ export async function getAnswerByQuestionId(
   return row ? mapRow(row) : null;
 }
 
+/**
+ * Records the admin-approval decision reported for this answer (Step 19),
+ * matched by `clientAnswerId` -- the server stores this as the underlying
+ * Submission's client_submission_id, and echoes it back on every read (see
+ * sync/submissionReviewSync.ts, the only caller).
+ */
+export async function updateAnswerReviewStatus(
+  db: SQLiteDatabase,
+  clientAnswerId: string,
+  status: LocalAnswer['reviewStatus'],
+  rejectionReason: string | null,
+  rejectionNote: string | null,
+  rewardPointsAwarded: number | null
+): Promise<void> {
+  await db.runAsync(
+    `UPDATE local_answer
+     SET review_status = ?, rejection_reason = ?, rejection_note = ?, reward_points_awarded = ?
+     WHERE client_answer_id = ?`,
+    status,
+    rejectionReason,
+    rejectionNote,
+    rewardPointsAwarded,
+    clientAnswerId
+  );
+}
+
 /** Count of local answers in any of the given statuses, for this guide —
  * mirrors countCapturesByStatus/countLocationsByStatus (Step 15: used for
  * the Activity tab badge). */
@@ -202,13 +236,19 @@ export async function listSyncableAnswers(
 }
 
 /**
- * Points the guide has earned on this device that the SERVER has not confirmed
- * yet — i.e. answers still waiting to sync (Step 18).
+ * Points the guide has provisionally earned on this device for answers still
+ * waiting to reach the SERVER (Step 18) -- i.e. not yet synced at all. This
+ * is about TRANSPORT, not about admin approval (Step 19): an answer that has
+ * synced still is not in the authoritative total until an admin approves it
+ * (see submission_reviews), but it is also correctly excluded from this
+ * "waiting to sync" count, since sync is exactly what it's no longer waiting
+ * on.
  *
- * Deliberately excludes 'uploaded' rows: once the backend has confirmed an
- * answer, its points are already inside the authoritative total from
- * GET /guides/{id}/rewards, and counting them here too would double-display
- * them. This number is only ever shown as a separate "pending" line, never
+ * Deliberately excludes 'uploaded' rows for that reason: once the backend has
+ * the answer, this "waiting to sync" number no longer applies to it -- its
+ * fate is now "pending admin approval" / "approved" / "rejected", which
+ * PendingItemsScreen shows per-item from `review_status`, not summed here.
+ * This number is only ever shown as a separate "waiting to sync" line, never
  * added into the confirmed balance by the app.
  */
 export async function sumPendingRewardPoints(

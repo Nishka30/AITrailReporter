@@ -192,6 +192,7 @@ export default function HomeScreen({
         memories: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         locations: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
         answers: { attempted: 0, uploaded: 0, failed: 0, outcomes: [] },
+        reviewCheckError: null,
         message: 'Sync failed unexpectedly. Your local data is safe and unchanged.',
       });
     } finally {

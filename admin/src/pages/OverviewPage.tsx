@@ -1,5 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Clock, Compass, HelpCircle, Map, Users, XCircle } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Compass,
+  DollarSign,
+  HelpCircle,
+  Map,
+  Users,
+  XCircle,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { getOverview } from '../api/admin';
@@ -26,6 +36,32 @@ export default function OverviewPage() {
 
       {data ? (
         <div className="space-y-6">
+          <div>
+            <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-ink-faint">
+              Contribution Review (rewards)
+            </h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <button className="text-left" onClick={() => navigate('/contributions')}>
+                <StatCard
+                  label="Awaiting payment decision"
+                  value={data.contribution_pending_review_count}
+                  icon={<Clock className="h-5 w-5" />}
+                  tone={data.contribution_pending_review_count > 0 ? 'warning' : 'default'}
+                />
+              </button>
+              <StatCard
+                label="Approved & paid"
+                value={data.contribution_approved_count}
+                icon={<DollarSign className="h-5 w-5" />}
+              />
+              <StatCard
+                label="Rejected"
+                value={data.contribution_rejected_count}
+                icon={<XCircle className="h-5 w-5" />}
+              />
+            </div>
+          </div>
+
           <div>
             <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-ink-faint">
               Moderation

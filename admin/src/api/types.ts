@@ -35,6 +35,9 @@ export type AdminOverview = {
   active_knowledge_type_count: number;
   questions_generated_count: number;
   questions_pending_assignment_count: number;
+  contribution_pending_review_count: number;
+  contribution_approved_count: number;
+  contribution_rejected_count: number;
 };
 
 export type ReviewQueueItem = {
@@ -223,6 +226,75 @@ export type AdminQuestionSummary = {
   assignment_status: string | null;
   assigned_guide_name: string | null;
   created_at: string;
+};
+
+/** Admin-approval gate on rewards (Step 19) -- deliberately a SEPARATE
+ * lifecycle from ObservationModeration above: this reviews whether a
+ * CONTRIBUTION (submission/answer) gets paid, not whether an extracted
+ * knowledge fact is fit for public visibility. One Submission can yield
+ * zero-to-many Observations, so the two reviews cannot be the same table.
+ * Same status/reason vocabulary as ObservationModeration on purpose (shared
+ * DecisionDialog component), but a genuinely different decision. */
+export type SubmissionReview = {
+  id: string;
+  submission_id: string;
+  guide_id: string;
+  status: ModerationStatus;
+  decided_by: string | null;
+  decided_at: string | null;
+  rejection_reason: RejectionReason | null;
+  rejection_note: string | null;
+  reward_rule_key: string;
+  /** Set only once status === 'approved'. Null while pending or rejected --
+   * 0 would be ambiguous with "the rule is worth zero points". */
+  reward_points_awarded: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContributionQueueItem = {
+  submission_id: string;
+  submission_type: string;
+  guide_id: string;
+  guide_name: string;
+  raw_text: string | null;
+  submitted_at: string;
+  latitude: number | null;
+  longitude: number | null;
+  location_id: string | null;
+  location_name: string | null;
+  question_text: string | null;
+  has_audio: boolean;
+  has_photo: boolean;
+  review: SubmissionReview;
+  /** What this is worth right now, resolved live from the SAME rule_key
+   * frozen on the review -- the rate actually paid on approval, which may
+   * differ from whatever it was worth at submission time. */
+  current_rule_points: number;
+};
+
+export type ContributionQueueResult = {
+  items: ContributionQueueItem[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type ContributionDetail = {
+  item: ContributionQueueItem;
+  audio: SubmissionMediaMeta | null;
+  photo: SubmissionMediaMeta | null;
+  transcript: TranscriptionRead | null;
+  guide_phone_number: string | null;
+};
+
+export type ContributionQueueFilters = {
+  status?: string;
+  guide_id?: string;
+  submission_type?: string;
+  q?: string;
+  page?: number;
+  page_size?: number;
 };
 
 export type ReviewQueueFilters = {

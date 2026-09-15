@@ -16,6 +16,7 @@ from app.schemas.place_question import GuidePlaceQuestions, PlaceQuestionRead
 from app.schemas.place_search import PlaceSearchResponse, PlaceSearchResult
 from app.schemas.question import QuestionRead
 from app.schemas.reward import GuideRewardSummary
+from app.schemas.submission_review import GuideSubmissionReviewRead
 from app.services import geographic_context as geographic_context_service
 from app.services import guide_locations as guide_location_service
 from app.services import guides as guide_service
@@ -26,6 +27,7 @@ from app.services import place_questions as place_question_service
 from app.services import poi_discovery as poi_discovery_service
 from app.services import questions as question_service
 from app.services import rewards as reward_service
+from app.services import submission_review as submission_review_service
 from app.services.places.base import PlaceProviderError
 from app.services.places.google_provider import get_place_provider
 
@@ -475,3 +477,42 @@ def get_guide_rewards(guide_id: UUID, db: Session = Depends(get_db)):
     if guide is None:
         raise HTTPException(status_code=404, detail="Guide not found")
     return reward_service.get_guide_rewards(db, guide_id)
+
+
+@router.get("/{guide_id}/submission-reviews", response_model=list[GuideSubmissionReviewRead])
+def get_guide_submission_reviews(
+    guide_id: UUID,
+    since: datetime | None = Query(
+        default=None,
+        description=(
+            "Only rows updated after this timestamp -- pass the newest "
+            "updated_at seen on a previous call to fetch just what changed."
+        ),
+    ),
+    db: Session = Depends(get_db),
+):
+    """Admin-approval status (Step 19) for this guide's own contributions --
+    what the mobile app polls to learn whether something it already knows
+    about locally (matched by client_submission_id) has moved from
+    'pending_review' to 'approved' (with points) or 'rejected' (with a
+    reason). Never awards or decides anything itself; purely a read of
+    app/services/submission_review.py's state. No admin auth -- a guide may
+    only ever see their OWN reviews, scoped by the path's guide_id."""
+    guide = guide_service.get_guide(db, guide_id)
+    if guide is None:
+        raise HTTPException(status_code=404, detail="Guide not found")
+    rows = submission_review_service.list_for_guide(db, guide_id, since=since)
+    return [
+        GuideSubmissionReviewRead(
+            submission_id=submission.id,
+            client_submission_id=submission.client_submission_id or "",
+            submission_type=submission.submission_type,
+            status=review.status,
+            rejection_reason=review.rejection_reason,
+            rejection_note=review.rejection_note,
+            decided_at=review.decided_at,
+            reward_points_awarded=review.reward_points_awarded,
+            updated_at=review.updated_at,
+        )
+        for review, submission in rows
+    ]

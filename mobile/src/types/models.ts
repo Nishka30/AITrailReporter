@@ -12,6 +12,12 @@ export type SyncStatus =
   | 'failed'
   | 'dead_letter';
 
+/** Admin-approval status for a rewarded contribution (Step 19) -- mirrors
+ * backend SUBMISSION_REVIEW_STATUSES exactly. Distinct from SyncStatus:
+ * that is about reaching the server at all, this is about a human deciding
+ * whether the contribution gets paid. */
+export type SubmissionReviewStatus = 'pending_review' | 'approved' | 'rejected';
+
 /**
  * What kind of capture this is.
  *
@@ -252,6 +258,23 @@ export interface LocalCapture {
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;
+  /**
+   * Admin-approval status (Step 19), as last reported by
+   * GET /guides/{id}/submission-reviews (see api/submissionReviews.ts and
+   * sync/submissionReviewSync.ts). Null until the first poll after this
+   * capture has synced -- the UI treats null the same as 'pending_review',
+   * never as approved. Distinct from `syncStatus`: that tracks whether this
+   * device has SENT the contribution; this tracks whether an admin has
+   * DECIDED to pay for it. A capture with no reward at all (a plain note)
+   * never gets this set past null, because it has nothing to review.
+   */
+  reviewStatus: SubmissionReviewStatus | null;
+  rejectionReason: string | null;
+  rejectionNote: string | null;
+  /** Set only once reviewStatus === 'approved'. Distinct from the
+   * provisional `rewardPoints` above: that is "what this was worth when
+   * captured"; this is "what was actually paid, confirmed by an admin". */
+  rewardPointsAwarded: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -365,6 +388,12 @@ export interface LocalAnswer {
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;
+  /** Admin-approval status (Step 19) -- see the identical fields on
+   * LocalCapture above for the full contract. */
+  reviewStatus: SubmissionReviewStatus | null;
+  rejectionReason: string | null;
+  rejectionNote: string | null;
+  rewardPointsAwarded: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -376,4 +405,4 @@ export interface LocalAnswer {
  * switching guides on the same device does not carry these over; they are a
  * property of this install, not of a person.
  */
-export type AppSettingKey = 'auto_sync_enabled';
+export type AppSettingKey = 'auto_sync_enabled' | 'submission_reviews_synced_at';

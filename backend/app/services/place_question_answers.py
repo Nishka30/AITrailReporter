@@ -28,6 +28,7 @@ from app.db.models.place_question import PlaceQuestion
 from app.db.models.submission import Submission
 from app.services import extractions as extraction_service
 from app.services import rewards as reward_service
+from app.services import submission_review as submission_review_service
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +71,18 @@ def submit_place_question_answer(
     """Persists an answer to a popular question. Returns
     (submission, created, points_awarded).
 
-    Idempotent on client_answer_id: a replayed sync returns the existing
-    submission with created=False and points_awarded=0 -- the guide is paid
-    once, on the first successful write, never again on a retry.
+    `points_awarded` is now ALWAYS 0 from this function -- rewarding is no
+    longer immediate (Step 19: admin-approval gate). The answer instead
+    receives a 'pending_review' SubmissionReview row in the SAME transaction;
+    an admin approving it is what actually calls reward_service.award(), with
+    the exact rule_key/idempotency_key this function would have used directly
+    before this feature existed. Callers that need to tell the guide what
+    happens next should read the review status via
+    submission_review.get_review(db, submission.id), not this return value.
 
-    The reward is written in the SAME transaction as the submission, so
-    "the answer was stored" and "the guide was credited" are atomic. There is
-    no path that credits points for an answer that wasn't saved, and none that
-    saves an answer without crediting it.
+    Idempotent on client_answer_id: a replayed sync returns the existing
+    submission with created=False -- a second review row is never queued for
+    the same answer (see submission_review.ensure_pending_review).
     """
     existing = _get_submission_by_client_id(db, client_answer_id)
     if existing is not None:
@@ -146,16 +151,20 @@ def submit_place_question_answer(
             return existing, False, 0
         raise
 
-    points = reward_service.award(
+    submission_review_service.ensure_pending_review(
         db,
+        submission_id=submission.id,
         guide_id=guide_id,
         # Paid at the rate for THIS question's contribution kind, not one flat
         # place-question rate -- the kinds differ in effort. Falls back to the
-        # generic rule when a kind has no rate of its own.
-        rule_key=reward_service.place_question_rule_key(db, place_question.contribution_kind),
-        idempotency_key=client_answer_id,
-        source_type="place_question_answer",
-        source_id=submission.id,
+        # generic rule when a kind has no rate of its own. Resolved now and
+        # frozen onto the review row, so approval later replays exactly this
+        # rule regardless of what a question's contribution_kind becomes by
+        # then.
+        reward_rule_key=reward_service.place_question_rule_key(db, place_question.contribution_kind),
+        reward_idempotency_key=client_answer_id,
+        reward_source_type="place_question_answer",
+        reward_source_id=submission.id,
     )
 
     db.commit()
@@ -164,4 +173,6 @@ def submit_place_question_answer(
     # Same automatic-extraction trigger every other text submission uses --
     # called AFTER commit, never raises (see extractions.py).
     extraction_service.maybe_trigger_extraction(db, submission.id)
-    return submission, True, points
+    # Always 0 now -- see this function's docstring. The guide is paid only
+    # on admin approval.
+    return submission, True, 0

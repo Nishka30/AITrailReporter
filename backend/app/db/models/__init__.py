@@ -18,6 +18,7 @@ from app.db.models.question_answer import QuestionAnswer
 from app.db.models.question_assignment import QuestionAssignment
 from app.db.models.reward import RewardLedger, RewardRule
 from app.db.models.submission import Submission
+from app.db.models.submission_review import SubmissionReview
 from app.db.models.transcription import Transcription
 
 __all__ = [
@@ -41,5 +42,6 @@ __all__ = [
     "RewardLedger",
     "RewardRule",
     "Submission",
+    "SubmissionReview",
     "Transcription",
 ]

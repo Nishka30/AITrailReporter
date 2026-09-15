@@ -25,6 +25,7 @@ from app.schemas.place_question import (
 from app.services import guides as guide_service
 from app.services import place_question_answers as place_answer_service
 from app.services import place_questions as place_question_service
+from app.services import submission_review as submission_review_service
 
 router = APIRouter(tags=["place-questions"])
 
@@ -155,6 +156,11 @@ def answer_place_question(
         )
 
     response.status_code = 201 if created else 200
+    # Reflects the review's ACTUAL current status -- not always
+    # 'pending_review' -- so a replayed sync of an already-decided answer
+    # reports the true outcome rather than falsely implying it is still
+    # awaiting review.
+    review = submission_review_service.get_review(db, submission.id)
     return PlaceQuestionAnswerRead(
         place_question_id=place_question_id,
         submission_id=submission.id,
@@ -162,4 +168,5 @@ def answer_place_question(
         answer_text=submission.raw_text or "",
         answered_at=submission.submitted_at,
         points_awarded=points,
+        review_status=review.status if review is not None else "pending_review",
     )

@@ -14,6 +14,7 @@ from app.db.models.submission import (
 from app.schemas.submission import SubmissionCreate
 from app.services import extractions as extraction_service
 from app.services import rewards as reward_service
+from app.services import submission_review as submission_review_service
 from app.services import transcriptions as transcription_service
 from app.services.storage.base import AudioStorage, MediaStorage
 
@@ -179,19 +180,25 @@ def create_or_get_submission(db: Session, data: SubmissionCreate) -> tuple[Submi
         source_place_question_id=data.source_place_question_id,
     )
     db.add(submission)
-    # Reward (Step 18) for an Explore or memory contribution, in the SAME
-    # transaction as the submission itself. A 'note' is an unprompted field
-    # report and 'voice' has no prompt provenance, so neither earns here; an
-    # Explore contribution answers something the app actually asked for, and a
-    # memory is the same kind of proactive field contribution without a live
-    # prompt behind it -- paid at the identical base rate, distinguished only
-    # by `source_type` in the ledger (see _award_media_bonus above).
+    # Admin-approval gate (in place of an immediate reward) for an Explore or
+    # memory contribution, in the SAME transaction as the submission itself.
+    # A 'note' is an unprompted field report and 'voice' has no prompt
+    # provenance, so neither is reward-eligible and neither gets a review row
+    # here; an Explore contribution answers something the app actually asked
+    # for, and a memory is the same kind of proactive field contribution
+    # without a live prompt behind it -- paid at the identical base rate once
+    # approved, distinguished only by `source_type` in the ledger (see
+    # _award_media_bonus above).
     #
-    # Awarded at the base rate now, because media is attached by a SEPARATE
+    # Queued at the base rate now, because media is attached by a SEPARATE
     # later request -- attach_audio/photo_to_submission top this up to the
     # with-media rate once media genuinely arrives (see those functions). The
     # alternative, guessing up-front that media is coming, would credit a
     # richer contribution than the guide actually made.
+    #
+    # No reward_service.award() call here anymore -- see
+    # app/services/submission_review.py. An admin approving this submission
+    # is what actually calls award(), with these exact same arguments.
     if data.capture_type in ("explore", "memory"):
         db.flush()
         if data.source_place_question_id is not None:
@@ -209,13 +216,14 @@ def create_or_get_submission(db: Session, data: SubmissionCreate) -> tuple[Submi
         else:
             rule_key = "explore_contribution"
             source_type = "memory_submission" if data.capture_type == "memory" else "explore_submission"
-        reward_service.award(
+        submission_review_service.ensure_pending_review(
             db,
+            submission_id=submission.id,
             guide_id=data.guide_id,
-            rule_key=rule_key,
-            idempotency_key=data.client_submission_id,
-            source_type=source_type,
-            source_id=submission.id,
+            reward_rule_key=rule_key,
+            reward_idempotency_key=data.client_submission_id,
+            reward_source_type=source_type,
+            reward_source_id=submission.id,
         )
     try:
         db.commit()
