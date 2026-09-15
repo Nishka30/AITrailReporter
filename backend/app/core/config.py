@@ -251,14 +251,14 @@ class Settings(BaseSettings):
     # audit why a question was asked; not a copy of the web.
     place_research_max_summary_chars: int = 4000
 
-    # Step 18: reward points -> money. `10` means 10 points = 1.00 of
+    # Step 18: reward points -> money. `100` means 100 points = 1.00 of
     # reward_currency_code. Configured here rather than in the mobile app so
     # the rate can change without an app release -- the app only ever DISPLAYS
     # the conversion the backend reports (see app/api/routes/rewards.py).
     #
     # NOTE: no payout/redemption mechanism exists in this system. This value
     # drives an "approximate value" display only; nothing here moves money.
-    reward_points_per_currency_unit: int = 10
+    reward_points_per_currency_unit: int = 100
     reward_currency_code: str = "USD"
     reward_currency_symbol: str = "$"
 
