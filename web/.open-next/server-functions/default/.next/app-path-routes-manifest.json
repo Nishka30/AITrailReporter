@@ -1,0 +1,12 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/explore/page": "/explore",
+  "/favicon.ico/route": "/favicon.ico",
+  "/observations/[observationId]/page": "/observations/[observationId]",
+  "/page": "/",
+  "/places/[locationId]/page": "/places/[locationId]",
+  "/places/[locationId]/photos/page": "/places/[locationId]/photos",
+  "/places/[locationId]/stories/page": "/places/[locationId]/stories",
+  "/search/page": "/search"
+}

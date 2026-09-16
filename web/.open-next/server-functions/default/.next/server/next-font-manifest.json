@@ -1,0 +1,47 @@
+{
+  "app": {
+    "[project]/src/app/_not-found/page": [
+      "static/media/017d9bea37084d9b-s.p.41rroleoq1br7.woff2",
+      "static/media/ed5f1f9bced69653-s.p.2li_3lqay9qjq.woff2",
+      "static/media/89ea96820aa96980-s.p.0hs6q6udzld4a.woff2"
+    ],
+    "[project]/src/app/explore/page": [
+      "static/media/017d9bea37084d9b-s.p.41rroleoq1br7.woff2",
+      "static/media/ed5f1f9bced69653-s.p.2li_3lqay9qjq.woff2",
+      "static/media/89ea96820aa96980-s.p.0hs6q6udzld4a.woff2"
+    ],
+    "[project]/src/app/observations/[observationId]/page": [
+      "static/media/017d9bea37084d9b-s.p.41rroleoq1br7.woff2",
+      "static/media/ed5f1f9bced69653-s.p.2li_3lqay9qjq.woff2",
+      "static/media/89ea96820aa96980-s.p.0hs6q6udzld4a.woff2"
+    ],
+    "[project]/src/app/page": [
+      "static/media/017d9bea37084d9b-s.p.41rroleoq1br7.woff2",
+      "static/media/ed5f1f9bced69653-s.p.2li_3lqay9qjq.woff2",
+      "static/media/89ea96820aa96980-s.p.0hs6q6udzld4a.woff2"
+    ],
+    "[project]/src/app/places/[locationId]/page": [
+      "static/media/017d9bea37084d9b-s.p.41rroleoq1br7.woff2",
+      "static/media/ed5f1f9bced69653-s.p.2li_3lqay9qjq.woff2",
+      "static/media/89ea96820aa96980-s.p.0hs6q6udzld4a.woff2"
+    ],
+    "[project]/src/app/places/[locationId]/photos/page": [
+      "static/media/017d9bea37084d9b-s.p.41rroleoq1br7.woff2",
+      "static/media/ed5f1f9bced69653-s.p.2li_3lqay9qjq.woff2",
+      "static/media/89ea96820aa96980-s.p.0hs6q6udzld4a.woff2"
+    ],
+    "[project]/src/app/places/[locationId]/stories/page": [
+      "static/media/017d9bea37084d9b-s.p.41rroleoq1br7.woff2",
+      "static/media/ed5f1f9bced69653-s.p.2li_3lqay9qjq.woff2",
+      "static/media/89ea96820aa96980-s.p.0hs6q6udzld4a.woff2"
+    ],
+    "[project]/src/app/search/page": [
+      "static/media/017d9bea37084d9b-s.p.41rroleoq1br7.woff2",
+      "static/media/ed5f1f9bced69653-s.p.2li_3lqay9qjq.woff2",
+      "static/media/89ea96820aa96980-s.p.0hs6q6udzld4a.woff2"
+    ]
+  },
+  "appUsingSizeAdjust": true,
+  "pages": {},
+  "pagesUsingSizeAdjust": false
+}

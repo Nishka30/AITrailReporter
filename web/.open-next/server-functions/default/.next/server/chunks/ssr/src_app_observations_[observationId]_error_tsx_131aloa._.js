@@ -1,0 +1,3 @@
+module.exports=[30645,a=>{"use strict";var b=a.i(87924);a.s(["default",0,function({retry:a}){return(0,b.jsxs)("div",{className:"mx-auto max-w-lg px-5 py-32 text-center",children:[(0,b.jsx)("p",{className:"font-heading text-2xl font-bold text-ink",children:"Couldn’t load this report"}),(0,b.jsx)("p",{className:"mt-3 text-sm text-ink-soft",children:"Something went wrong reaching the backend. Try again in a moment."}),(0,b.jsx)("button",{type:"button",onClick:()=>a(),className:"mt-6 rounded-full bg-ink px-5 py-2.5 text-sm font-semibold text-paper transition hover:bg-marigold-deep",children:"Try again"})]})}])}];
+
+//# sourceMappingURL=src_app_observations_%5BobservationId%5D_error_tsx_131aloa._.js.map
