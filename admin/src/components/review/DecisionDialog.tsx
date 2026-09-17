@@ -3,11 +3,13 @@ import { useState } from 'react';
 import type { RejectionReason } from '../../api/types';
 
 const REASONS: { value: RejectionReason; label: string }[] = [
-  { value: 'inaccurate', label: 'Inaccurate' },
+  { value: 'inaccurate', label: 'Incorrect or inaccurate information' },
+  { value: 'not_enough_details', label: 'Not enough details' },
   { value: 'unsafe', label: 'Unsafe' },
-  { value: 'duplicate', label: 'Duplicate' },
-  { value: 'poor_quality', label: 'Poor quality' },
+  { value: 'duplicate', label: 'Duplicate contribution' },
+  { value: 'poor_quality', label: 'Poor quality / unclear submission' },
   { value: 'not_useful', label: 'Not useful' },
+  { value: 'spam', label: 'Spam or inappropriate content' },
   { value: 'other', label: 'Other' },
 ];
 

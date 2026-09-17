@@ -9,7 +9,16 @@ SubmissionReviewStatus = Literal["pending_review", "approved", "rejected"]
 # -- see app/db/models/submission_review.py's module docstring for why these
 # are two independent tables reviewing different things, sharing one closed
 # set of reasons (and, in the admin app, one reusable picker component).
-RejectionReason = Literal["inaccurate", "unsafe", "duplicate", "poor_quality", "not_useful", "other"]
+RejectionReason = Literal[
+    "inaccurate",
+    "not_enough_details",
+    "unsafe",
+    "duplicate",
+    "poor_quality",
+    "not_useful",
+    "spam",
+    "other",
+]
 
 
 class SubmissionReviewRead(BaseModel):

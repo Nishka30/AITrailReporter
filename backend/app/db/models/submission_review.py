@@ -23,7 +23,16 @@ SUBMISSION_REVIEW_STATUSES = ("pending_review", "approved", "rejected")
 # contribution-worth-paying-for decision -- even though today's UI reuses the
 # same picker). Values intentionally identical so the SAME admin
 # DecisionDialog component works for both without modification.
-REJECTION_REASONS = ("inaccurate", "unsafe", "duplicate", "poor_quality", "not_useful", "other")
+REJECTION_REASONS = (
+    "inaccurate",
+    "not_enough_details",
+    "unsafe",
+    "duplicate",
+    "poor_quality",
+    "not_useful",
+    "spam",
+    "other",
+)
 
 
 class SubmissionReview(Base):

@@ -6,10 +6,12 @@ export type ModerationStatus = 'pending_review' | 'approved' | 'rejected';
 
 export type RejectionReason =
   | 'inaccurate'
+  | 'not_enough_details'
   | 'unsafe'
   | 'duplicate'
   | 'poor_quality'
   | 'not_useful'
+  | 'spam'
   | 'other';
 
 export type ObservationModeration = {

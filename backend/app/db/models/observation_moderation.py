@@ -30,7 +30,16 @@ MODERATION_STATUSES = ("pending_review", "approved", "rejected")
 # analyzable ("how many rejections were for safety reasons this month") and
 # matches this codebase's convention of enumerations over free-form strings
 # wherever the value is later going to be filtered/counted/branched on.
-REJECTION_REASONS = ("inaccurate", "unsafe", "duplicate", "poor_quality", "not_useful", "other")
+REJECTION_REASONS = (
+    "inaccurate",
+    "not_enough_details",
+    "unsafe",
+    "duplicate",
+    "poor_quality",
+    "not_useful",
+    "spam",
+    "other",
+)
 
 
 class ObservationModeration(Base):

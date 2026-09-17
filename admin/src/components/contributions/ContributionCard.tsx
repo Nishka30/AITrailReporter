@@ -1,5 +1,5 @@
 import { HelpCircle, Image as ImageIcon, Mic, DollarSign, MapPin } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 import type { ContributionQueueItem } from '../../api/types';
 import StatusBadge, { moderationLabel, moderationTone } from '../ui/StatusBadge';
@@ -13,9 +13,15 @@ import StatusBadge, { moderationLabel, moderationTone } from '../ui/StatusBadge'
  * different reviews of two different things.
  */
 export default function ContributionCard({ item }: { item: ContributionQueueItem }) {
+  // Carries the queue's current filters into the detail page so that
+  // approve/reject there can advance to the next PENDING item under the
+  // same filter/search the admin was working through, not an unfiltered one.
+  const [searchParams] = useSearchParams();
+  const search = searchParams.toString();
+
   return (
     <Link
-      to={`/contributions/${item.submission_id}`}
+      to={{ pathname: `/contributions/${item.submission_id}`, search }}
       className="block rounded-lg border border-border bg-paper-elevated p-4 shadow-card transition-shadow hover:shadow-md"
     >
       <div className="flex items-start justify-between gap-4">

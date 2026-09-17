@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Sparkles } from 'lucide-react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { AlertTriangle, ArrowLeft, CheckCircle2, Sparkles } from 'lucide-react';
+import { useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
-import { getReviewDetail } from '../api/admin';
+import { getReviewDetail, getReviewQueue } from '../api/admin';
 import type { KnowledgeTypeState } from '../api/types';
 import AudioPlayer from '../components/review/AudioPlayer';
 import ImageViewer from '../components/review/ImageViewer';
@@ -21,12 +22,87 @@ export default function ReviewDetailPage() {
   const { observationId } = useParams<{ observationId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+
+  // The filters the admin had applied to the Review Queue when they opened
+  // this item (see ObservationCard, which forwards them here). Reused below
+  // to find "the next pending item under the same filters" rather than an
+  // unrelated one.
+  const knowledgeTypeFilter = searchParams.get('knowledge_type') || undefined;
+  const safetyCriticalFilter = searchParams.get('safety_critical')
+    ? searchParams.get('safety_critical') === 'true'
+    : undefined;
+  const sourceTypeFilter = searchParams.get('source_type') || undefined;
+  const qFilter = searchParams.get('q') || undefined;
+  const sortFilter = searchParams.get('sort') || undefined;
+  const searchSuffix = searchParams.toString() ? `?${searchParams.toString()}` : '';
+
+  const [advancing, setAdvancing] = useState(false);
+  const [caughtUp, setCaughtUp] = useState(false);
 
   const { data: detail, isLoading, isError, refetch } = useQuery({
     queryKey: ['review-detail', observationId],
     queryFn: () => getReviewDetail(observationId!),
-    enabled: !!observationId,
+    enabled: !!observationId && !caughtUp,
   });
+
+  /**
+   * Fires after ModerationActions successfully approves/rejects the current
+   * item -- but only when it was the initial pending_review decision, not a
+   * later change-decision reversal on an already-decided item (see the
+   * onChanged call site below, which gates this on the PRE-decision status).
+   * Looks up the next still-pending item under the same filters and jumps
+   * straight to it, so the admin can keep processing the queue one item
+   * after another. Falls back to a "caught up" state once none remain.
+   */
+  const advanceToNext = async () => {
+    setAdvancing(true);
+    try {
+      queryClient.invalidateQueries({ queryKey: ['review-queue'] });
+      const next = await getReviewQueue({
+        status: 'pending_review',
+        knowledge_type: knowledgeTypeFilter,
+        safety_critical: safetyCriticalFilter,
+        source_type: sourceTypeFilter,
+        q: qFilter,
+        sort: sortFilter,
+        page: 1,
+        page_size: 1,
+      });
+      const nextItem = next.items.find((i) => i.observation_id !== observationId) ?? next.items[0];
+      if (nextItem) {
+        navigate(`/review/${nextItem.observation_id}${searchSuffix}`, { replace: true });
+      } else {
+        setCaughtUp(true);
+      }
+    } finally {
+      setAdvancing(false);
+    }
+  };
+
+  if (caughtUp) {
+    return (
+      <div className="max-w-4xl">
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-border bg-paper-elevated p-10 text-center shadow-card">
+          <CheckCircle2 className="h-10 w-10 text-ok" />
+          <h1 className="font-heading text-xl font-extrabold text-ink">You're all caught up!</h1>
+          <p className="text-sm text-ink-soft">
+            No more pending observations match{' '}
+            {knowledgeTypeFilter || safetyCriticalFilter || sourceTypeFilter || qFilter
+              ? 'your current filters'
+              : 'the review queue'}
+            .
+          </p>
+          <Link
+            to={`/review-queue${searchSuffix}`}
+            className="mt-2 rounded-full bg-marigold px-4 py-2 text-sm font-bold text-white"
+          >
+            Back to Review Queue
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) return <LoadingState />;
   if (isError || !detail) return <ErrorState message="Could not load this observation." onRetry={() => refetch()} />;
@@ -138,7 +214,44 @@ export default function ReviewDetailPage() {
           ) : null}
         </section>
 
-        {/* 3. Knowledge Context */}
+        {/* 3. Admin Decision -- placed right after Source + AI Extracted
+             Knowledge (the content actually being judged) so the admin can
+             decide without scrolling past Knowledge Context below. */}
+        <section className="rounded-lg border border-border bg-paper-elevated p-5 shadow-card">
+          <h2 className="mb-3 font-heading text-base font-bold text-ink">Admin Decision</h2>
+          {observation.moderation.decided_by ? (
+            <div className="mb-3 text-sm text-ink-soft">
+              Decided by <span className="font-bold">{observation.moderation.decided_by}</span> on{' '}
+              {observation.moderation.decided_at
+                ? new Date(observation.moderation.decided_at).toLocaleString()
+                : '—'}
+              {observation.moderation.rejection_reason ? (
+                <span> · Reason: {observation.moderation.rejection_reason}</span>
+              ) : null}
+              {observation.moderation.rejection_note ? (
+                <div className="mt-1 italic">“{observation.moderation.rejection_note}”</div>
+              ) : null}
+            </div>
+          ) : null}
+          {advancing ? (
+            <div className="text-sm font-bold text-ink-soft">Saving decision and loading the next item…</div>
+          ) : (
+            <ModerationActions
+              observationId={observation.observation_id}
+              moderation={observation.moderation}
+              onChanged={async () => {
+                queryClient.invalidateQueries({ queryKey: ['review-detail', observationId] });
+                // Only auto-advance on the initial pending_review decision --
+                // not on a change-decision reversal of an already-decided item.
+                if (observation.moderation.status === 'pending_review') {
+                  await advanceToNext();
+                }
+              }}
+            />
+          )}
+        </section>
+
+        {/* 4. Knowledge Context */}
         <section className="rounded-lg border border-border bg-paper-elevated p-5 shadow-card">
           <h2 className="mb-3 font-heading text-base font-bold text-ink">Knowledge Context</h2>
           {!knowledge_context ? (
@@ -182,30 +295,6 @@ export default function ReviewDetailPage() {
               </div>
             </div>
           ) : null}
-        </section>
-
-        {/* 4. Admin Decision */}
-        <section className="rounded-lg border border-border bg-paper-elevated p-5 shadow-card">
-          <h2 className="mb-3 font-heading text-base font-bold text-ink">Admin Decision</h2>
-          {observation.moderation.decided_by ? (
-            <div className="mb-3 text-sm text-ink-soft">
-              Decided by <span className="font-bold">{observation.moderation.decided_by}</span> on{' '}
-              {observation.moderation.decided_at
-                ? new Date(observation.moderation.decided_at).toLocaleString()
-                : '—'}
-              {observation.moderation.rejection_reason ? (
-                <span> · Reason: {observation.moderation.rejection_reason}</span>
-              ) : null}
-              {observation.moderation.rejection_note ? (
-                <div className="mt-1 italic">“{observation.moderation.rejection_note}”</div>
-              ) : null}
-            </div>
-          ) : null}
-          <ModerationActions
-            observationId={observation.observation_id}
-            moderation={observation.moderation}
-            onChanged={() => queryClient.invalidateQueries({ queryKey: ['review-detail', observationId] })}
-          />
         </section>
       </div>
     </div>

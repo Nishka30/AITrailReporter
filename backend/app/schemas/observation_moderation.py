@@ -14,7 +14,16 @@ ModerationStatus = Literal["pending_review", "approved", "rejected"]
 # A small, closed set of rejection reasons -- keeps the review queue
 # analyzable and matches this codebase's existing convention of enumerations
 # over free text wherever a value will later be filtered or counted.
-RejectionReason = Literal["inaccurate", "unsafe", "duplicate", "poor_quality", "not_useful", "other"]
+RejectionReason = Literal[
+    "inaccurate",
+    "not_enough_details",
+    "unsafe",
+    "duplicate",
+    "poor_quality",
+    "not_useful",
+    "spam",
+    "other",
+]
 
 
 class ObservationModerationRead(BaseModel):

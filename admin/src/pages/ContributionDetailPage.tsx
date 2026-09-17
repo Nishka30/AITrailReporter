@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, DollarSign, HelpCircle, MapPin, Phone } from 'lucide-react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, CheckCircle2, DollarSign, HelpCircle, MapPin, Phone } from 'lucide-react';
+import { useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
-import { getContributionDetail } from '../api/admin';
+import { getContributionDetail, getContributionQueue } from '../api/admin';
 import ContributionActions from '../components/contributions/ContributionActions';
 import AudioPlayer from '../components/review/AudioPlayer';
 import ImageViewer from '../components/review/ImageViewer';
@@ -13,12 +14,73 @@ export default function ContributionDetailPage() {
   const { submissionId } = useParams<{ submissionId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+
+  // The filters the admin had applied to the Contribution Review queue when
+  // they opened this item (see ContributionCard, which forwards them here).
+  // Reused below to find "the next pending item under the same filters"
+  // rather than an unrelated one.
+  const submissionTypeFilter = searchParams.get('submission_type') || undefined;
+  const qFilter = searchParams.get('q') || undefined;
+  const searchSuffix = searchParams.toString() ? `?${searchParams.toString()}` : '';
+
+  const [advancing, setAdvancing] = useState(false);
+  const [caughtUp, setCaughtUp] = useState(false);
 
   const { data: detail, isLoading, isError, refetch } = useQuery({
     queryKey: ['contribution-detail', submissionId],
     queryFn: () => getContributionDetail(submissionId!),
-    enabled: !!submissionId,
+    enabled: !!submissionId && !caughtUp,
   });
+
+  /**
+   * Fires after ContributionActions successfully approves/rejects the
+   * current item. Rather than sending the admin back to the queue list, this
+   * looks up the next still-pending item under the same filters and jumps
+   * straight to it, so the admin can keep processing the queue one item
+   * after another. Falls back to a "caught up" state once none remain.
+   */
+  const advanceToNext = async () => {
+    setAdvancing(true);
+    try {
+      queryClient.invalidateQueries({ queryKey: ['contribution-queue'] });
+      const next = await getContributionQueue({
+        status: 'pending_review',
+        submission_type: submissionTypeFilter,
+        q: qFilter,
+        page: 1,
+        page_size: 1,
+      });
+      const nextItem = next.items.find((i) => i.submission_id !== submissionId) ?? next.items[0];
+      if (nextItem) {
+        navigate(`/contributions/${nextItem.submission_id}${searchSuffix}`, { replace: true });
+      } else {
+        setCaughtUp(true);
+      }
+    } finally {
+      setAdvancing(false);
+    }
+  };
+
+  if (caughtUp) {
+    return (
+      <div className="max-w-3xl">
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-border bg-paper-elevated p-10 text-center shadow-card">
+          <CheckCircle2 className="h-10 w-10 text-ok" />
+          <h1 className="font-heading text-xl font-extrabold text-ink">You're all caught up!</h1>
+          <p className="text-sm text-ink-soft">
+            No more pending contributions match {submissionTypeFilter || qFilter ? 'your current filters' : 'the review queue'}.
+          </p>
+          <Link
+            to={`/contributions${searchSuffix}`}
+            className="mt-2 rounded-full bg-marigold px-4 py-2 text-sm font-bold text-white"
+          >
+            Back to Review Queue
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) return <LoadingState />;
   if (isError || !detail) {
@@ -107,7 +169,36 @@ export default function ContributionDetailPage() {
           ) : null}
         </section>
 
-        {/* 2. What it's worth */}
+        {/* 2. Admin decision -- placed right after the contribution's own
+             content so the admin can decide without scrolling past Reward
+             or any other section below. */}
+        <section className="rounded-lg border border-border bg-paper-elevated p-5 shadow-card">
+          <h2 className="mb-3 font-heading text-base font-bold text-ink">Decision</h2>
+          {item.review.decided_by ? (
+            <div className="mb-3 text-sm text-ink-soft">
+              Decided by <span className="font-bold">{item.review.decided_by}</span> on{' '}
+              {item.review.decided_at ? new Date(item.review.decided_at).toLocaleString() : '—'}
+              {item.review.rejection_reason ? <span> · Reason: {item.review.rejection_reason}</span> : null}
+              {item.review.rejection_note ? (
+                <div className="mt-1 italic">“{item.review.rejection_note}”</div>
+              ) : null}
+            </div>
+          ) : null}
+          {advancing ? (
+            <div className="text-sm font-bold text-ink-soft">Saving decision and loading the next item…</div>
+          ) : (
+            <ContributionActions
+              submissionId={item.submission_id}
+              review={item.review}
+              onChanged={async () => {
+                queryClient.invalidateQueries({ queryKey: ['contribution-detail', submissionId] });
+                await advanceToNext();
+              }}
+            />
+          )}
+        </section>
+
+        {/* 3. What it's worth */}
         <section className="rounded-lg border border-border bg-paper-elevated p-5 shadow-card">
           <h2 className="mb-3 flex items-center gap-2 font-heading text-base font-bold text-ink">
             <DollarSign className="h-4 w-4 text-marigold" /> Reward
@@ -129,28 +220,6 @@ export default function ContributionDetailPage() {
               if approved. No points have been granted yet.
             </div>
           )}
-        </section>
-
-        {/* 3. Admin decision */}
-        <section className="rounded-lg border border-border bg-paper-elevated p-5 shadow-card">
-          <h2 className="mb-3 font-heading text-base font-bold text-ink">Decision</h2>
-          {item.review.decided_by ? (
-            <div className="mb-3 text-sm text-ink-soft">
-              Decided by <span className="font-bold">{item.review.decided_by}</span> on{' '}
-              {item.review.decided_at ? new Date(item.review.decided_at).toLocaleString() : '—'}
-              {item.review.rejection_reason ? <span> · Reason: {item.review.rejection_reason}</span> : null}
-              {item.review.rejection_note ? (
-                <div className="mt-1 italic">“{item.review.rejection_note}”</div>
-              ) : null}
-            </div>
-          ) : null}
-          <ContributionActions
-            submissionId={item.submission_id}
-            review={item.review}
-            onChanged={() =>
-              queryClient.invalidateQueries({ queryKey: ['contribution-detail', submissionId] })
-            }
-          />
         </section>
       </div>
     </div>
