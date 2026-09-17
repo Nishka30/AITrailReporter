@@ -27,6 +27,12 @@ from app.schemas.admin import (
     ReviewDetail,
     ReviewQueueResult,
 )
+from app.schemas.admin_rewards import (
+    RewardRuleAdminRead,
+    RewardRuleChangeRead,
+    RewardRuleCreateRequest,
+    RewardRuleUpdateRequest,
+)
 from app.schemas.observation_moderation import (
     ChangeModerationDecisionRequest,
     ObservationModerationRead,
@@ -38,6 +44,7 @@ from app.services import admin_overview as overview_service
 from app.services import admin_places as place_service
 from app.services import admin_questions as question_service
 from app.services import admin_review as review_service
+from app.services import admin_rewards as admin_reward_service
 from app.services import admin_submission_reviews as contribution_service
 from app.services import observation_moderation as moderation_service
 from app.services import submission_review as submission_review_service
@@ -414,3 +421,71 @@ def get_submission_photo(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Photo file is missing on the server")
     return Response(content=content, media_type=submission.photo.content_type)
+
+
+@router.get("/reward-rules", response_model=list[RewardRuleAdminRead])
+def list_reward_rules(
+    q: str | None = Query(default=None, max_length=255),
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Every reward rule, active or not -- the source of truth this same
+    table already feeds to reward_service.award() (what a guide is actually
+    paid) and to GET /api/v1/rewards/config (what mobile displays). Editing a
+    rule here takes effect for both immediately; there is no separate
+    mobile/admin config to keep in sync."""
+    return admin_reward_service.list_all_rules(db, q=q)
+
+
+@router.post("/reward-rules", response_model=RewardRuleAdminRead, status_code=201)
+def create_reward_rule(
+    payload: RewardRuleCreateRequest,
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        return admin_reward_service.create_rule(
+            db,
+            changed_by=admin.name,
+            rule_key=payload.rule_key,
+            points=payload.points,
+            description=payload.description,
+            active=payload.active,
+        )
+    except admin_reward_service.DuplicateRuleKeyError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A reward rule with key '{payload.rule_key}' already exists.",
+        )
+
+
+@router.patch("/reward-rules/{rule_id}", response_model=RewardRuleAdminRead)
+def update_reward_rule(
+    rule_id: UUID,
+    payload: RewardRuleUpdateRequest,
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    fields_set = payload.model_fields_set
+    try:
+        return admin_reward_service.update_rule(
+            db,
+            rule_id,
+            changed_by=admin.name,
+            points=payload.points,
+            description=payload.description,
+            active=payload.active,
+            description_set="description" in fields_set,
+        )
+    except admin_reward_service.RewardRuleNotFoundError:
+        raise HTTPException(status_code=404, detail="Reward rule not found")
+
+
+@router.get("/reward-rules/{rule_id}/history", response_model=list[RewardRuleChangeRead])
+def get_reward_rule_history(
+    rule_id: UUID,
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    admin_reward_service.get_rule_or_404(db, rule_id)
+    return admin_reward_service.list_rule_changes(db, rule_id)

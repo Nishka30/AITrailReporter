@@ -334,6 +334,11 @@ export type SubmissionReview = {
   updated_at: string;
 };
 
+export type RewardBreakdownLine = {
+  label: string;
+  points: number;
+};
+
 export type ContributionQueueItem = {
   submission_id: string;
   submission_type: string;
@@ -349,10 +354,13 @@ export type ContributionQueueItem = {
   has_audio: boolean;
   has_photo: boolean;
   review: SubmissionReview;
-  /** What this is worth right now, resolved live from the SAME rule_key
-   * frozen on the review -- the rate actually paid on approval, which may
-   * differ from whatever it was worth at submission time. */
+  /** What this is worth right now if approved -- base rule plus any
+   * eligible media bonus, resolved live from the SAME reward_rules table
+   * reward_service.award() reads, so this always matches what approve()
+   * would actually pay. May differ from whatever it was worth at
+   * submission time if a rule's points changed since. */
   current_rule_points: number;
+  reward_breakdown: RewardBreakdownLine[];
 };
 
 export type ContributionQueueResult = {
@@ -390,4 +398,45 @@ export type ReviewQueueFilters = {
   sort?: string;
   page?: number;
   page_size?: number;
+};
+
+/** Mirrors backend/app/schemas/admin_rewards.py exactly. The single source
+ * of truth for reward point values -- the SAME row reward_service.award()
+ * resolves at approval time and GET /api/v1/rewards/config serves to
+ * mobile. Editing one here takes effect for both immediately. */
+export type RewardRule = {
+  id: string;
+  rule_key: string;
+  points: number;
+  description: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RewardRuleChange = {
+  id: string;
+  rule_id: string;
+  rule_key: string;
+  previous_points: number | null;
+  new_points: number;
+  changed_by: string;
+  changed_at: string;
+};
+
+export type RewardRuleFilters = {
+  q?: string;
+};
+
+export type RewardRuleCreatePayload = {
+  rule_key: string;
+  points: number;
+  description: string | null;
+  active: boolean;
+};
+
+export type RewardRuleUpdatePayload = {
+  points?: number;
+  description?: string | null;
+  active?: boolean;
 };

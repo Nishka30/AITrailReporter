@@ -21,10 +21,12 @@ from app.db.models.question import Question
 from app.db.models.submission import Submission
 from app.db.models.submission_review import SubmissionReview
 from app.db.models.transcription import Transcription
+from app.db.models.reward import RewardRule
 from app.schemas.admin import (
     ContributionDetail,
     ContributionQueueItem,
     ContributionQueueResult,
+    RewardBreakdownLine,
 )
 from app.schemas.submission import SubmissionAudioRead, SubmissionPhotoRead
 from app.schemas.submission_review import SubmissionReviewRead
@@ -86,8 +88,50 @@ def _resolve_question_and_place(
     return None, None, None
 
 
+def _rule_label(rule: RewardRule, fallback: str) -> str:
+    return rule.description or fallback
+
+
+# Rule key for the Explore/memory media bonus -- kept as a local constant
+# (same value as submission_review._MEDIA_BONUS_RULE_KEY) since this module
+# only needs it for display, not to award anything.
+_MEDIA_BONUS_RULE_KEY = "explore_contribution_media_bonus"
+
+
+def _reward_breakdown(
+    db: Session, submission: Submission, rule_key: str
+) -> tuple[list[RewardBreakdownLine], int]:
+    """What this contribution is worth right now: the base rule plus any
+    eligible media bonus, both resolved live from reward_rules. Mirrors
+    submission_review.award_media_bonus's eligibility check EXACTLY (same
+    submission_type/source_place_question_id/client_audio_id/client_photo_id
+    conditions) so this display can never claim a bonus approve() wouldn't
+    actually pay."""
+    lines: list[RewardBreakdownLine] = []
+    total = 0
+
+    base_rule = reward_service.get_rule(db, rule_key)
+    if base_rule is not None:
+        lines.append(RewardBreakdownLine(label=_rule_label(base_rule, "Base contribution"), points=base_rule.points))
+        total += base_rule.points
+
+    media_eligible = (
+        submission.submission_type in ("explore", "memory")
+        and submission.source_place_question_id is None
+        and (submission.client_audio_id is not None or submission.client_photo_id is not None)
+    )
+    if media_eligible:
+        bonus_rule = reward_service.get_rule(db, _MEDIA_BONUS_RULE_KEY)
+        if bonus_rule is not None:
+            lines.append(RewardBreakdownLine(label=_rule_label(bonus_rule, "Photo/voice bonus"), points=bonus_rule.points))
+            total += bonus_rule.points
+
+    return lines, total
+
+
 def _to_item(db: Session, review: SubmissionReview, submission: Submission, guide: Guide) -> ContributionQueueItem:
     question_text, location_id, location_name = _resolve_question_and_place(db, submission)
+    breakdown, total_points = _reward_breakdown(db, submission, review.reward_rule_key)
     return ContributionQueueItem(
         submission_id=submission.id,
         submission_type=submission.submission_type,
@@ -103,7 +147,8 @@ def _to_item(db: Session, review: SubmissionReview, submission: Submission, guid
         has_audio=submission.audio is not None,
         has_photo=submission.photo is not None,
         review=SubmissionReviewRead.model_validate(review),
-        current_rule_points=reward_service.resolve_points(db, review.reward_rule_key),
+        current_rule_points=total_points,
+        reward_breakdown=breakdown,
     )
 
 

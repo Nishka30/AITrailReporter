@@ -158,15 +158,6 @@ export default function ContributionDetailPage() {
               <ImageViewer submissionId={item.submission_id} />
             </div>
           ) : null}
-
-          {item.location_id ? (
-            <div className="mt-3 flex items-center gap-1 text-sm text-ink-soft">
-              <MapPin className="h-4 w-4" />
-              <Link to={`/places/${item.location_id}`} className="font-bold text-marigold-deep hover:underline">
-                {item.location_name}
-              </Link>
-            </div>
-          ) : null}
         </section>
 
         {/* 2. Admin decision -- placed right after the contribution's own
@@ -198,9 +189,25 @@ export default function ContributionDetailPage() {
           )}
         </section>
 
-        {/* 3. What it's worth */}
+        {/* 3. Location + what it's worth -- kept in one section, right next
+             to each other, so the admin can see what this contribution
+             concerns and what approving it pays in the same glance. */}
         <section className="rounded-lg border border-border bg-paper-elevated p-5 shadow-card">
-          <h2 className="mb-3 flex items-center gap-2 font-heading text-base font-bold text-ink">
+          <h2 className="mb-1 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-ink-faint">
+            <MapPin className="h-3.5 w-3.5" /> Location
+          </h2>
+          {item.location_id ? (
+            <Link
+              to={`/places/${item.location_id}`}
+              className="font-bold text-marigold-deep hover:underline"
+            >
+              {item.location_name}
+            </Link>
+          ) : (
+            <span className="text-sm italic text-ink-faint">Location not specified</span>
+          )}
+
+          <h2 className="mb-3 mt-5 flex items-center gap-2 font-heading text-base font-bold text-ink">
             <DollarSign className="h-4 w-4 text-marigold" /> Reward
           </h2>
           {item.review.status === 'approved' ? (
@@ -210,14 +217,34 @@ export default function ContributionDetailPage() {
             </div>
           ) : item.review.status === 'rejected' ? (
             <div className="text-sm text-ink-soft">
-              No points were awarded. This decision cannot be reversed to pay it retroactively.
+              0 points awarded. This decision cannot be reversed to pay it retroactively.
+            </div>
+          ) : item.reward_breakdown.length === 0 ? (
+            <p className="text-sm text-ink-faint">
+              No active reward rule is currently configured for this contribution -- it would earn 0 points
+              if approved.
+            </p>
+          ) : item.reward_breakdown.length === 1 ? (
+            <div className="text-sm text-ink-soft">
+              <span className="font-bold text-marigold-deep">+{item.current_rule_points} points</span> under
+              rule <code className="rounded bg-paper-muted px-1.5 py-0.5 text-xs">{item.review.reward_rule_key}</code>{' '}
+              if approved. No points have been granted yet.
             </div>
           ) : (
-            <div className="text-sm text-ink-soft">
-              Currently worth{' '}
-              <span className="font-bold text-marigold-deep">{item.current_rule_points} points</span> under rule{' '}
-              <code className="rounded bg-paper-muted px-1.5 py-0.5 text-xs">{item.review.reward_rule_key}</code>{' '}
-              if approved. No points have been granted yet.
+            <div>
+              <div className="space-y-1.5">
+                {item.reward_breakdown.map((line) => (
+                  <div key={line.label} className="flex items-center justify-between text-sm text-ink-soft">
+                    <span>{line.label}</span>
+                    <span className="font-bold text-ink">{line.points} points</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex items-center justify-between border-t border-border pt-2 text-sm">
+                <span className="font-bold text-ink">Total upon approval</span>
+                <span className="font-bold text-marigold-deep">{item.current_rule_points} points</span>
+              </div>
+              <p className="mt-2 text-xs text-ink-faint">No points have been granted yet.</p>
             </div>
           )}
         </section>

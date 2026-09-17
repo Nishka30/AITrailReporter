@@ -6,8 +6,8 @@ export default function ReviewQueuePage() {
     <ObservationListView
       queryKey="review-queue"
       fetchFn={getReviewQueue}
-      title="Review Queue"
-      description="Observations awaiting a human decision before they can ever be publicly visible."
+      title="Content Review Queue"
+      description="Extracted observations awaiting a moderation decision before they can ever be publicly visible -- switch the status filter above to browse approved or rejected ones too."
       defaultStatus="pending_review"
       showStatusFilter
     />

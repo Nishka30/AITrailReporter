@@ -16,11 +16,12 @@ const SORT_OPTIONS = [
 ];
 
 /**
- * Shared list view behind both the Review Queue (defaults to
- * status=pending_review) and the Knowledge browser (defaults to all
- * statuses) -- same filters, same card, same pagination; only the default
- * status and page title differ. Filter state lives in the URL so a filtered
- * view is linkable/bookmarkable/back-button-safe.
+ * List view behind the Content Review Queue (defaults to
+ * status=pending_review, but the status filter below includes "All
+ * statuses" -- there used to be a separate "Knowledge" page defaulting to
+ * that, removed as a redundant duplicate of this same view/endpoint with a
+ * different default). Filter state lives in the URL so a filtered view is
+ * linkable/bookmarkable/back-button-safe.
  */
 export default function ObservationListView({
   queryKey,

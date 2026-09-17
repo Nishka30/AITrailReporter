@@ -38,7 +38,7 @@ export default function OverviewPage() {
         <div className="space-y-6">
           <div>
             <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-ink-faint">
-              Contribution Review (rewards)
+              Payout Review
             </h2>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <button className="text-left" onClick={() => navigate('/contributions')}>
@@ -64,7 +64,7 @@ export default function OverviewPage() {
 
           <div>
             <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-ink-faint">
-              Moderation
+              Content Review
             </h2>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <button className="text-left" onClick={() => navigate('/review-queue')}>

@@ -130,6 +130,16 @@ class ReviewDetail(BaseModel):
     sibling_observations: list[SiblingObservation]
 
 
+class RewardBreakdownLine(BaseModel):
+    """One component of what a contribution is worth -- e.g. the base rate,
+    or a media bonus on top of it. Purely a display breakdown: every line's
+    `points` is a live read of the SAME reward_rules row
+    reward_service.award() would resolve, never a separate calculation."""
+
+    label: str
+    points: int
+
+
 class ContributionQueueItem(BaseModel):
     """One row in the Contribution Review queue -- one Submission/answer being
     reviewed for PAYMENT, not for knowledge accuracy (that is the separate
@@ -157,12 +167,14 @@ class ContributionQueueItem(BaseModel):
     has_audio: bool
     has_photo: bool
     review: SubmissionReviewRead
-    # What this is worth if approved -- resolved live from reward_rules by
-    # the SAME rule_key frozen on the review row, so an admin sees the
-    # CURRENT rate even if it has changed since the guide contributed (the
-    # rate actually paid is whatever is active at the moment of approval,
-    # per reward_service.award's existing, unchanged behavior).
+    # What this is worth if approved RIGHT NOW -- base rule plus any eligible
+    # media bonus, both resolved live from reward_rules (see
+    # app/services/admin_submission_reviews.py's _reward_breakdown, which
+    # mirrors submission_review.award_media_bonus's exact eligibility check
+    # so this can never overstate what approve() would actually pay). Not
+    # meaningful once decided -- use review.reward_points_awarded instead.
     current_rule_points: int
+    reward_breakdown: list[RewardBreakdownLine]
 
 
 class ContributionQueueResult(BaseModel):

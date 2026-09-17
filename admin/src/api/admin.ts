@@ -18,6 +18,11 @@ import type {
   ReviewQueueFilters,
   ReviewQueueResult,
   RejectionReason,
+  RewardRule,
+  RewardRuleChange,
+  RewardRuleCreatePayload,
+  RewardRuleFilters,
+  RewardRuleUpdatePayload,
   SubmissionReview,
 } from './types';
 
@@ -68,10 +73,6 @@ export function getOverview(): Promise<AdminOverview> {
 
 export function getReviewQueue(filters: ReviewQueueFilters): Promise<ReviewQueueResult> {
   return apiRequest(`/api/v1/admin/review-queue${toQueryString(filters)}`);
-}
-
-export function getKnowledge(filters: ReviewQueueFilters): Promise<ReviewQueueResult> {
-  return apiRequest(`/api/v1/admin/knowledge${toQueryString(filters)}`);
 }
 
 export function getReviewDetail(observationId: string): Promise<ReviewDetail> {
@@ -158,4 +159,23 @@ export function getAdminQuestions(
   filters: AdminQuestionQueueFilters
 ): Promise<AdminQuestionQueueResult> {
   return apiRequest(`/api/v1/admin/questions${toQueryString(filters)}`);
+}
+
+export function getRewardRules(filters: RewardRuleFilters = {}): Promise<RewardRule[]> {
+  return apiRequest(`/api/v1/admin/reward-rules${toQueryString(filters)}`);
+}
+
+export function createRewardRule(payload: RewardRuleCreatePayload): Promise<RewardRule> {
+  return apiRequest('/api/v1/admin/reward-rules', { method: 'POST', body: payload });
+}
+
+export function updateRewardRule(
+  ruleId: string,
+  payload: RewardRuleUpdatePayload
+): Promise<RewardRule> {
+  return apiRequest(`/api/v1/admin/reward-rules/${ruleId}`, { method: 'PATCH', body: payload });
+}
+
+export function getRewardRuleHistory(ruleId: string): Promise<RewardRuleChange[]> {
+  return apiRequest(`/api/v1/admin/reward-rules/${ruleId}/history`);
 }

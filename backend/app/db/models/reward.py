@@ -133,3 +133,34 @@ class RewardLedger(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class RewardRuleChange(Base):
+    """Append-only audit trail of `RewardRule.points` changes -- who changed
+    a rule, what it was, what it became, and when. Scoped narrowly to points
+    (the "only thing that ever needs editing operationally", per RewardRule's
+    docstring) rather than a generic per-column audit log.
+
+    Never rewrites or is rewritten by reward_ledger: this records that an
+    operator changed a RATE, not what was actually paid to anyone. Changing a
+    rule's points here has no effect on rewards already granted.
+    """
+
+    __tablename__ = "reward_rule_changes"
+    __table_args__ = (
+        Index("ix_reward_rule_changes_rule_id_changed_at", "rule_id", "changed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("reward_rules.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    previous_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_points: Mapped[int] = mapped_column(Integer, nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

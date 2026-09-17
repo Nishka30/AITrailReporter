@@ -12,8 +12,8 @@ const SUBMISSION_TYPES = ['explore', 'memory', 'answer'];
 
 /**
  * Contributions awaiting a PAYMENT decision. Deliberately a separate page
- * from Review Queue/Knowledge (which review extracted knowledge facts, not
- * contributions) -- see backend/app/db/models/submission_review.py. Not
+ * from the Content Review Queue (which reviews extracted knowledge facts,
+ * not contributions) -- see backend/app/db/models/submission_review.py. Not
  * built on the shared ObservationListView: the filter set genuinely differs
  * (no knowledge_type/safety_critical/sort-by-confidence here), so a new,
  * small, purpose-built list view is clearer than bending a component built
@@ -51,7 +51,7 @@ export default function ContributionQueuePage() {
   return (
     <div>
       <PageHeader
-        title="Contribution Review"
+        title="Payout Review"
         description="Decide whether a guide gets paid for what they submitted. No reward is granted until you approve it here."
       />
 

@@ -32,11 +32,11 @@ export default function ContributorsPage() {
 
   return (
     <div>
-      <PageHeader title="Contributors" description="Guides who have submitted field reports." />
+      <PageHeader title="Guides" description="Guides who have submitted field reports." />
 
       {isLoading ? <LoadingState /> : null}
       {isError ? <ErrorState message="Could not load contributors." onRetry={() => refetch()} /> : null}
-      {data && data.items.length === 0 ? <EmptyState title="No contributors yet" icon={<Users className="h-8 w-8" />} /> : null}
+      {data && data.items.length === 0 ? <EmptyState title="No guides yet" icon={<Users className="h-8 w-8" />} /> : null}
 
       {data && data.items.length > 0 ? (
         <div>

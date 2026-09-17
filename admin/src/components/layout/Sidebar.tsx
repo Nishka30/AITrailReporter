@@ -1,6 +1,6 @@
 import {
   ClipboardCheck,
-  Compass,
+  Coins,
   DollarSign,
   HelpCircle,
   LayoutDashboard,
@@ -14,12 +14,12 @@ import { useAdminAuth } from '../../auth/AdminAuthContext';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/contributions', label: 'Contribution Review', icon: DollarSign },
-  { to: '/review-queue', label: 'Review Queue', icon: ClipboardCheck },
-  { to: '/knowledge', label: 'Knowledge', icon: Compass },
+  { to: '/contributions', label: 'Payout Review', icon: DollarSign },
+  { to: '/review-queue', label: 'Content Review Queue', icon: ClipboardCheck },
   { to: '/places', label: 'Places', icon: MapPin },
-  { to: '/contributors', label: 'Contributors', icon: Users },
+  { to: '/contributors', label: 'Guides', icon: Users },
   { to: '/questions', label: 'Questions', icon: HelpCircle },
+  { to: '/points', label: 'Points Rules', icon: Coins },
 ];
 
 export default function Sidebar() {
