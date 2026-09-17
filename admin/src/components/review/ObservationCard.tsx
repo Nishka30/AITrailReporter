@@ -1,4 +1,4 @@
-import { AlertTriangle, Mic, Image as ImageIcon, MessageSquare, Sparkles } from 'lucide-react';
+import { AlertTriangle, MapPin, Mic, Image as ImageIcon, MessageSquare, Sparkles } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import type { ReviewQueueItem } from '../../api/types';
@@ -53,6 +53,14 @@ export default function ObservationCard({ item }: { item: ReviewQueueItem }) {
           {item.evidence ? (
             <div className="mt-1 line-clamp-2 text-sm italic text-ink-faint">“{item.evidence}”</div>
           ) : null}
+          <div className="mt-1 flex items-center gap-1 text-xs text-ink-faint">
+            <MapPin className="h-3.5 w-3.5" />
+            {item.nearest_known_place_name ? (
+              <>Near {item.nearest_known_place_name}</>
+            ) : (
+              <span className="italic">Location not specified</span>
+            )}
+          </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1 text-xs text-ink-faint">
           <span className="flex items-center gap-1">

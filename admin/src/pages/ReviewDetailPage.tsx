@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, CheckCircle2, Sparkles } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, MapPin, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -145,6 +145,23 @@ export default function ReviewDetailPage() {
           <div className="text-xs text-ink-faint">
             Submission type: {source.submission_type} · Submitted{' '}
             {new Date(source.submitted_at).toLocaleString()}
+          </div>
+          <div className="mt-1 flex items-center gap-1 text-xs text-ink-faint">
+            <MapPin className="h-3.5 w-3.5" />
+            {observation.nearest_known_place_name ? (
+              <>
+                Near {observation.nearest_known_place_name}
+                {observation.nearest_known_place_distance_meters !== null &&
+                observation.nearest_known_place_distance_meters !== undefined ? (
+                  <span className="italic">
+                    {' '}
+                    (~{Math.round(observation.nearest_known_place_distance_meters)}m away)
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <span className="italic">Location not specified</span>
+            )}
           </div>
           {source.raw_text ? (
             <p className="mt-2 whitespace-pre-wrap rounded-lg bg-paper-muted p-3 text-sm text-ink">

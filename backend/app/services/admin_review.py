@@ -37,6 +37,7 @@ from app.schemas.admin import (
 from app.schemas.observation_moderation import ObservationModerationRead
 from app.schemas.submission import SubmissionAudioRead, SubmissionPhotoRead
 from app.schemas.transcription import TranscriptionRead
+from app.services import geographic_context as geographic_context_service
 from app.services import knowledge_state as knowledge_state_service
 
 # How recently a KnowledgeTypeConfig must have been created (Step 16, Case B:
@@ -122,6 +123,7 @@ def _base_query(db: Session, filters: ReviewQueueFilters) -> Select:
 
 
 def _to_item(
+    db: Session,
     observation: Observation,
     moderation: ObservationModeration,
     knowledge_type: KnowledgeTypeConfig,
@@ -129,6 +131,23 @@ def _to_item(
     guide: Guide,
 ) -> ReviewQueueItem:
     is_new = (datetime.now(timezone.utc) - knowledge_type.created_at) < _NEW_KNOWLEDGE_TYPE_WINDOW
+    latitude = float(observation.latitude) if observation.latitude is not None else None
+    longitude = float(observation.longitude) if observation.longitude is not None else None
+
+    # Same "nearest known place within settings.geographic_context_radius_meters"
+    # resolution used for extraction/question-generation prompts and the
+    # Contribution Review queue (see app/services/geographic_context.py) --
+    # an observation has no confirmed place of its own, only the raw
+    # coordinate it was reported at, so this is an honest approximation, not
+    # a claim about which place it's actually at.
+    nearest_known_place_name = None
+    nearest_known_place_distance_meters = None
+    if latitude is not None and longitude is not None:
+        context = geographic_context_service.resolve_geographic_context(db, latitude, longitude)
+        if context.nearest_known_place is not None:
+            nearest_known_place_name = context.nearest_known_place.name
+            nearest_known_place_distance_meters = context.nearest_known_place.distance_meters
+
     return ReviewQueueItem(
         observation_id=observation.id,
         knowledge_type=knowledge_type.knowledge_type,
@@ -137,8 +156,8 @@ def _to_item(
         value=observation.value,
         confidence=float(observation.confidence) if observation.confidence is not None else None,
         evidence=observation.evidence,
-        latitude=float(observation.latitude) if observation.latitude is not None else None,
-        longitude=float(observation.longitude) if observation.longitude is not None else None,
+        latitude=latitude,
+        longitude=longitude,
         observed_at=observation.observed_at,
         created_at=observation.created_at,
         submission_id=submission.id,
@@ -146,6 +165,8 @@ def _to_item(
         guide_id=guide.id,
         guide_name=guide.name,
         moderation=ObservationModerationRead.model_validate(moderation),
+        nearest_known_place_name=nearest_known_place_name,
+        nearest_known_place_distance_meters=nearest_known_place_distance_meters,
         knowledge_type_is_new=is_new,
     )
 
@@ -162,7 +183,7 @@ def list_review_queue(
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
     rows = db.execute(stmt).all()
-    items = [_to_item(obs, mod, kt, sub, guide) for obs, mod, kt, sub, guide in rows]
+    items = [_to_item(db, obs, mod, kt, sub, guide) for obs, mod, kt, sub, guide in rows]
     return ReviewQueueResult(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -256,7 +277,7 @@ def get_review_detail(db: Session, observation_id: UUID) -> ReviewDetail | None:
         return None
     observation, moderation, knowledge_type, submission, guide = row
 
-    item = _to_item(observation, moderation, knowledge_type, submission, guide)
+    item = _to_item(db, observation, moderation, knowledge_type, submission, guide)
 
     transcript = None
     if submission.audio is not None:
