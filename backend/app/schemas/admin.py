@@ -155,12 +155,15 @@ class ContributionQueueItem(BaseModel):
     submitted_at: datetime
     latitude: float | None
     longitude: float | None
-    # The place this contribution concerns, when resolvable -- directly for a
-    # place-question answer (via its location_id), otherwise left null rather
-    # than guessed from raw lat/lon (a nearby-place guess belongs in a human's
-    # judgement while reviewing, not in this list row).
+    # The place this contribution concerns. Exact (location_distance_meters is
+    # None) for a place-question answer, via its own location_id. Otherwise
+    # resolved from the submission's raw coordinate to the nearest KNOWN place
+    # within settings.geographic_context_radius_meters -- an approximation,
+    # signalled by location_distance_meters being set, not a confirmed place.
+    # Both null only when no known place is even nearby.
     location_id: UUID | None
     location_name: str | None
+    location_distance_meters: float | None
     # The exact text of the question this answers, if it answers one at all
     # (a free-form 'explore'/'memory' contribution has none of these).
     question_text: str | None

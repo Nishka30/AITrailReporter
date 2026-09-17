@@ -197,12 +197,19 @@ export default function ContributionDetailPage() {
             <MapPin className="h-3.5 w-3.5" /> Location
           </h2>
           {item.location_id ? (
-            <Link
-              to={`/places/${item.location_id}`}
-              className="font-bold text-marigold-deep hover:underline"
-            >
-              {item.location_name}
-            </Link>
+            <div>
+              <Link
+                to={`/places/${item.location_id}`}
+                className="font-bold text-marigold-deep hover:underline"
+              >
+                {item.location_name}
+              </Link>
+              {item.location_distance_meters !== null ? (
+                <span className="ml-1.5 text-xs italic text-ink-faint">
+                  (nearest known place, ~{Math.round(item.location_distance_meters)}m away)
+                </span>
+              ) : null}
+            </div>
           ) : (
             <span className="text-sm italic text-ink-faint">Location not specified</span>
           )}

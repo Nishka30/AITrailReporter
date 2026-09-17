@@ -350,6 +350,11 @@ export type ContributionQueueItem = {
   longitude: number | null;
   location_id: string | null;
   location_name: string | null;
+  /** Set only when location_name is an approximation (nearest known place
+   * within the backend's configured radius of the submission's raw GPS
+   * coordinate) rather than a place the guide explicitly confirmed by
+   * answering a place-specific question. */
+  location_distance_meters: number | null;
   question_text: string | null;
   has_audio: boolean;
   has_photo: boolean;

@@ -31,6 +31,7 @@ from app.schemas.admin import (
 from app.schemas.submission import SubmissionAudioRead, SubmissionPhotoRead
 from app.schemas.submission_review import SubmissionReviewRead
 from app.schemas.transcription import TranscriptionRead
+from app.services import geographic_context as geographic_context_service
 from app.services import rewards as reward_service
 
 
@@ -67,11 +68,23 @@ def _base_query(filters: ContributionQueueFilters) -> Select:
 
 def _resolve_question_and_place(
     db: Session, submission: Submission
-) -> tuple[str | None, UUID | None, str | None]:
-    """(question_text, location_id, location_name) for the thing this
-    submission answers, if it answers anything. A free-form Explore/memory
-    contribution has none of these -- all three come back None, honestly,
-    rather than a guessed nearest place."""
+) -> tuple[str | None, UUID | None, str | None, float | None]:
+    """(question_text, location_id, location_name, location_distance_meters)
+    for the thing this submission concerns.
+
+    A place-question answer gets its EXACT place, confirmed -- distance is
+    None because there is nothing approximate about it. A free-form
+    Explore/memory contribution has no such confirmed place, but usually
+    still has its own raw GPS coordinate; rather than leaving that
+    unreviewed (an admin has no way to tell what a contribution is even
+    about), it's resolved to the nearest KNOWN place within
+    settings.geographic_context_radius_meters, via the SAME
+    geographic_context resolution already used for extraction and
+    question-generation prompts elsewhere in this codebase (see
+    app/services/geographic_context.py) -- honestly reported as an
+    approximation (distance_meters set) rather than presented as if the
+    guide confirmed it. Only when no known place falls within that radius
+    do all four come back None."""
     if submission.source_place_question_id is not None:
         place_question = db.get(PlaceQuestion, submission.source_place_question_id)
         if place_question is not None:
@@ -80,12 +93,22 @@ def _resolve_question_and_place(
                 place_question.question_text,
                 place_question.location_id,
                 location.name if location is not None else None,
+                None,
             )
     if submission.source_question_id is not None:
         question = db.get(Question, submission.source_question_id)
         if question is not None:
-            return question.question_text, None, None
-    return None, None, None
+            return question.question_text, None, None, None
+
+    if submission.latitude is not None and submission.longitude is not None:
+        context = geographic_context_service.resolve_geographic_context(
+            db, float(submission.latitude), float(submission.longitude)
+        )
+        if context.nearest_known_place is not None:
+            place = context.nearest_known_place
+            return None, place.id, place.name, place.distance_meters
+
+    return None, None, None, None
 
 
 def _rule_label(rule: RewardRule, fallback: str) -> str:
@@ -130,7 +153,9 @@ def _reward_breakdown(
 
 
 def _to_item(db: Session, review: SubmissionReview, submission: Submission, guide: Guide) -> ContributionQueueItem:
-    question_text, location_id, location_name = _resolve_question_and_place(db, submission)
+    question_text, location_id, location_name, location_distance_meters = _resolve_question_and_place(
+        db, submission
+    )
     breakdown, total_points = _reward_breakdown(db, submission, review.reward_rule_key)
     return ContributionQueueItem(
         submission_id=submission.id,
@@ -143,6 +168,7 @@ def _to_item(db: Session, review: SubmissionReview, submission: Submission, guid
         longitude=float(submission.longitude) if submission.longitude is not None else None,
         location_id=location_id,
         location_name=location_name,
+        location_distance_meters=location_distance_meters,
         question_text=question_text,
         has_audio=submission.audio is not None,
         has_photo=submission.photo is not None,
