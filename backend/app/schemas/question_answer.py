@@ -4,9 +4,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.answer_location import AnswerLocationFields
 
-class QuestionAnswerCreate(BaseModel):
-    """A guide's answer to a specific assigned Question (Step 13, Part D)."""
+
+class QuestionAnswerCreate(AnswerLocationFields):
+    """A guide's answer to a specific assigned Question (Step 13, Part D).
+
+    Inherits the optional location block from AnswerLocationFields: when the
+    guide captured where they actually were, that wins over this question's
+    own target coordinates (see app/services/question_answers.py).
+    """
 
     guide_id: UUID
     # Stable caller-generated idempotency key, same convention as

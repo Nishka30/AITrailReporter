@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 14;
+const DATABASE_VERSION = 15;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -470,7 +470,33 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 14;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 14) { ...; currentDbVersion = 15; }`
+  if (currentDbVersion === 14) {
+    // v14 -> v15: per-contribution captured location for ANSWERS.
+    //
+    // Captures (local_capture) have carried these since v6 -- answers never
+    // did, because the backend derived an answer's coordinates itself: from
+    // the knowledge gap's target coordinates, or from the place a place
+    // question is about. Neither is where the guide actually stood, and when
+    // a guide walks on, the backend's own fallback (the last GuideLocation
+    // ping) is staler still. These columns record the guide's OWN fix,
+    // taken at the moment they answered, and are sent with the answer on
+    // sync so the server no longer has to infer it.
+    //
+    // Null on every existing row, and on any answer where the guide didn't
+    // capture a location -- which keeps today's server-side behaviour
+    // exactly as it is for those, rather than inventing a coordinate.
+    await db.execAsync(`
+      ALTER TABLE local_answer ADD COLUMN latitude REAL;
+      ALTER TABLE local_answer ADD COLUMN longitude REAL;
+      ALTER TABLE local_answer ADD COLUMN location_accuracy_meters REAL;
+      ALTER TABLE local_answer ADD COLUMN location_captured_at TEXT;
+      ALTER TABLE local_answer ADD COLUMN location_label TEXT;
+      ALTER TABLE local_answer ADD COLUMN external_place_id TEXT;
+    `);
+    currentDbVersion = 15;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 15) { ...; currentDbVersion = 16; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

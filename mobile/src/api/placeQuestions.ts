@@ -1,3 +1,4 @@
+import type { AnswerLocationWire } from './answerLocation';
 import { apiRequest } from './client';
 
 /**
@@ -164,7 +165,11 @@ export async function submitPlaceQuestionAnswer(
   guideId: string,
   clientAnswerId: string,
   answerText: string,
-  answeredAt: string
+  answeredAt: string,
+  /** Where the guide actually was, when they captured it. Absent means the
+   * server uses the place's own coordinates, exactly as it always has --
+   * see api/answerLocation.ts. */
+  location: AnswerLocationWire = {}
 ): Promise<PlaceQuestionAnswerResult> {
   const wire = await apiRequest<PlaceQuestionAnswerWire>(
     `/api/v1/place-questions/${placeQuestionId}/answers`,
@@ -175,6 +180,7 @@ export async function submitPlaceQuestionAnswer(
         client_answer_id: clientAnswerId,
         answer_text: answerText,
         answered_at: answeredAt,
+        ...location,
       },
     }
   );

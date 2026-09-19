@@ -2,6 +2,7 @@ import { File } from 'expo-file-system';
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { uploadSubmissionAudio } from '../api/audio';
+import { answerLocationWire } from '../api/answerLocation';
 import { ApiError, NetworkError } from '../api/client';
 import { createOrGetGuide, updateGuideProfile } from '../api/guides';
 import { createOrGetLocation } from '../api/locations';
@@ -523,7 +524,8 @@ async function syncOneAnswer(
         serverGuideId,
         answer.clientAnswerId,
         answer.answerText,
-        answer.answeredAt
+        answer.answeredAt,
+        answerLocationWire(answer)
       );
       // A popular question has no QuestionAnswer row of its own — the answer
       // IS the submission (see backend/app/services/place_question_answers.py),
@@ -539,6 +541,7 @@ async function syncOneAnswer(
       clientAnswerId: answer.clientAnswerId,
       answerText: answer.answerText,
       answeredAt: answer.answeredAt,
+      location: answerLocationWire(answer),
     });
     if (!question.answer) {
       // Should be unreachable — a successful POST .../answers always returns

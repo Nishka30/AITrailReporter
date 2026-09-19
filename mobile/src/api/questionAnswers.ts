@@ -1,3 +1,4 @@
+import type { AnswerLocationWire } from './answerLocation';
 import { apiRequest } from './client';
 import { questionFromWire, type Question } from './questions';
 
@@ -10,6 +11,10 @@ export interface SubmitAnswerRequest {
   /** ISO-8601, timezone-aware -- when the guide actually answered, not when
    * it's sent. */
   answeredAt: string;
+  /** Where the guide actually was, when they captured it. Absent means the
+   * server derives the coordinate itself, exactly as it always has -- see
+   * api/answerLocation.ts. */
+  location?: AnswerLocationWire;
 }
 
 /**
@@ -36,6 +41,7 @@ export async function submitAnswer(req: SubmitAnswerRequest): Promise<Question> 
         client_answer_id: req.clientAnswerId,
         answer_text: req.answerText,
         answered_at: req.answeredAt,
+        ...(req.location ?? {}),
       },
     }
   );

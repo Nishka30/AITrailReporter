@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.db.models.location import Location
 from app.db.models.place_question import PlaceQuestion
 from app.db.models.submission import Submission
+from app.schemas.answer_location import AnswerLocationFields
 from app.services import extractions as extraction_service
 from app.services import rewards as reward_service
 from app.services import submission_review as submission_review_service
@@ -67,6 +68,7 @@ def submit_place_question_answer(
     client_answer_id: str,
     answer_text: str,
     answered_at: datetime,
+    captured_location: AnswerLocationFields | None = None,
 ) -> tuple[Submission, bool, int]:
     """Persists an answer to a popular question. Returns
     (submission, created, points_awarded).
@@ -113,18 +115,26 @@ def submit_place_question_answer(
         # knowledge-gap answer -- see schemas/submission.py.
         submission_type="answer",
         raw_text=answer_text,
-        # The PLACE's coordinates, not the guide's current GPS -- the question
-        # is about this place, so that is where the resulting observation
-        # belongs. extractions._resolve_observation_coordinates picks these up
-        # via its existing "submission already has lat/lon" branch, needing no
-        # change there.
-        latitude=location.latitude if location is not None else None,
-        longitude=location.longitude if location is not None else None,
-        location_source="approximate" if location is not None else "unknown",
-        location_evidence=(
-            f"Coordinates of {location.name!r}, the place this question asked about."
-            if location is not None
-            else None
+        # The guide's OWN captured position when they supplied one -- they may
+        # have walked well away from the place by the time they answer, and a
+        # real device reading is better evidence than the place's nominal
+        # centre. Otherwise the PLACE's coordinates, unchanged: the question is
+        # about this place, so that is where the resulting observation belongs.
+        # Either way extractions._resolve_observation_coordinates picks these
+        # up via its existing "submission already has lat/lon" branch.
+        **(
+            captured_location.submission_location_kwargs()
+            if captured_location is not None and captured_location.has_captured_location()
+            else {
+                "latitude": location.latitude if location is not None else None,
+                "longitude": location.longitude if location is not None else None,
+                "location_source": "approximate" if location is not None else "unknown",
+                "location_evidence": (
+                    f"Coordinates of {location.name!r}, the place this question asked about."
+                    if location is not None
+                    else None
+                ),
+            }
         ),
         occurred_at=answered_at,
         occurred_at_precision="exact",

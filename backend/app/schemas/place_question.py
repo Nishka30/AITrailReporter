@@ -12,6 +12,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.answer_location import AnswerLocationFields
+
 
 class PlaceQuestionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -86,7 +88,11 @@ class GuidePlaceQuestions(BaseModel):
     research_stale: bool = False
 
 
-class PlaceQuestionAnswerCreate(BaseModel):
+class PlaceQuestionAnswerCreate(AnswerLocationFields):
+    """Inherits the optional location block from AnswerLocationFields: when
+    the guide captured where they actually were, that wins over the place's
+    own coordinates (see app/services/place_question_answers.py)."""
+
     guide_id: UUID
     # Same idempotency contract as QuestionAnswerCreate.client_answer_id, and
     # the same value is reused as the reward's idempotency key -- see

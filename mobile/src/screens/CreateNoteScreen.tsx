@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput } from 'react-native';
+import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 
+import LocationCaptureField, {
+  type CapturedContributionLocation,
+} from '../components/LocationCaptureField';
 import { AppHeader, Button, Screen } from '../components/ui';
 import { createCapture } from '../repositories/captureRepository';
 import { colors, spacing, type } from '../theme/theme';
@@ -17,6 +20,7 @@ export default function CreateNoteScreen({ guide, onDone }: Props) {
   const [text, setText] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [location, setLocation] = useState<CapturedContributionLocation | null>(null);
 
   async function handleSave() {
     const trimmed = text.trim();
@@ -27,7 +31,23 @@ export default function CreateNoteScreen({ guide, onDone }: Props) {
     setSaving(true);
     setError(null);
     try {
-      await createCapture(db, guide.id, 'note', trimmed);
+      await createCapture(
+        db,
+        guide.id,
+        'note',
+        trimmed,
+        location
+          ? {
+              latitude: location.latitude,
+              longitude: location.longitude,
+              locationSource: 'gps_live',
+              locationAccuracyMeters: location.accuracyMeters,
+              locationCapturedAt: location.capturedAt,
+              locationLabel: location.label,
+              externalPlaceId: location.externalPlaceId,
+            }
+          : {}
+      );
       onDone();
     } catch (err) {
       console.error('[CreateNoteScreen] Failed to save local note:', err);
@@ -53,6 +73,15 @@ export default function CreateNoteScreen({ guide, onDone }: Props) {
           autoFocus
           editable={!saving}
         />
+
+        <View style={styles.locationWrap}>
+          <LocationCaptureField
+            value={location}
+            onChange={setLocation}
+            disabled={saving}
+            hint="Optional — capture where you are so this note is tied to the right place."
+          />
+        </View>
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -80,6 +109,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     marginBottom: spacing.md,
   },
+  locationWrap: { marginBottom: spacing.md },
   error: { ...type.small, color: colors.fix, marginBottom: spacing.sm },
   footnote: { ...type.caption, color: colors.inkFaint, marginTop: spacing.md, lineHeight: 17, textAlign: 'center' },
 });

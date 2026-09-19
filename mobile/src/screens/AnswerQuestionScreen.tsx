@@ -15,6 +15,9 @@ import { Ionicons } from '@expo/vector-icons';
 import type { PlaceQuestion } from '../api/placeQuestions';
 import type { Question } from '../api/questions';
 import type { RecordedAudio } from '../audio/audioRecordingService';
+import LocationCaptureField, {
+  type CapturedContributionLocation,
+} from '../components/LocationCaptureField';
 import { AppHeader, Badge, Button, Card, LoadingState, RewardChip, Screen } from '../components/ui';
 import VoiceNoteComposer from '../components/VoiceNoteComposer';
 import { choosePhoto, takePhoto, type PhotoPickResult } from '../photo/photoPickerService';
@@ -138,6 +141,10 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
   const [voice, setVoice] = useState<RecordedAudio | null>(null);
   const [photo, setPhoto] = useState<AttachedPhoto | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
+  // Where the guide is answering FROM. Never pre-filled from the app's
+  // last-known position: an answer given 2km from where the app last
+  // recorded a fix would otherwise silently inherit that stale place.
+  const [location, setLocation] = useState<CapturedContributionLocation | null>(null);
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
 
   function applyPhotoResult(result: PhotoPickResult) {
@@ -227,6 +234,16 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
           audioContentType: voice?.contentType ?? null,
           localPhotoUri: photo?.uri ?? null,
           photoContentType: photo?.contentType ?? null,
+        },
+        // Null throughout when the guide didn't capture one -- the server
+        // then derives the coordinate exactly as it did before this existed.
+        {
+          latitude: location?.latitude ?? null,
+          longitude: location?.longitude ?? null,
+          locationAccuracyMeters: location?.accuracyMeters ?? null,
+          locationCapturedAt: location?.capturedAt ?? null,
+          locationLabel: location?.label ?? null,
+          externalPlaceId: location?.externalPlaceId ?? null,
         }
       );
       setJustSaved(true);
@@ -283,6 +300,20 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
               autoFocus
               editable={!saving}
             />
+
+            {/* Where the guide is answering from. Optional, but it is what
+                stops this answer being filed against the knowledge gap's own
+                target coordinates (or the place question's place) when the
+                guide has since moved -- see
+                backend/app/services/question_answers.py. */}
+            <View style={styles.locationWrap}>
+              <LocationCaptureField
+                value={location}
+                onChange={setLocation}
+                disabled={saving}
+                hint="Optional — capture where you are so this answer is tied to the right place."
+              />
+            </View>
 
             {/* Both optional, both additive to the text answer. Standing in
                 front of the thing being asked about is exactly when a picture
@@ -455,6 +486,7 @@ const styles = StyleSheet.create({
   },
   mediaHint: { ...type.caption, color: colors.inkFaint, fontWeight: '400' },
   voiceWrap: { marginBottom: spacing.xs },
+  locationWrap: { marginBottom: spacing.md },
   photoWrap: { position: 'relative', marginBottom: spacing.sm },
   photoPreview: { width: '100%', height: 190, borderRadius: 12, backgroundColor: colors.inkFaint },
   photoRemove: {

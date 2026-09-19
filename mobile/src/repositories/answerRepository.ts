@@ -24,6 +24,12 @@ interface LocalAnswerRow {
   sync_status: string;
   sync_attempt_count: number;
   last_sync_error: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  location_accuracy_meters: number | null;
+  location_captured_at: string | null;
+  location_label: string | null;
+  external_place_id: string | null;
   review_status: string | null;
   rejection_reason: string | null;
   rejection_note: string | null;
@@ -45,6 +51,21 @@ export interface AnswerMediaInput {
   audioContentType?: string | null;
   localPhotoUri?: string | null;
   photoContentType?: string | null;
+}
+
+/**
+ * Where the guide was when they answered, if they captured it (see
+ * components/LocationCaptureField.tsx). Entirely optional: omitting it leaves
+ * every column null and the server keeps deriving the coordinate the way it
+ * always has.
+ */
+export interface AnswerLocationInput {
+  latitude?: number | null;
+  longitude?: number | null;
+  locationAccuracyMeters?: number | null;
+  locationCapturedAt?: string | null;
+  locationLabel?: string | null;
+  externalPlaceId?: string | null;
 }
 
 function mapRow(row: LocalAnswerRow): LocalAnswer {
@@ -69,6 +90,12 @@ function mapRow(row: LocalAnswerRow): LocalAnswer {
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    locationAccuracyMeters: row.location_accuracy_meters,
+    locationCapturedAt: row.location_captured_at,
+    locationLabel: row.location_label,
+    externalPlaceId: row.external_place_id,
     reviewStatus: row.review_status as LocalAnswer['reviewStatus'],
     rejectionReason: row.rejection_reason,
     rejectionNote: row.rejection_note,
@@ -106,7 +133,9 @@ export async function createAnswer(
   /** Optional photo/voice note captured alongside the text. Each gets its own
    * client id here so the two uploads stay independently idempotent, exactly
    * as captures do (see captureRepository). */
-  media: AnswerMediaInput = {}
+  media: AnswerMediaInput = {},
+  /** The guide's own position at answer time, when they captured one. */
+  location: AnswerLocationInput = {}
 ): Promise<LocalAnswer> {
   const now = new Date().toISOString();
   const clientAnswerId = generateClientId();
@@ -117,8 +146,9 @@ export async function createAnswer(
        (local_guide_id, server_question_id, question_kind, client_answer_id, answer_text, answered_at, reward_points,
         local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
         local_photo_uri, client_photo_id, photo_content_type,
+        latitude, longitude, location_accuracy_meters, location_captured_at, location_label, external_place_id,
         sync_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     localGuideId,
     serverQuestionId,
     questionKind,
@@ -133,6 +163,12 @@ export async function createAnswer(
     media.localPhotoUri ?? null,
     clientPhotoId,
     media.photoContentType ?? null,
+    location.latitude ?? null,
+    location.longitude ?? null,
+    location.locationAccuracyMeters ?? null,
+    location.locationCapturedAt ?? null,
+    location.locationLabel ?? null,
+    location.externalPlaceId ?? null,
     now,
     now
   );

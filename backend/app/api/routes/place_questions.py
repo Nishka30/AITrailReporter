@@ -146,6 +146,7 @@ def answer_place_question(
             payload.client_answer_id,
             payload.answer_text,
             answered_at,
+            captured_location=payload,
         )
     except place_answer_service.PlaceQuestionNotFoundError:
         raise HTTPException(status_code=404, detail="Popular question not found")

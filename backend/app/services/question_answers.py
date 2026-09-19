@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.db.models.knowledge_type_config import KnowledgeTypeConfig
 from app.db.models.question import Question
 from app.db.models.question_answer import QuestionAnswer
+from app.schemas.answer_location import AnswerLocationFields
 from app.db.models.question_assignment import QuestionAssignment
 from app.db.models.submission import Submission
 from app.services import extractions as extraction_service
@@ -139,6 +140,7 @@ def submit_answer(
     client_answer_id: str,
     answer_text: str,
     answered_at: datetime,
+    captured_location: AnswerLocationFields | None = None,
 ) -> tuple[QuestionAnswer, bool]:
     """Persists a guide's answer to an assigned question. Returns
     (answer, created) -- created is False for an idempotent replay of an
@@ -209,13 +211,24 @@ def submit_answer(
         client_submission_id=client_answer_id,
         submission_type="answer",
         raw_text=answer_text,
-        latitude=question.target_latitude,
-        longitude=question.target_longitude,
-        # Not a device reading of any kind -- a real, reasonable coordinate
-        # (the gap's own target) rather than a precise capture-time position,
-        # which "approximate" communicates honestly.
-        location_source="approximate",
-        location_evidence="Target coordinates of the knowledge gap this question was generated to fill.",
+        # The guide's OWN captured position wins when they supplied one: they
+        # may be nowhere near the gap's target by the time they answer, and a
+        # real device reading beats a generated target coordinate. Falls back
+        # to exactly the previous behaviour when they didn't capture one --
+        # not a device reading of any kind, but a real, reasonable coordinate
+        # (the gap's own target), which "approximate" communicates honestly.
+        **(
+            captured_location.submission_location_kwargs()
+            if captured_location is not None and captured_location.has_captured_location()
+            else {
+                "latitude": question.target_latitude,
+                "longitude": question.target_longitude,
+                "location_source": "approximate",
+                "location_evidence": (
+                    "Target coordinates of the knowledge gap this question was generated to fill."
+                ),
+            }
+        ),
         occurred_at=answered_at,
         occurred_at_precision="exact",
         date_source="device",

@@ -6,6 +6,9 @@ import { Ionicons } from '@expo/vector-icons';
 import type { PlaceSearchResult } from '../api/placeSearch';
 import type { RecordedAudio } from '../audio/audioRecordingService';
 import ApproximateDateField, { type ApproximateDateValue } from '../components/ApproximateDateField';
+import LocationCaptureField, {
+  type CapturedContributionLocation,
+} from '../components/LocationCaptureField';
 import PlaceAutocomplete from '../components/PlaceAutocomplete';
 import VoiceNoteComposer from '../components/VoiceNoteComposer';
 import { AppHeader, Badge, Button, Card, Screen } from '../components/ui';
@@ -92,6 +95,12 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
   const [resolvingLocation, setResolvingLocation] = useState(false);
+  // Mirrors what LocationCaptureField shows. `provenance` is the record that
+  // actually gets saved; this exists so the control can display the fix it
+  // just took without having to reconstruct it from provenance's flat fields.
+  const [capturedLocation, setCapturedLocation] = useState<CapturedContributionLocation | null>(
+    null
+  );
 
   async function applyPhotoResult(result: PhotoPickResult) {
     switch (result.status) {
@@ -147,6 +156,10 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
   }
 
   function handleSelectPlace(place: PlaceSearchResult) {
+    // Searching for a place and capturing "I'm here now" are two answers to
+    // the same question, so the most recent one replaces the other rather
+    // than both lingering in the UI.
+    setCapturedLocation(null);
     setProvenance((prev) => ({
       ...prev,
       latitude: place.latitude,
@@ -157,6 +170,33 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
       locationCapturedAt: null,
       externalPlaceId: place.placeId,
     }));
+  }
+
+  function handleCaptureLocation(next: CapturedContributionLocation | null) {
+    setCapturedLocation(next);
+    setProvenance((prev) =>
+      next
+        ? {
+            ...prev,
+            latitude: next.latitude,
+            longitude: next.longitude,
+            locationSource: 'gps_live',
+            locationLabel: next.label,
+            locationAccuracyMeters: next.accuracyMeters,
+            locationCapturedAt: next.capturedAt,
+            externalPlaceId: next.externalPlaceId,
+          }
+        : {
+            ...prev,
+            latitude: null,
+            longitude: null,
+            locationSource: 'unknown',
+            locationLabel: null,
+            locationAccuracyMeters: null,
+            locationCapturedAt: null,
+            externalPlaceId: null,
+          }
+    );
   }
 
   function handleDateChange(value: ApproximateDateValue) {
@@ -332,6 +372,18 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
                 placeholder="Search for the place this happened…"
                 disabled={saving || !guide.serverGuideId}
               />
+              {/* For a memory made where it happened. A memory can equally be
+                  about somewhere far away, which is why this sits alongside
+                  the search rather than replacing it -- and why neither is
+                  pre-filled from the app's last known position. */}
+              <View style={styles.captureWrap}>
+                <LocationCaptureField
+                  value={capturedLocation}
+                  onChange={handleCaptureLocation}
+                  disabled={saving}
+                  hint="Or, if you're at the place right now, capture it."
+                />
+              </View>
               {!guide.serverGuideId ? (
                 <Text style={styles.notice}>
                   Place search needs your profile to sync at least once — you can still save this
@@ -422,6 +474,7 @@ const styles = StyleSheet.create({
 
   locationBlock: { marginTop: spacing.xs, marginBottom: spacing.lg, gap: spacing.sm },
   placeSearchWrap: { gap: spacing.xs },
+  captureWrap: { marginTop: spacing.xs },
   dateBlock: { marginTop: spacing.xs, marginBottom: spacing.lg },
 
   notice: { ...type.small, color: colors.inkSoft, marginTop: spacing.sm },

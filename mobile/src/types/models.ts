@@ -388,6 +388,27 @@ export interface LocalAnswer {
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;
+  /**
+   * Where the guide actually was when they answered, captured explicitly by
+   * them at that moment (components/LocationCaptureField.tsx).
+   *
+   * Null when they didn't capture one -- in which case the server keeps its
+   * existing behaviour of deriving the coordinate itself (the knowledge
+   * gap's target, or the place a place question is about). Supplying it is
+   * what stops an answer from being attributed to wherever the guide's last
+   * app-level position ping happened to be, which may be kilometres away.
+   *
+   * `locationLabel`/`externalPlaceId` are the resolved place for that
+   * coordinate, best-effort via the existing place-candidates lookup; both
+   * stay null when the guide was offline or nowhere identifiable, which
+   * never invalidates the coordinate itself.
+   */
+  latitude: number | null;
+  longitude: number | null;
+  locationAccuracyMeters: number | null;
+  locationCapturedAt: string | null;
+  locationLabel: string | null;
+  externalPlaceId: string | null;
   /** Admin-approval status (Step 19) -- see the identical fields on
    * LocalCapture above for the full contract. */
   reviewStatus: SubmissionReviewStatus | null;

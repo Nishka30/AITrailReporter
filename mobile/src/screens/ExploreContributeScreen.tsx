@@ -4,6 +4,9 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
 import type { RecordedAudio } from '../audio/audioRecordingService';
+import LocationCaptureField, {
+  type CapturedContributionLocation,
+} from '../components/LocationCaptureField';
 import VoiceNoteComposer from '../components/VoiceNoteComposer';
 import { AppHeader, Badge, Button, Card, RewardChip, Screen } from '../components/ui';
 import type { PlaceCandidate } from '../api/placeCandidates';
@@ -80,6 +83,11 @@ export default function ExploreContributeScreen({ guide, prompt, place, onDone }
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
+  // A fresh fix taken for THIS contribution. Takes precedence over the
+  // chosen place's coordinates when present (see handleSave) -- the place
+  // was picked from a list built at whatever position the guide was at when
+  // they opened the picker, which may no longer be where they are.
+  const [location, setLocation] = useState<CapturedContributionLocation | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
 
   // This composer serves two arrivals: a generic Explore prompt, and a real
@@ -170,7 +178,23 @@ export default function ExploreContributeScreen({ guide, prompt, place, onDone }
               locationLabel: place.name,
               externalPlaceId: place.externalPlaceId,
             }
-          : {}),
+          : location
+            ? {
+                // No place was chosen, so the guide's own just-taken fix is
+                // the best answer to where this report is from -- and, more
+                // to the point, it stops the backend falling back to
+                // whatever position was last recorded app-wide, which may be
+                // hours and kilometres old (see
+                // extractions._resolve_observation_coordinates, tier 3).
+                latitude: location.latitude,
+                longitude: location.longitude,
+                locationSource: 'gps_live' as const,
+                locationAccuracyMeters: location.accuracyMeters,
+                locationCapturedAt: location.capturedAt,
+                locationLabel: location.label,
+                externalPlaceId: location.externalPlaceId,
+              }
+            : {}),
       });
       setSaved(true);
     } catch (err) {
@@ -335,6 +359,33 @@ export default function ExploreContributeScreen({ guide, prompt, place, onDone }
           </View>
         )}
 
+        <SectionLabel
+          icon="location-outline"
+          title="Location"
+          hint={place ? 'The place you chose' : location ? 'Captured' : 'Optional — where you are now'}
+        />
+        {place ? (
+          // A chosen place already IS a fresh, specific answer to "where is
+          // this about": PlacePickerScreen takes its own live GPS fix every
+          // time it opens (see that screen), and the report is about the
+          // place rather than the exact spot the guide stood. Offering a
+          // second, competing location here would only be able to overwrite
+          // that with something less meaningful.
+          <View style={styles.chosenPlaceRow}>
+            <Ionicons name="location" size={16} color={colors.ok} />
+            <Text style={styles.chosenPlaceText}>{place.name}</Text>
+          </View>
+        ) : (
+          <View style={styles.locationWrap}>
+            <LocationCaptureField
+              value={location}
+              onChange={setLocation}
+              disabled={saving}
+              hint="Optional — capture where you are so this is filed against the right place."
+            />
+          </View>
+        )}
+
         {photoNotice ? <Text style={styles.notice}>{photoNotice}</Text> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -383,6 +434,14 @@ const styles = StyleSheet.create({
     marginLeft: 'auto',
   },
   voiceWrap: { marginBottom: spacing.lg },
+  locationWrap: { marginBottom: spacing.lg },
+  chosenPlaceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: spacing.lg,
+  },
+  chosenPlaceText: { ...type.bodyBold, color: colors.ink },
   textArea: {
     backgroundColor: colors.paperElevated,
     borderWidth: 1,

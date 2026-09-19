@@ -98,6 +98,10 @@ def answer_question(
             payload.client_answer_id,
             payload.answer_text,
             resolved_answered_at,
+            # The whole payload doubles as the location block (it inherits
+            # AnswerLocationFields); the service ignores it entirely unless
+            # real coordinates arrived.
+            captured_location=payload,
         )
     except answer_service.QuestionNotFoundError:
         raise HTTPException(status_code=404, detail="Question not found")

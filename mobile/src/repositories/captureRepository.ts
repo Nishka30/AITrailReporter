@@ -135,18 +135,32 @@ export async function createCapture(
   db: SQLiteDatabase,
   localGuideId: number,
   captureType: CaptureType,
-  textContent: string | null
+  textContent: string | null,
+  /** Where/when this was, when the guide captured it. Omitting it leaves the
+   * same honest 'unknown'/null defaults this function has always written. */
+  provenance: CaptureProvenanceInput = {}
 ): Promise<LocalCapture> {
   const now = new Date().toISOString();
   const clientSubmissionId = generateClientId();
   const result = await db.runAsync(
     `INSERT INTO local_capture
-       (local_guide_id, client_submission_id, capture_type, text_content, sync_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+       (local_guide_id, client_submission_id, capture_type, text_content,
+        latitude, longitude, location_source, location_accuracy_meters,
+        location_captured_at, location_label, location_evidence, external_place_id,
+        sync_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     localGuideId,
     clientSubmissionId,
     captureType,
     textContent,
+    provenance.latitude ?? null,
+    provenance.longitude ?? null,
+    provenance.locationSource ?? 'unknown',
+    provenance.locationAccuracyMeters ?? null,
+    provenance.locationCapturedAt ?? null,
+    provenance.locationLabel ?? null,
+    provenance.locationEvidence ?? null,
+    provenance.externalPlaceId ?? null,
     now,
     now
   );
