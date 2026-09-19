@@ -1,7 +1,16 @@
 import uuid as uuid_module
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -14,6 +23,7 @@ from app.schemas.submission import (
 )
 from app.services import guides as guide_service
 from app.services import submissions as submission_service
+from app.services import transcriptions as transcription_service
 from app.services.audio_validation import InvalidAudioUploadError, validate_audio_upload
 from app.services.photo_validation import InvalidPhotoUploadError, validate_photo_upload
 from app.services.storage import get_audio_storage, get_photo_storage
@@ -50,6 +60,7 @@ def create_submission(payload: SubmissionCreate, response: Response, db: Session
 async def upload_submission_audio(
     submission_id: UUID,
     response: Response,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     client_audio_id: str = Form(...),
     duration_seconds: float | None = Form(default=None),
@@ -123,6 +134,17 @@ async def upload_submission_audio(
             detail="client_audio_id was already used with a different audio attachment "
             "for this submission",
         )
+
+    # Scheduled on BOTH the first attach and an idempotent replay, on purpose.
+    # A replay is how the mobile app retries an upload whose response it never
+    # saw -- and previously it returned here having done nothing, so a
+    # submission whose transcription had failed (or whose background task died)
+    # could never be nudged back into processing by re-syncing. Claiming is
+    # idempotent and cheap: schedule_transcription() only queues work when the
+    # row is genuinely 'pending', 'failed', or a stale 'processing', and never
+    # raises -- durably stored audio is never rejected because transcription
+    # could not be started.
+    transcription_service.schedule_transcription(background_tasks, db, submission_id)
 
     response.status_code = 201 if created else 200
     return submission

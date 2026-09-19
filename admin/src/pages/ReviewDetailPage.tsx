@@ -7,6 +7,7 @@ import { getReviewDetail, getReviewQueue } from '../api/admin';
 import type { KnowledgeTypeState } from '../api/types';
 import AudioPlayer from '../components/review/AudioPlayer';
 import ImageViewer from '../components/review/ImageViewer';
+import TranscriptionPanel from '../components/review/TranscriptionPanel';
 import ModerationActions from '../components/review/ModerationActions';
 import StatusBadge, { moderationLabel, moderationTone } from '../components/ui/StatusBadge';
 import { ErrorState, LoadingState } from '../components/ui/States';
@@ -168,16 +169,7 @@ export default function ReviewDetailPage() {
               {source.raw_text}
             </p>
           ) : null}
-          {source.transcript ? (
-            <div className="mt-3">
-              <div className="text-xs font-bold text-ink-faint">Transcript ({source.transcript.status})</div>
-              {source.transcript.transcript ? (
-                <p className="mt-1 whitespace-pre-wrap rounded-lg bg-paper-muted p-3 text-sm text-ink">
-                  {source.transcript.transcript}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
+          {source.transcript ? <TranscriptionPanel transcript={source.transcript} /> : null}
           {source.audio ? (
             <div className="mt-3">
               <AudioPlayer submissionId={source.submission_id} />

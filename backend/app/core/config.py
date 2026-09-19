@@ -68,6 +68,25 @@ class Settings(BaseSettings):
     sarvam_transcription_model: Literal["saaras:v3", "saaras:v4"] = "saaras:v3"
     sarvam_request_timeout_seconds: float = 60.0
 
+    # Sarvam's SYNCHRONOUS endpoint refuses audio over 30 seconds, so anything
+    # longer goes through its batch job API instead (see
+    # services/transcription/sarvam.py). The batch flow is create -> upload ->
+    # start -> POLL, so it needs a poll interval and a whole-job budget rather
+    # than one request timeout. Measured at ~5s end to end for a 55s recording;
+    # the budget is set far above that because it now runs in a background
+    # task and blocks no HTTP response, so waiting costs nothing but a slightly
+    # later transcript, while giving up early costs the guide their words.
+    sarvam_batch_poll_interval_seconds: int = 3
+    sarvam_batch_timeout_seconds: float = 600.0
+
+    # How long a transcription may sit in 'processing' before another attempt
+    # is allowed to reclaim it. Only reachable when the worker running it died
+    # mid-flight (a deploy, a restart, an OOM) — a live attempt re-claims
+    # nothing because the row is only 'processing' while one is genuinely in
+    # flight. Comfortably longer than the batch budget above, so a slow-but-
+    # alive job is never stolen and transcribed twice.
+    transcription_stale_processing_seconds: float = 900.0
+
     # Step 9: Anthropic Claude, used for LLM structured extraction. Same pattern
     # as Sarvam above -- the backend is the ONLY thing that ever holds this key,
     # `None` is a valid local-dev state (the extract endpoint reports a clean 503

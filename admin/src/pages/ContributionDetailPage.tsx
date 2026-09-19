@@ -7,6 +7,7 @@ import { getContributionDetail, getContributionQueue } from '../api/admin';
 import ContributionActions from '../components/contributions/ContributionActions';
 import AudioPlayer from '../components/review/AudioPlayer';
 import ImageViewer from '../components/review/ImageViewer';
+import TranscriptionPanel from '../components/review/TranscriptionPanel';
 import StatusBadge, { moderationLabel, moderationTone } from '../components/ui/StatusBadge';
 import { ErrorState, LoadingState } from '../components/ui/States';
 
@@ -137,16 +138,7 @@ export default function ContributionDetailPage() {
             <p className="text-sm italic text-ink-faint">No text content.</p>
           )}
 
-          {transcript ? (
-            <div className="mt-3">
-              <div className="text-xs font-bold text-ink-faint">Transcript ({transcript.status})</div>
-              {transcript.transcript ? (
-                <p className="mt-1 whitespace-pre-wrap rounded-lg bg-paper-muted p-3 text-sm text-ink">
-                  {transcript.transcript}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
+          {transcript ? <TranscriptionPanel transcript={transcript} /> : null}
 
           {audio ? (
             <div className="mt-3">

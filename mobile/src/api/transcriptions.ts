@@ -49,3 +49,21 @@ export async function triggerTranscription(submissionId: string): Promise<Transc
   );
   return fromWire(wire);
 }
+
+/**
+ * GET /api/v1/submissions/{submissionId}/transcription. A pure READ — it never
+ * starts an attempt or calls the provider, unlike triggerTranscription above.
+ *
+ * This is what "is it done yet?" should ask. Transcription now runs in a
+ * background task on the server (so the audio-upload response no longer waits
+ * for Sarvam), which means the interesting states are the ones that arrive
+ * after the upload request has already finished: a submission is 'processing'
+ * for a while and then becomes 'completed' on its own, with nothing the app
+ * needs to trigger. Polling this is how that transition is observed.
+ */
+export async function getTranscription(submissionId: string): Promise<TranscriptionResponse> {
+  const wire = await apiRequest<TranscriptionResponseWire>(
+    `/api/v1/submissions/${submissionId}/transcription`
+  );
+  return fromWire(wire);
+}

@@ -335,15 +335,17 @@ def attach_audio_to_submission(
     _maybe_award_media_bonus(db, submission)
     db.commit()
     db.refresh(submission)
-    # Automatic transcription (see transcriptions.py:maybe_trigger_transcription)
-    # -- called AFTER the commit above, so the Submission row lock held since
-    # entry to this function has already been released before Sarvam is ever
-    # called; start_transcription takes its own separate lock on the
-    # Transcription row. Chains into automatic extraction on its own once
-    # transcription completes (see the end of start_transcription) -- so a
-    # voice/explore recording now goes from "uploaded" to "observations exist"
-    # with zero taps, same as a text note already does above.
-    transcription_service.maybe_trigger_transcription(db, submission_id)
+    # Transcription is deliberately NOT started here anymore. It used to be:
+    # this function called maybe_trigger_transcription synchronously, which put
+    # a Sarvam call (and, on success, an Anthropic extraction call immediately
+    # after it) inside the audio-upload HTTP request. The upload response could
+    # therefore not return until AI processing had finished, and audio over 30
+    # seconds now takes Sarvam's polled batch flow, which has no short bound at
+    # all. The route schedules it as a background task instead -- see
+    # routes/submissions.py and transcriptions.py:schedule_transcription. The
+    # 'pending' Transcription row created above is what makes that safe: the
+    # work is durably recorded as owed before this function returns, so it is
+    # still retryable even if the background task never runs.
     return submission, True
 
 

@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -13,7 +13,11 @@ router = APIRouter(prefix="/api/v1/submissions/{submission_id}", tags=["transcri
 
 
 @router.post("/transcribe", response_model=TranscriptionRead)
-def trigger_transcription(submission_id: UUID, db: Session = Depends(get_db)):
+def trigger_transcription(
+    submission_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """Starts (or retries) transcription for a voice submission's uploaded
     audio, or reports the current state without calling Sarvam again if one is
     already in flight or already completed. Always returns 200 with the current
@@ -21,15 +25,25 @@ def trigger_transcription(submission_id: UUID, db: Session = Depends(get_db)):
     successfully-handled request, not HTTP-level errors; only a precondition
     that blocks starting an attempt at all (submission missing/wrong type/no
     audio yet, or the server has no Sarvam key configured) is a 4xx/5xx.
-    See services/transcriptions.py:start_transcription for the full idempotency
-    and concurrency strategy."""
+
+    This is also the RETRY endpoint, and it needs no separate retry logic: a
+    'failed' transcription is claimable exactly like a 'pending' one, and a
+    'processing' one that was stranded by a dead worker becomes claimable once
+    it goes stale. See services/transcriptions.py:claim_transcription.
+
+    The response returns as soon as the attempt is CLAIMED — so a retry answers
+    'processing' immediately rather than holding the connection open for the
+    length of a Sarvam batch job plus an Anthropic extraction. The caller polls
+    GET .../transcription (which the mobile app's existing "Check again" control
+    already does) for the outcome.
+    """
     if not settings.sarvam_api_key:
         raise HTTPException(
             status_code=503, detail="Transcription service is not configured on the server."
         )
 
     try:
-        transcription, _outcome = transcription_service.start_transcription(db, submission_id)
+        transcription, outcome = transcription_service.claim_transcription(db, submission_id)
     except LookupError:
         raise HTTPException(status_code=404, detail="Submission not found")
     except transcription_service.SubmissionNotAudioCapableError:
@@ -41,6 +55,11 @@ def trigger_transcription(submission_id: UUID, db: Session = Depends(get_db)):
     except transcription_service.AudioNotUploadedError:
         raise HTTPException(
             status_code=400, detail="Audio has not been uploaded for this submission yet"
+        )
+
+    if outcome == "claimed":
+        background_tasks.add_task(
+            transcription_service.process_transcription_in_background, submission_id
         )
 
     return transcription

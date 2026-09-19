@@ -3,7 +3,11 @@ import { StyleSheet, Text, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
-import { triggerTranscription, type TranscriptionResponse } from '../api/transcriptions';
+import {
+  getTranscription,
+  triggerTranscription,
+  type TranscriptionResponse,
+} from '../api/transcriptions';
 import { triggerExtraction, type ExtractionResponse } from '../api/extractions';
 import { ApiError, NetworkError } from '../api/client';
 import { formatDurationOrUnknown } from '../audio/duration';
@@ -329,6 +333,15 @@ function ExploreItem({
   );
 }
 
+// How the transcription poll is paced. Generous on purpose: a short recording
+// finishes in about a second and a long one goes through Sarvam's batch job
+// (measured at ~5s for a 55s recording), so this is not a tight race — it just
+// needs to notice, without hammering a backend on a metered plan. The attempt
+// cap bounds a stuck submission at roughly two minutes of polling, after which
+// the manual control takes over.
+const POLL_INTERVAL_MS = 4_000;
+const POLL_MAX_ATTEMPTS = 30;
+
 function formatTranscriptionStatus(t: TranscriptionResponse): { label: string; tone: BadgeTone } {
   switch (t.status) {
     case 'pending':
@@ -350,8 +363,18 @@ function formatTranscriptionStatus(t: TranscriptionResponse): { label: string; t
  * both rather than duplicated, because the backend treats them identically:
  * one transcription flow, one set of states, one place to render them.
  *
- * Manual and on-demand, same discipline as ExtractionBlock above: no polling,
- * no auto-trigger, backend truth over UI guesswork.
+ * Backend truth over UI guesswork, same discipline as ExtractionBlock above —
+ * every state shown here was read from the server, never inferred locally.
+ *
+ * It does poll, in one narrowly-scoped case: while the server reports
+ * 'pending' or 'processing'. Transcription runs in a background task now (so
+ * the audio upload itself returns immediately instead of waiting on Sarvam),
+ * which means the completion happens after every request this screen made has
+ * already finished. Without polling, a guide would watch a permanent
+ * "Listening…" and have to guess when to tap. The poll reads only (GET, never
+ * a provider call), stops the moment the state is terminal, and stops after
+ * POLL_MAX_ATTEMPTS so a stuck submission cannot make the app poll forever —
+ * the manual control is still there to fall back on.
  *
  * `renderWhenCompleted` is what should appear once a transcript actually
  * exists — for a voice note that is the extraction control, since extraction
@@ -370,12 +393,47 @@ function TranscriptionBlock({
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
 
+  const isInFlight = transcription?.status === 'pending' || transcription?.status === 'processing';
+
+  // Polls only while the server says work is genuinely outstanding. A 404 here
+  // means "no transcription row yet" (audio not uploaded), which is a settled
+  // answer rather than an error worth showing mid-poll — so the poll simply
+  // stops and leaves whatever state is already on screen.
+  useEffect(() => {
+    if (!isInFlight) return;
+    let cancelled = false;
+    let attempts = 0;
+    const timer = setInterval(async () => {
+      attempts += 1;
+      if (attempts > POLL_MAX_ATTEMPTS) {
+        clearInterval(timer);
+        return;
+      }
+      try {
+        const latest = await getTranscription(submissionId);
+        if (!cancelled) setTranscription(latest);
+      } catch {
+        clearInterval(timer);
+      }
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isInFlight, submissionId]);
+
   async function handleTranscribePress() {
     if (checking) return;
     setChecking(true);
     setCheckError(null);
     try {
-      setTranscription(await triggerTranscription(submissionId));
+      // A read when something is already running (asking the provider to start
+      // again would be a no-op the server has to reject anyway); a real
+      // start/retry otherwise. 'failed' deliberately takes the retry path —
+      // that is what the Retry label below promises.
+      setTranscription(
+        isInFlight ? await getTranscription(submissionId) : await triggerTranscription(submissionId)
+      );
     } catch (err) {
       const message =
         err instanceof ApiError || err instanceof NetworkError ? err.message : 'Could not check status.';
@@ -386,6 +444,11 @@ function TranscriptionBlock({
   }
 
   const status = transcription ? formatTranscriptionStatus(transcription) : null;
+  const actionLabel = !transcription
+    ? startLabel
+    : transcription.status === 'failed'
+      ? 'Retry'
+      : 'Check again';
 
   return (
     <>
@@ -404,7 +467,7 @@ function TranscriptionBlock({
 
       {transcription?.status !== 'completed' ? (
         <Button
-          label={transcription ? 'Check again' : startLabel}
+          label={actionLabel}
           onPress={handleTranscribePress}
           loading={checking}
           variant="ghost"
