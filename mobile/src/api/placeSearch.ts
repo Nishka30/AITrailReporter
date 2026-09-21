@@ -1,4 +1,5 @@
 import { apiRequest } from './client';
+import { isValidCoordinatePair } from '../location/coordinateValidation';
 
 /** One real, named place a guide might mean — from
  * backend/app/services/places/ (Google Places). `label` is the full display
@@ -33,10 +34,12 @@ export async function searchPlaces(guideId: string, query: string): Promise<Plac
   const wire = await apiRequest<PlaceSearchResponseWire>(
     `/api/v1/guides/${guideId}/place-search?q=${encodeURIComponent(query)}`
   );
-  return wire.results.map((r) => ({
-    label: r.label,
-    latitude: r.latitude,
-    longitude: r.longitude,
-    placeId: r.place_id,
-  }));
+  return wire.results
+    .filter((r) => isValidCoordinatePair(r.latitude, r.longitude))
+    .map((r) => ({
+      label: r.label,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      placeId: r.place_id,
+    }));
 }

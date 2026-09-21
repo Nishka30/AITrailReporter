@@ -1,5 +1,6 @@
 import type { CaptureProvenanceInput } from '../repositories/captureRepository';
 import type { PhotoPickResult } from '../photo/photoPickerService';
+import { isValidCoordinatePair } from './coordinateValidation';
 import { captureCurrentLocation } from './locationService';
 
 /**
@@ -85,17 +86,6 @@ function applyHemisphere(magnitude: number | null, ref: unknown): number | null 
   return refStr === 'S' || refStr === 'W' ? -Math.abs(magnitude) : Math.abs(magnitude);
 }
 
-function isValidCoordinate(latitude: number, longitude: number): boolean {
-  return (
-    Number.isFinite(latitude) &&
-    Number.isFinite(longitude) &&
-    latitude >= -90 &&
-    latitude <= 90 &&
-    longitude >= -180 &&
-    longitude <= 180
-  );
-}
-
 /** Parses EXIF's "YYYY:MM:DD HH:MM:SS" into components, or null if the shape
  * doesn't match. Deliberately strict: a malformed tag is treated as absent,
  * never partially guessed at. */
@@ -116,9 +106,19 @@ function deriveFromExif(exif: Record<string, unknown> | null): ExifDerived {
 
   const rawLat = coerceGpsComponent(exif.GPSLatitude);
   const rawLon = coerceGpsComponent(exif.GPSLongitude);
-  const latitude = applyHemisphere(rawLat, exif.GPSLatitudeRef);
-  const longitude = applyHemisphere(rawLon, exif.GPSLongitudeRef);
-  const hasGps = latitude !== null && longitude !== null && isValidCoordinate(latitude, longitude);
+  const rawLatitude = applyHemisphere(rawLat, exif.GPSLatitudeRef);
+  const rawLongitude = applyHemisphere(rawLon, exif.GPSLongitudeRef);
+  // isValidCoordinatePair is what actually catches a zeroed EXIF GPS block —
+  // a placeholder many camera/OS/photo-sharing pipelines write when there
+  // was no real GPS lock (or location metadata was stripped for privacy),
+  // which a plain finite/range check cannot tell apart from a genuine fix.
+  // Computed ONCE, here, and used to gate the coordinate in EVERY branch
+  // below -- not just the final one -- because a zeroed GPS block can still
+  // carry a genuine GPSDateStamp/GPSTimeStamp or DateTimeOriginal tag
+  // alongside it; the date being real doesn't make the location real.
+  const hasGps = isValidCoordinatePair(rawLatitude, rawLongitude);
+  const latitude = hasGps ? rawLatitude : null;
+  const longitude = hasGps ? rawLongitude : null;
 
   // Preferred: GPSDateStamp ("YYYY:MM:DD") + GPSTimeStamp ([H, M, S], UTC per
   // the EXIF spec) — an unambiguous UTC instant, present only alongside a
@@ -141,7 +141,7 @@ function deriveFromExif(exif: Record<string, unknown> | null): ExifDerived {
     return { latitude, longitude, occurredAt: iso, dateIsApproximate: true };
   }
 
-  return { latitude: hasGps ? latitude : null, longitude: hasGps ? longitude : null, occurredAt: null, dateIsApproximate: false };
+  return { latitude, longitude, occurredAt: null, dateIsApproximate: false };
 }
 
 /**

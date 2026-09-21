@@ -129,20 +129,32 @@ def _to_item(
     knowledge_type: KnowledgeTypeConfig,
     submission: Submission,
     guide: Guide,
+    *,
+    include_nearest_known_place: bool = False,
 ) -> ReviewQueueItem:
+    """Builds one ReviewQueueItem. `latitude`/`longitude` (from the
+    Observation itself, copied there from its resolving Submission at
+    extraction time -- see extractions.py:_resolve_observation_coordinates)
+    are the observation's OWN, authoritative coordinate and are ALWAYS
+    populated here at zero extra query cost -- they are already columns on
+    the row this function is handed.
+
+    `nearest_known_place_name`/`_distance_meters` are a SEPARATE, optional
+    enrichment -- "is there a known Location nearby" -- backed by a real
+    PostGIS ST_DWithin query (see geographic_context.py). That query is
+    deliberately NOT run by default: `include_nearest_known_place=False` is
+    the default specifically so the paginated list (list_review_queue) never
+    pays for it -- one extra round trip per row, per page load, purely for
+    a "nearby place" caption nobody is looking at yet. Only get_review_detail
+    (exactly one row) opts in.
+    """
     is_new = (datetime.now(timezone.utc) - knowledge_type.created_at) < _NEW_KNOWLEDGE_TYPE_WINDOW
     latitude = float(observation.latitude) if observation.latitude is not None else None
     longitude = float(observation.longitude) if observation.longitude is not None else None
 
-    # Same "nearest known place within settings.geographic_context_radius_meters"
-    # resolution used for extraction/question-generation prompts and the
-    # Contribution Review queue (see app/services/geographic_context.py) --
-    # an observation has no confirmed place of its own, only the raw
-    # coordinate it was reported at, so this is an honest approximation, not
-    # a claim about which place it's actually at.
     nearest_known_place_name = None
     nearest_known_place_distance_meters = None
-    if latitude is not None and longitude is not None:
+    if include_nearest_known_place and latitude is not None and longitude is not None:
         context = geographic_context_service.resolve_geographic_context(db, latitude, longitude)
         if context.nearest_known_place is not None:
             nearest_known_place_name = context.nearest_known_place.name
@@ -158,6 +170,8 @@ def _to_item(
         evidence=observation.evidence,
         latitude=latitude,
         longitude=longitude,
+        location_label=submission.location_label,
+        external_place_id=submission.external_place_id,
         observed_at=observation.observed_at,
         created_at=observation.created_at,
         submission_id=submission.id,
@@ -277,7 +291,10 @@ def get_review_detail(db: Session, observation_id: UUID) -> ReviewDetail | None:
         return None
     observation, moderation, knowledge_type, submission, guide = row
 
-    item = _to_item(db, observation, moderation, knowledge_type, submission, guide)
+    item = _to_item(
+        db, observation, moderation, knowledge_type, submission, guide,
+        include_nearest_known_place=True,
+    )
 
     transcript = None
     if submission.audio is not None:

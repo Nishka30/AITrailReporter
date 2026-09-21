@@ -15,6 +15,7 @@ from app.schemas.extraction import ExtractionRead
 from app.schemas.observation import ObservationRead
 from app.services import geographic_context as geographic_context_service
 from app.services import guide_locations as guide_location_service
+from app.services.geo_validation import is_valid_coordinate_pair
 from app.services import knowledge_types as knowledge_type_service
 from app.services import observation_moderation as observation_moderation_service
 from app.services import observations as observation_service
@@ -148,12 +149,22 @@ def _resolve_observation_coordinates(
        wrong for "where were they when they made THIS report right now".
     """
     if submission.latitude is not None and submission.longitude is not None:
-        return (
-            float(submission.latitude),
-            float(submission.longitude),
-            submission.location_source,
-            submission.location_evidence,
-        )
+        submission_lat = float(submission.latitude)
+        submission_lon = float(submission.longitude)
+        # Defense in depth against a PRE-EXISTING bad row: schema validation
+        # (see app/services/geo_validation.py) now refuses (0, 0) on every
+        # ingestion path, but a row written before that guard existed must
+        # not be trusted just because it predates the fix -- treat a stored
+        # (0, 0) exactly as if the submission had no coordinate at all,
+        # falling through to tier 2/3 below rather than propagating a known-
+        # placeholder location onto a new Observation.
+        if is_valid_coordinate_pair(submission_lat, submission_lon):
+            return (
+                submission_lat,
+                submission_lon,
+                submission.location_source,
+                submission.location_evidence,
+            )
 
     if submission.date_source in _INDEPENDENT_DATE_SOURCES and submission.occurred_at is not None:
         match = guide_location_service.find_nearest_location_in_time(

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, CheckCircle2, MapPin, Sparkles } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -7,6 +7,7 @@ import { getReviewDetail, getReviewQueue } from '../api/admin';
 import type { KnowledgeTypeState } from '../api/types';
 import AudioPlayer from '../components/review/AudioPlayer';
 import ImageViewer from '../components/review/ImageViewer';
+import LocationPanel from '../components/review/LocationPanel';
 import TranscriptionPanel from '../components/review/TranscriptionPanel';
 import ModerationActions from '../components/review/ModerationActions';
 import StatusBadge, { moderationLabel, moderationTone } from '../components/ui/StatusBadge';
@@ -147,22 +148,22 @@ export default function ReviewDetailPage() {
             Submission type: {source.submission_type} · Submitted{' '}
             {new Date(source.submitted_at).toLocaleString()}
           </div>
-          <div className="mt-1 flex items-center gap-1 text-xs text-ink-faint">
-            <MapPin className="h-3.5 w-3.5" />
-            {observation.nearest_known_place_name ? (
-              <>
-                Near {observation.nearest_known_place_name}
-                {observation.nearest_known_place_distance_meters !== null &&
-                observation.nearest_known_place_distance_meters !== undefined ? (
-                  <span className="italic">
-                    {' '}
-                    (~{Math.round(observation.nearest_known_place_distance_meters)}m away)
-                  </span>
-                ) : null}
-              </>
-            ) : (
-              <span className="italic">Location not specified</span>
-            )}
+          <div className="mt-2">
+            <LocationPanel
+              latitude={observation.latitude}
+              longitude={observation.longitude}
+              locationLabel={observation.location_label}
+              nearestPlace={
+                observation.nearest_known_place_name &&
+                observation.nearest_known_place_distance_meters != null
+                  ? {
+                      name: observation.nearest_known_place_name,
+                      locationId: null,
+                      distanceMeters: observation.nearest_known_place_distance_meters,
+                    }
+                  : null
+              }
+            />
           </div>
           {source.raw_text ? (
             <p className="mt-2 whitespace-pre-wrap rounded-lg bg-paper-muted p-3 text-sm text-ink">

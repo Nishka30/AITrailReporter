@@ -14,6 +14,7 @@ from app.db.models.submission import (
     DEFAULT_LOCATION_SOURCE,
     SUBMISSION_LOCATION_SOURCES,
 )
+from app.services.geo_validation import validate_optional_coordinate_pair
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +212,13 @@ class SubmissionCreate(BaseModel):
             )
         if (self.latitude is None) != (self.longitude is None):
             raise ValueError("latitude and longitude must be supplied together")
+        # (0, 0) is mathematically in-range for both fields' ge/le constraints
+        # above, so it survives field-level validation -- this is the one
+        # place that catches it, before it can ever reach create_or_get_submission.
+        # See app/services/geo_validation.py's module docstring for the
+        # production incident (two 'memory' submissions stored as exactly
+        # latitude=0, longitude=0) this closes off at the source.
+        validate_optional_coordinate_pair(self.latitude, self.longitude)
         if (
             self.location_source is not None
             and self.location_source != DEFAULT_LOCATION_SOURCE

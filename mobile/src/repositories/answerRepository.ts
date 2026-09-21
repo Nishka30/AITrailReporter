@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { generateClientId } from '../db/uuid';
+import { isValidCoordinatePair } from '../location/coordinateValidation';
 import type { LocalAnswer, QuestionKind, SyncStatus } from '../types/models';
 
 interface LocalAnswerRow {
@@ -137,6 +138,19 @@ export async function createAnswer(
   /** The guide's own position at answer time, when they captured one. */
   location: AnswerLocationInput = {}
 ): Promise<LocalAnswer> {
+  // Write-boundary guard against (0, 0) -- same rule and same reasoning as
+  // captureRepository.ts's sanitizeProvenanceCoordinates: applied here, at
+  // the actual INSERT, so it protects this table regardless of which
+  // upstream capture path (LocationCaptureField's GPS capture is currently
+  // the only source for an answer's location) fed it. An invalid pair is
+  // dropped entirely rather than persisted -- see
+  // coordinateValidation.ts's module docstring.
+  const safeLocation: AnswerLocationInput =
+    location.latitude != null || location.longitude != null
+      ? isValidCoordinatePair(location.latitude, location.longitude)
+        ? location
+        : { ...location, latitude: null, longitude: null }
+      : location;
   const now = new Date().toISOString();
   const clientAnswerId = generateClientId();
   const clientAudioId = media.localAudioUri ? generateClientId() : null;
@@ -163,12 +177,12 @@ export async function createAnswer(
     media.localPhotoUri ?? null,
     clientPhotoId,
     media.photoContentType ?? null,
-    location.latitude ?? null,
-    location.longitude ?? null,
-    location.locationAccuracyMeters ?? null,
-    location.locationCapturedAt ?? null,
-    location.locationLabel ?? null,
-    location.externalPlaceId ?? null,
+    safeLocation.latitude ?? null,
+    safeLocation.longitude ?? null,
+    safeLocation.locationAccuracyMeters ?? null,
+    safeLocation.locationCapturedAt ?? null,
+    safeLocation.locationLabel ?? null,
+    safeLocation.externalPlaceId ?? null,
     now,
     now
   );

@@ -1,7 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services.geo_validation import validate_optional_coordinate_pair
 
 
 class LocationCreate(BaseModel):
@@ -9,6 +11,17 @@ class LocationCreate(BaseModel):
     description: str | None = None
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+
+    @model_validator(mode="after")
+    def validate_not_placeholder(self) -> "LocationCreate":
+        # A manually-created Location at exactly (0, 0) is the same
+        # placeholder-vs-real ambiguity as a contribution's coordinate -- see
+        # app/services/geo_validation.py. Defense in depth: this endpoint is
+        # for manual/admin creation, not the automated discovery path, but
+        # the rule should hold everywhere a real-world place's coordinates
+        # are accepted from a client.
+        validate_optional_coordinate_pair(self.latitude, self.longitude)
+        return self
 
 
 class LocationRead(BaseModel):

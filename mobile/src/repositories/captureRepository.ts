@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { generateClientId } from '../db/uuid';
+import { isValidCoordinatePair } from '../location/coordinateValidation';
 import type {
   CaptureType,
   DatePrecision,
@@ -9,6 +10,29 @@ import type {
   LocationSource,
   SyncStatus,
 } from '../types/models';
+
+/**
+ * THE write-boundary guard against (0, 0) ever reaching local_capture --
+ * applied here, at the actual INSERT, rather than trusted to have already
+ * happened in every current and future caller (GPS, EXIF, Google Places,
+ * Memory search, the Explore/Questions picker all feed provenance through
+ * this same table). See coordinateValidation.ts's module docstring for the
+ * production incident this closes off for good: a zeroed EXIF GPS block
+ * that a plain range check couldn't distinguish from a real fix.
+ *
+ * An invalid pair is nulled out entirely, and locationSource is downgraded
+ * to 'unknown' rather than left claiming a source (e.g. 'photo_exif') for a
+ * coordinate that no longer exists -- the same "a source label without a
+ * real coordinate is an unverifiable claim" rule the backend's own schemas
+ * enforce (see backend/app/schemas/submission.py).
+ */
+function sanitizeProvenanceCoordinates<
+  T extends { latitude?: number | null; longitude?: number | null; locationSource?: LocationSource },
+>(provenance: T): T {
+  if (provenance.latitude == null && provenance.longitude == null) return provenance;
+  if (isValidCoordinatePair(provenance.latitude, provenance.longitude)) return provenance;
+  return { ...provenance, latitude: null, longitude: null, locationSource: 'unknown' };
+}
 
 interface LocalCaptureRow {
   id: number;
@@ -140,6 +164,7 @@ export async function createCapture(
    * same honest 'unknown'/null defaults this function has always written. */
   provenance: CaptureProvenanceInput = {}
 ): Promise<LocalCapture> {
+  const safeProvenance = sanitizeProvenanceCoordinates(provenance);
   const now = new Date().toISOString();
   const clientSubmissionId = generateClientId();
   const result = await db.runAsync(
@@ -153,9 +178,9 @@ export async function createCapture(
     clientSubmissionId,
     captureType,
     textContent,
-    provenance.latitude ?? null,
-    provenance.longitude ?? null,
-    provenance.locationSource ?? 'unknown',
+    safeProvenance.latitude ?? null,
+    safeProvenance.longitude ?? null,
+    safeProvenance.locationSource ?? 'unknown',
     provenance.locationAccuracyMeters ?? null,
     provenance.locationCapturedAt ?? null,
     provenance.locationLabel ?? null,
@@ -281,6 +306,7 @@ async function insertExploreLikeCapture(
   const trimmedText = textContent?.trim() ? textContent.trim() : null;
   const localPhotoUri = options.localPhotoUri ?? null;
   const localAudioUri = options.localAudioUri ?? null;
+  const safeOptions = sanitizeProvenanceCoordinates(options);
 
   const now = new Date().toISOString();
   const clientSubmissionId = generateClientId();
@@ -316,9 +342,9 @@ async function insertExploreLikeCapture(
     options.promptTitle ?? null,
     options.placeQuestionId ?? null,
     options.rewardPoints ?? null,
-    options.latitude ?? null,
-    options.longitude ?? null,
-    options.locationSource ?? 'unknown',
+    safeOptions.latitude ?? null,
+    safeOptions.longitude ?? null,
+    safeOptions.locationSource ?? 'unknown',
     options.locationAccuracyMeters ?? null,
     options.locationCapturedAt ?? null,
     options.locationLabel ?? null,

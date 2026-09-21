@@ -25,6 +25,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.db.models.submission import DEFAULT_LOCATION_SOURCE, SUBMISSION_LOCATION_SOURCES
+from app.services.geo_validation import validate_optional_coordinate_pair
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,11 @@ class AnswerLocationFields(BaseModel):
     def validate_coordinate_pair(self) -> "AnswerLocationFields":
         if (self.latitude is None) != (self.longitude is None):
             raise ValueError("latitude and longitude must be supplied together")
+        # Same (0, 0)-is-a-placeholder rule as SubmissionCreate -- see
+        # app/services/geo_validation.py. A captured location that decodes to
+        # exactly (0, 0) is rejected here rather than silently accepted as
+        # 'gps_live'/'photo_exif' evidence it never actually was.
+        validate_optional_coordinate_pair(self.latitude, self.longitude)
         if (
             self.location_source is not None
             and self.location_source != DEFAULT_LOCATION_SOURCE

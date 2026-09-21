@@ -69,6 +69,22 @@ class PublicObservation(BaseModel):
     observed_at: datetime
     submission_type: str
     guide_name: str
+    # THE authoritative coordinate for this observation -- copied from its
+    # resolving Submission at extraction time (extractions.py's
+    # _resolve_observation_coordinates) and NEVER re-derived from, or
+    # replaced by, a nearby known Location. This is what a map (this app's
+    # own, or the future Travelers website) should plot -- not
+    # nearest_place_id/_name below, which are optional enrichment only and
+    # frequently null even for a fully, correctly located observation. Null
+    # only when the observation genuinely has no coordinate at all.
+    latitude: float | None = None
+    longitude: float | None = None
+    # The contribution's own human-readable location, when its Submission has
+    # one (the guide picked a place, searched one, or an explicit capture's
+    # naming lookup succeeded). Prefer this over nearest_place_name when
+    # both are present -- it describes THIS coordinate, not a nearby one.
+    location_label: str | None = None
+    external_place_id: str | None = None
     has_photo: bool
     has_audio: bool
     photo_url: str | None

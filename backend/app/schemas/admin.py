@@ -55,6 +55,14 @@ class ReviewQueueItem(BaseModel):
     evidence: str | None
     latitude: float | None
     longitude: float | None
+    # The contribution's OWN human-readable location, when its source
+    # Submission has one -- set when the guide picked a place, searched one
+    # (Memory), or the naming lookup from an explicit capture succeeded (see
+    # LocationCaptureField.tsx). This is authoritative, unlike
+    # nearest_known_place_name below: it describes THIS coordinate directly,
+    # not a nearby-but-different Location record.
+    location_label: str | None = None
+    external_place_id: str | None = None
     observed_at: datetime
     created_at: datetime
     submission_id: UUID
@@ -62,6 +70,13 @@ class ReviewQueueItem(BaseModel):
     guide_id: UUID
     guide_name: str
     moderation: ObservationModerationRead
+    # OPTIONAL ENRICHMENT ONLY -- a known Location within
+    # settings.geographic_context_radius_meters of latitude/longitude above,
+    # when one happens to exist. Never a substitute for latitude/longitude:
+    # both are None exactly when no known place is nearby, which is a
+    # perfectly normal, fully-located state -- see admin_review.py's
+    # docstring on _attach_nearest_known_place for why this is populated on
+    # DETAIL reads only, never on the paginated list.
     nearest_known_place_name: str | None = None
     nearest_known_place_distance_meters: float | None = None
     # True when this observation's KnowledgeTypeConfig was created dynamically
@@ -155,12 +170,25 @@ class ContributionQueueItem(BaseModel):
     submitted_at: datetime
     latitude: float | None
     longitude: float | None
-    # The place this contribution concerns. Exact (location_distance_meters is
-    # None) for a place-question answer, via its own location_id. Otherwise
-    # resolved from the submission's raw coordinate to the nearest KNOWN place
-    # within settings.geographic_context_radius_meters -- an approximation,
-    # signalled by location_distance_meters being set, not a confirmed place.
-    # Both null only when no known place is even nearby.
+    # The contribution's OWN human-readable location, straight off its
+    # Submission row -- set when the guide picked a place, searched one
+    # (Memory), or the naming lookup from an explicit capture succeeded.
+    # Authoritative, and always populated at zero extra query cost (no join,
+    # no PostGIS -- these are plain columns on the row this item is built
+    # from). Distinct from location_id/location_name below.
+    location_label: str | None = None
+    external_place_id: str | None = None
+    # OPTIONAL ENRICHMENT ONLY -- "is there a known Location entity nearby",
+    # never a claim about where this contribution actually is (that's
+    # latitude/longitude above, always authoritative on its own). Exact
+    # (location_distance_meters is None) for a place-question answer, via its
+    # own location_id -- a real, confirmed place. Otherwise, on a DETAIL read
+    # only (see get_contribution_detail), resolved from the submission's raw
+    # coordinate to the nearest KNOWN place within
+    # settings.geographic_context_radius_meters; the paginated list never
+    # populates this trio, to avoid a PostGIS query per row per page load.
+    # Both null simply means "no known place happens to be nearby" -- NOT
+    # "this contribution has no location": check latitude/longitude for that.
     location_id: UUID | None
     location_name: str | None
     location_distance_meters: float | None

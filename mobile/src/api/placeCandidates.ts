@@ -1,4 +1,5 @@
 import { apiRequest } from './client';
+import { isValidCoordinatePair } from '../location/coordinateValidation';
 
 /**
  * The places a guide standing at some coordinate could choose to contribute
@@ -110,7 +111,12 @@ export async function listPlaceCandidates(
     latitude: wire.latitude,
     longitude: wire.longitude,
     radiusMeters: wire.radius_meters,
-    candidates: wire.candidates.map(fromWire),
+    // Defensive: the backend already refuses to create a Location at exactly
+    // (0, 0) (see app/services/geo_validation.py), so this should never fire
+    // in practice -- but a candidate the guide could select becomes THE
+    // contribution's location the moment they tap it, so it costs nothing to
+    // make sure a corrupt/legacy row can never be offered as a choice.
+    candidates: wire.candidates.map(fromWire).filter((c) => isValidCoordinatePair(c.latitude, c.longitude)),
   };
 }
 

@@ -126,18 +126,34 @@ def _to_public_observation(
     submission: Submission,
     guide: Guide,
     transcription: Transcription | None,
+    *,
+    include_nearest_place: bool = False,
 ) -> PublicObservation:
+    """latitude/longitude/location_label/external_place_id are the
+    observation's OWN authoritative location -- always populated here at
+    zero extra query cost, straight off columns already present on the rows
+    this function is handed. This is the field the future Travelers website
+    (and this backend's own callers) should plot on a map; it is NEVER
+    replaced or hidden by nearest_place_id/_name below.
+
+    nearest_place_id/_name are OPTIONAL PostGIS enrichment -- "is there a
+    known Location nearby" -- and are only resolved when
+    include_nearest_place=True. Defaults to False so a paginated/bounded list
+    (list_public_observations, search_public) never pays for a PostGIS query
+    per row per page load; only get_public_observation (exactly one row)
+    opts in.
+    """
     transcript = (
         transcription.transcript
         if transcription is not None and transcription.status == "completed"
         else None
     )
+    latitude = float(observation.latitude) if observation.latitude is not None else None
+    longitude = float(observation.longitude) if observation.longitude is not None else None
     nearest_place_id = None
     nearest_place_name = None
-    if observation.latitude is not None and observation.longitude is not None:
-        context = geographic_context_service.resolve_geographic_context(
-            db, float(observation.latitude), float(observation.longitude)
-        )
+    if include_nearest_place and latitude is not None and longitude is not None:
+        context = geographic_context_service.resolve_geographic_context(db, latitude, longitude)
         if context.nearest_known_place is not None:
             nearest_place_id = context.nearest_known_place.id
             nearest_place_name = context.nearest_known_place.name
@@ -151,6 +167,10 @@ def _to_public_observation(
         observed_at=observation.observed_at,
         submission_type=submission.submission_type,
         guide_name=guide.name,
+        latitude=latitude,
+        longitude=longitude,
+        location_label=submission.location_label,
+        external_place_id=submission.external_place_id,
         has_photo=submission.photo is not None,
         has_audio=submission.audio is not None,
         photo_url=f"/api/v1/public/media/{submission.id}/photo" if submission.photo is not None else None,
@@ -203,7 +223,7 @@ def get_public_observation(db: Session, observation_id: UUID) -> PublicObservati
     if row is None:
         return None
     obs, kt, sub, guide, tr = row
-    return _to_public_observation(db, obs, kt, sub, guide, tr)
+    return _to_public_observation(db, obs, kt, sub, guide, tr, include_nearest_place=True)
 
 
 def list_public_locations(db: Session, limit: int = 50) -> list[PublicLocationSummary]:

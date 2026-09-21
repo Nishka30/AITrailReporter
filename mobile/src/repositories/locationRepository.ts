@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { generateClientId } from '../db/uuid';
+import { isValidCoordinatePair } from '../location/coordinateValidation';
 import type { LocalLocation, SyncStatus } from '../types/models';
 
 interface LocalLocationRow {
@@ -56,6 +57,17 @@ export async function createLocation(
   accuracyMeters: number | null,
   recordedAt: string
 ): Promise<LocalLocation> {
+  // Write-boundary guard: latitude/longitude are NOT NULL on this table (a
+  // GuideLocation ping is meaningless without a real position), so an
+  // invalid pair cannot be silently nulled out the way an optional
+  // contribution field can -- it must be refused outright. In practice this
+  // is unreachable today, because the only caller (HomeScreen's "Capture
+  // Location") already gets its coordinate from captureCurrentLocation(),
+  // which rejects (0, 0) at the source (see locationService.ts) -- this is
+  // defense in depth for any future caller of this function.
+  if (!isValidCoordinatePair(latitude, longitude)) {
+    throw new Error(`Refusing to record an invalid location ping (${latitude}, ${longitude}).`);
+  }
   const now = new Date().toISOString();
   const clientLocationId = generateClientId();
   const result = await db.runAsync(

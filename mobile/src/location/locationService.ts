@@ -1,5 +1,7 @@
 import * as Location from 'expo-location';
 
+import { isValidCoordinatePair } from './coordinateValidation';
+
 /** Only the fields the rest of the app actually needs — not the raw device API shape. */
 export interface CapturedLocation {
   latitude: number;
@@ -13,17 +15,6 @@ export type LocationCaptureResult =
   | { status: 'success'; location: CapturedLocation }
   | { status: 'permission-denied'; canAskAgain: boolean }
   | { status: 'error'; message: string };
-
-function isValidCoordinate(latitude: number, longitude: number): boolean {
-  return (
-    Number.isFinite(latitude) &&
-    Number.isFinite(longitude) &&
-    latitude >= -90 &&
-    latitude <= 90 &&
-    longitude >= -180 &&
-    longitude <= 180
-  );
-}
 
 /**
  * Foreground-only, one-shot "where am I right now" capture. Requests permission
@@ -54,7 +45,13 @@ export async function captureCurrentLocation(): Promise<LocationCaptureResult> {
   }
 
   const { latitude, longitude, accuracy } = position.coords;
-  if (!isValidCoordinate(latitude, longitude)) {
+  // Real device GPS landing on exactly (0, 0) is essentially never a genuine
+  // fix -- but a fake/simulator location or a device-level bug can produce
+  // it, and this app treats that pair as its own missing/placeholder
+  // sentinel everywhere else (see coordinateValidation.ts's module
+  // docstring), so it is rejected here too rather than silently accepted as
+  // a confident 'gps_live' reading.
+  if (!isValidCoordinatePair(latitude, longitude)) {
     return { status: 'error', message: 'The device returned an invalid location.' };
   }
 

@@ -50,8 +50,16 @@ export type ReviewQueueItem = {
   value: Record<string, unknown>;
   confidence: number | null;
   evidence: string | null;
+  /** The observation's OWN authoritative coordinate -- ALWAYS the source of
+   * truth for "where is this," never replaced or hidden by
+   * nearest_known_place_name below. Both null only means this observation
+   * genuinely has no coordinate. */
   latitude: number | null;
   longitude: number | null;
+  /** The contribution's own human-readable location, when available.
+   * Prefer this over nearest_known_place_name when both are present. */
+  location_label?: string | null;
+  external_place_id?: string | null;
   observed_at: string;
   created_at: string;
   submission_id: string;
@@ -59,6 +67,9 @@ export type ReviewQueueItem = {
   guide_id: string;
   guide_name: string;
   moderation: ObservationModeration;
+  /** OPTIONAL ENRICHMENT ONLY -- a known Location happening to be nearby.
+   * Null does NOT mean "no location": check latitude/longitude for that.
+   * Only ever populated on a single-item detail read, never on this list. */
   nearest_known_place_name?: string | null;
   nearest_known_place_distance_meters?: number | null;
   knowledge_type_is_new: boolean;
@@ -346,14 +357,27 @@ export type ContributionQueueItem = {
   guide_name: string;
   raw_text: string | null;
   submitted_at: string;
+  /** The contribution's OWN authoritative coordinate -- ALWAYS the source of
+   * truth for "does this contribution have a location," never replaced or
+   * hidden by location_id/location_name below. Both null only means this
+   * contribution genuinely has no coordinate. */
   latitude: number | null;
   longitude: number | null;
+  /** The contribution's own human-readable location, straight off its
+   * Submission (the guide picked a place, searched one, or an explicit
+   * capture's naming lookup succeeded). Prefer this over location_name
+   * when both are present -- it describes THIS coordinate directly. */
+  location_label?: string | null;
+  external_place_id?: string | null;
+  /** OPTIONAL ENRICHMENT ONLY. Exact (location_distance_meters is null) for
+   * a place-question answer's own confirmed place; otherwise, on a
+   * single-item detail read only, the nearest KNOWN Location within the
+   * backend's configured radius of the contribution's own coordinate --
+   * an approximation, never a claim the guide confirmed it. Both null
+   * simply means no known place happens to be nearby -- it must NEVER be
+   * read as "no location": check latitude/longitude for that instead. */
   location_id: string | null;
   location_name: string | null;
-  /** Set only when location_name is an approximation (nearest known place
-   * within the backend's configured radius of the submission's raw GPS
-   * coordinate) rather than a place the guide explicitly confirmed by
-   * answering a place-specific question. */
   location_distance_meters: number | null;
   question_text: string | null;
   has_audio: boolean;

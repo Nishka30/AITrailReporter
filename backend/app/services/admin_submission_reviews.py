@@ -66,25 +66,21 @@ def _base_query(filters: ContributionQueueFilters) -> Select:
     return stmt
 
 
-def _resolve_question_and_place(
+def _resolve_question_text_and_confirmed_place(
     db: Session, submission: Submission
-) -> tuple[str | None, UUID | None, str | None, float | None]:
-    """(question_text, location_id, location_name, location_distance_meters)
-    for the thing this submission concerns.
+) -> tuple[str | None, UUID | None, str | None]:
+    """(question_text, location_id, location_name) for a submission that
+    answers a question -- both CONFIRMED, not approximated: a place-question
+    answer's location_id is the exact place it was about, via a plain FK
+    lookup (no PostGIS, no radius, no distance -- there is nothing
+    approximate about it). Runs unconditionally, including in the paginated
+    list, because it costs one cheap get()-by-primary-key at most, only when
+    the submission actually answers a question.
 
-    A place-question answer gets its EXACT place, confirmed -- distance is
-    None because there is nothing approximate about it. A free-form
-    Explore/memory contribution has no such confirmed place, but usually
-    still has its own raw GPS coordinate; rather than leaving that
-    unreviewed (an admin has no way to tell what a contribution is even
-    about), it's resolved to the nearest KNOWN place within
-    settings.geographic_context_radius_meters, via the SAME
-    geographic_context resolution already used for extraction and
-    question-generation prompts elsewhere in this codebase (see
-    app/services/geographic_context.py) -- honestly reported as an
-    approximation (distance_meters set) rather than presented as if the
-    guide confirmed it. Only when no known place falls within that radius
-    do all four come back None."""
+    Deliberately split out from the nearest-known-place FALLBACK below (see
+    _attach_nearest_known_place): that one is real enrichment-only PostGIS
+    work and must never run per-row in a list.
+    """
     if submission.source_place_question_id is not None:
         place_question = db.get(PlaceQuestion, submission.source_place_question_id)
         if place_question is not None:
@@ -93,22 +89,40 @@ def _resolve_question_and_place(
                 place_question.question_text,
                 place_question.location_id,
                 location.name if location is not None else None,
-                None,
             )
     if submission.source_question_id is not None:
         question = db.get(Question, submission.source_question_id)
         if question is not None:
-            return question.question_text, None, None, None
+            return question.question_text, None, None
+    return None, None, None
 
+
+def _attach_nearest_known_place(
+    db: Session, submission: Submission
+) -> tuple[UUID | None, str | None, float | None]:
+    """(location_id, location_name, location_distance_meters) for the nearest
+    KNOWN Location within settings.geographic_context_radius_meters of a
+    free-form contribution's own raw coordinate -- OPTIONAL ENRICHMENT ONLY,
+    via a real PostGIS ST_DWithin query (geographic_context.py). Callers
+    decide whether this is worth paying for; see get_contribution_detail
+    (yes, one row) vs list_contribution_queue (no -- see this module's
+    docstring on why the list never calls this).
+
+    Honestly reported as an approximation (distance_meters set) rather than
+    presented as if the guide confirmed it. None, None, None when no known
+    place falls within that radius -- which must NEVER be read as "this
+    contribution has no location": check submission.latitude/longitude for
+    that instead, which are already always populated on ContributionQueueItem
+    regardless of whether this function is even called.
+    """
     if submission.latitude is not None and submission.longitude is not None:
         context = geographic_context_service.resolve_geographic_context(
             db, float(submission.latitude), float(submission.longitude)
         )
         if context.nearest_known_place is not None:
             place = context.nearest_known_place
-            return None, place.id, place.name, place.distance_meters
-
-    return None, None, None, None
+            return place.id, place.name, place.distance_meters
+    return None, None, None
 
 
 def _rule_label(rule: RewardRule, fallback: str) -> str:
@@ -152,10 +166,28 @@ def _reward_breakdown(
     return lines, total
 
 
-def _to_item(db: Session, review: SubmissionReview, submission: Submission, guide: Guide) -> ContributionQueueItem:
-    question_text, location_id, location_name, location_distance_meters = _resolve_question_and_place(
-        db, submission
+def _to_item(
+    db: Session,
+    review: SubmissionReview,
+    submission: Submission,
+    guide: Guide,
+    *,
+    include_nearest_known_place: bool = False,
+) -> ContributionQueueItem:
+    """`latitude`/`longitude`/`location_label`/`external_place_id` are always
+    populated here at zero extra query cost -- they are plain columns on
+    `submission`, the contribution's OWN authoritative location. The nearest-
+    known-place trio is real, optional PostGIS enrichment and is only
+    resolved when `include_nearest_known_place=True` -- see
+    _attach_nearest_known_place's docstring."""
+    question_text, confirmed_location_id, confirmed_location_name = (
+        _resolve_question_text_and_confirmed_place(db, submission)
     )
+    location_id, location_name, location_distance_meters = confirmed_location_id, confirmed_location_name, None
+    if location_id is None and include_nearest_known_place:
+        location_id, location_name, location_distance_meters = _attach_nearest_known_place(
+            db, submission
+        )
     breakdown, total_points = _reward_breakdown(db, submission, review.reward_rule_key)
     return ContributionQueueItem(
         submission_id=submission.id,
@@ -166,6 +198,8 @@ def _to_item(db: Session, review: SubmissionReview, submission: Submission, guid
         submitted_at=submission.submitted_at,
         latitude=float(submission.latitude) if submission.latitude is not None else None,
         longitude=float(submission.longitude) if submission.longitude is not None else None,
+        location_label=submission.location_label,
+        external_place_id=submission.external_place_id,
         location_id=location_id,
         location_name=location_name,
         location_distance_meters=location_distance_meters,
@@ -204,7 +238,7 @@ def get_contribution_detail(db: Session, submission_id: UUID) -> ContributionDet
         return None
     review, submission, guide = row
 
-    item = _to_item(db, review, submission, guide)
+    item = _to_item(db, review, submission, guide, include_nearest_known_place=True)
 
     transcript = None
     if submission.audio is not None:

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CheckCircle2, DollarSign, HelpCircle, MapPin, Phone } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, DollarSign, HelpCircle, Phone } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
@@ -7,6 +7,7 @@ import { getContributionDetail, getContributionQueue } from '../api/admin';
 import ContributionActions from '../components/contributions/ContributionActions';
 import AudioPlayer from '../components/review/AudioPlayer';
 import ImageViewer from '../components/review/ImageViewer';
+import LocationPanel from '../components/review/LocationPanel';
 import TranscriptionPanel from '../components/review/TranscriptionPanel';
 import StatusBadge, { moderationLabel, moderationTone } from '../components/ui/StatusBadge';
 import { ErrorState, LoadingState } from '../components/ui/States';
@@ -185,26 +186,25 @@ export default function ContributionDetailPage() {
              to each other, so the admin can see what this contribution
              concerns and what approving it pays in the same glance. */}
         <section className="rounded-lg border border-border bg-paper-elevated p-5 shadow-card">
-          <h2 className="mb-1 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-ink-faint">
-            <MapPin className="h-3.5 w-3.5" /> Location
-          </h2>
-          {item.location_id ? (
-            <div>
-              <Link
-                to={`/places/${item.location_id}`}
-                className="font-bold text-marigold-deep hover:underline"
-              >
-                {item.location_name}
-              </Link>
-              {item.location_distance_meters !== null ? (
-                <span className="ml-1.5 text-xs italic text-ink-faint">
-                  (nearest known place, ~{Math.round(item.location_distance_meters)}m away)
-                </span>
-              ) : null}
-            </div>
-          ) : (
-            <span className="text-sm italic text-ink-faint">Location not specified</span>
-          )}
+          <LocationPanel
+            latitude={item.latitude}
+            longitude={item.longitude}
+            locationLabel={item.location_label}
+            confirmedPlace={
+              item.location_id && item.location_distance_meters === null
+                ? { name: item.location_name ?? '', locationId: item.location_id }
+                : null
+            }
+            nearestPlace={
+              item.location_id && item.location_distance_meters !== null
+                ? {
+                    name: item.location_name ?? '',
+                    locationId: item.location_id,
+                    distanceMeters: item.location_distance_meters,
+                  }
+                : null
+            }
+          />
 
           <h2 className="mb-3 mt-5 flex items-center gap-2 font-heading text-base font-bold text-ink">
             <DollarSign className="h-4 w-4 text-marigold" /> Reward
