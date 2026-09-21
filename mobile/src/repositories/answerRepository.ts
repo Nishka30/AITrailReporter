@@ -31,6 +31,7 @@ interface LocalAnswerRow {
   location_captured_at: string | null;
   location_label: string | null;
   external_place_id: string | null;
+  location_source: string | null;
   review_status: string | null;
   rejection_reason: string | null;
   rejection_note: string | null;
@@ -67,6 +68,11 @@ export interface AnswerLocationInput {
   locationCapturedAt?: string | null;
   locationLabel?: string | null;
   externalPlaceId?: string | null;
+  /** 'gps_live' for a real device fix, 'user_selected' when this came from
+   * the guide's currently selected Location instead (see
+   * AnswerQuestionScreen's placeToCapturedLocation). Null when there's no
+   * location at all. */
+  locationSource?: string | null;
 }
 
 function mapRow(row: LocalAnswerRow): LocalAnswer {
@@ -97,6 +103,7 @@ function mapRow(row: LocalAnswerRow): LocalAnswer {
     locationCapturedAt: row.location_captured_at,
     locationLabel: row.location_label,
     externalPlaceId: row.external_place_id,
+    locationSource: row.location_source,
     reviewStatus: row.review_status as LocalAnswer['reviewStatus'],
     rejectionReason: row.rejection_reason,
     rejectionNote: row.rejection_note,
@@ -160,9 +167,9 @@ export async function createAnswer(
        (local_guide_id, server_question_id, question_kind, client_answer_id, answer_text, answered_at, reward_points,
         local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
         local_photo_uri, client_photo_id, photo_content_type,
-        latitude, longitude, location_accuracy_meters, location_captured_at, location_label, external_place_id,
+        latitude, longitude, location_accuracy_meters, location_captured_at, location_label, external_place_id, location_source,
         sync_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     localGuideId,
     serverQuestionId,
     questionKind,
@@ -183,6 +190,7 @@ export async function createAnswer(
     safeLocation.locationCapturedAt ?? null,
     safeLocation.locationLabel ?? null,
     safeLocation.externalPlaceId ?? null,
+    safeLocation.locationSource ?? null,
     now,
     now
   );

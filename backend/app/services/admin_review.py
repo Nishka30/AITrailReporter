@@ -200,8 +200,15 @@ def list_review_queue(
     # reintroducing the N+1 pattern that was deliberately removed.
     points = {
         obs.id: (float(obs.latitude), float(obs.longitude))
-        for obs, _mod, _kt, _sub, _guide in rows
-        if obs.latitude is not None and obs.longitude is not None
+        for obs, _mod, _kt, sub, _guide in rows
+        if obs.latitude is not None
+        and obs.longitude is not None
+        # Already has an authoritative name from the parent Submission --
+        # display priority (describeContributionLocation) always shows
+        # location_label first, so skip the PostGIS lookup entirely rather
+        # than compute a result the UI would never show. Mirrors the same
+        # optimization in admin_submission_reviews.py.
+        and not sub.location_label
     }
     nearest_places = geographic_context_service.batch_nearest_known_places(db, points)
     items = [

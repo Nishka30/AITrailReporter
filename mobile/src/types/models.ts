@@ -409,6 +409,14 @@ export interface LocalAnswer {
   locationCapturedAt: string | null;
   locationLabel: string | null;
   externalPlaceId: string | null;
+  /** 'gps_live' for a real device fix taken by LocationCaptureField,
+   * 'user_selected' when this location instead came from the guide's
+   * currently selected TrailMind Location (see AnswerQuestionScreen's
+   * placeToCapturedLocation). Null alongside latitude/longitude when there's
+   * no location at all. Answers created before this field existed are also
+   * null here even though they were always a live GPS fix in practice --
+   * answerLocationWire.ts falls back to 'gps_live' for exactly that case. */
+  locationSource: string | null;
   /** Admin-approval status (Step 19) -- see the identical fields on
    * LocalCapture above for the full contract. */
   reviewStatus: SubmissionReviewStatus | null;

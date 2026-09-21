@@ -40,7 +40,7 @@ export default function CreateNoteScreen({ guide, onDone }: Props) {
           ? {
               latitude: location.latitude,
               longitude: location.longitude,
-              locationSource: 'gps_live',
+              locationSource: location.locationSource,
               locationAccuracyMeters: location.accuracyMeters,
               locationCapturedAt: location.capturedAt,
               locationLabel: location.label,

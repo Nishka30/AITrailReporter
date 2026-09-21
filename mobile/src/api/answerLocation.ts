@@ -39,9 +39,14 @@ export function answerLocationWire(answer: LocalAnswer): AnswerLocationWire {
   return {
     latitude: answer.latitude,
     longitude: answer.longitude,
-    // The only way an answer gets coordinates today is the guide explicitly
-    // tapping "Capture Location", which is a live device fix by definition.
-    location_source: 'gps_live',
+    // 'gps_live' for a real device fix, 'user_selected' when this came from
+    // the guide's currently selected TrailMind Location instead (see
+    // AnswerQuestionScreen's placeToCapturedLocation). Falls back to
+    // 'gps_live' for any answer synced before locationSource existed on
+    // LocalAnswer -- every one of those WAS a live GPS fix in practice,
+    // since LocationCaptureField was the only source of a captured answer
+    // location at the time.
+    location_source: answer.locationSource ?? 'gps_live',
     ...(answer.locationAccuracyMeters != null
       ? { location_accuracy_meters: answer.locationAccuracyMeters }
       : {}),

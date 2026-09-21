@@ -496,7 +496,22 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     currentDbVersion = 15;
   }
 
-  // Future schema changes: add `if (currentDbVersion === 15) { ...; currentDbVersion = 16; }`
+  if (currentDbVersion === 15) {
+    // v15 -> v16: track WHERE an answer's captured location actually came
+    // from. Every pre-existing captured-location answer was necessarily a
+    // live GPS fix (LocationCaptureField was the only source until this
+    // version), so leaving this null on old rows is safe --
+    // answerLocationWire.ts treats a null locationSource as 'gps_live' for
+    // exactly that reason. New answers set it explicitly: 'gps_live' for a
+    // real device fix, 'user_selected' when AnswerQuestionScreen pre-filled
+    // it from the guide's currently selected TrailMind Location.
+    await db.execAsync(`
+      ALTER TABLE local_answer ADD COLUMN location_source TEXT;
+    `);
+    currentDbVersion = 16;
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 16) { ...; currentDbVersion = 17; }`
 
   await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
 }

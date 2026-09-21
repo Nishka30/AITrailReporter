@@ -12,6 +12,7 @@ import {
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
+import type { PlaceCandidate } from '../api/placeCandidates';
 import type { PlaceQuestion } from '../api/placeQuestions';
 import type { Question } from '../api/questions';
 import type { RecordedAudio } from '../audio/audioRecordingService';
@@ -114,8 +115,32 @@ export function targetFromPlaceQuestion(
 type Props = {
   guide: LocalGuide;
   target: AnswerTarget;
+  /** The TrailMind Location the guide has explicitly selected at the tab
+   * level (RootNavigator's selectedPlace), if any -- NOT the question's own
+   * target/subject, which is a separate concept (see targetFromQuestion's
+   * placeLine). Used only to PRE-FILL the location field below with a
+   * visible, removable default -- never silently attached. A guide who
+   * clears it (or never had a place selected) gets exactly the pre-existing
+   * behavior: the backend falls back to the question's own target
+   * coordinates, untouched. */
+  place: PlaceCandidate | null;
   onDone: () => void;
 };
+
+function placeToCapturedLocation(place: PlaceCandidate): CapturedContributionLocation {
+  return {
+    latitude: place.latitude,
+    longitude: place.longitude,
+    accuracyMeters: null,
+    // Not a live device fix -- honestly null rather than claiming "now" was
+    // when this position was established (see CapturedContributionLocation's
+    // own docstring).
+    capturedAt: null,
+    label: place.name,
+    externalPlaceId: place.externalPlaceId,
+    locationSource: 'user_selected',
+  };
+}
 
 /**
  * Answer composition for one question (Step 13, restyled Step 15, extended to
@@ -131,7 +156,7 @@ type Props = {
  * that answer has synced yet), the compose form is never shown again — there
  * is no edit/re-answer flow.
  */
-export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
+export default function AnswerQuestionScreen({ guide, target, place, onDone }: Props) {
   const db = useSQLiteContext();
   const [existingAnswer, setExistingAnswer] = useState<LocalAnswer | null | undefined>(undefined);
   const [text, setText] = useState('');
@@ -141,10 +166,16 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
   const [voice, setVoice] = useState<RecordedAudio | null>(null);
   const [photo, setPhoto] = useState<AttachedPhoto | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
-  // Where the guide is answering FROM. Never pre-filled from the app's
-  // last-known position: an answer given 2km from where the app last
-  // recorded a fix would otherwise silently inherit that stale place.
-  const [location, setLocation] = useState<CapturedContributionLocation | null>(null);
+  // Where the guide is answering FROM. Pre-filled from the currently
+  // selected Location (if any) as a VISIBLE, editable default -- see
+  // placeToCapturedLocation and the Props.place doc above. Never silently
+  // inherited from a stale last-known GPS fix: that's still true, this is a
+  // different, explicit signal (the guide chose this place themselves,
+  // recently, at the tab level). The guide can Remove or Update it before
+  // saving, so nothing here is a forced attachment.
+  const [location, setLocation] = useState<CapturedContributionLocation | null>(() =>
+    place ? placeToCapturedLocation(place) : null
+  );
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
 
   function applyPhotoResult(result: PhotoPickResult) {
@@ -235,8 +266,9 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
           localPhotoUri: photo?.uri ?? null,
           photoContentType: photo?.contentType ?? null,
         },
-        // Null throughout when the guide didn't capture one -- the server
-        // then derives the coordinate exactly as it did before this existed.
+        // Null throughout when there's no location at all (no place was
+        // selected AND the guide didn't capture one) -- the server then
+        // derives the coordinate exactly as it did before this existed.
         {
           latitude: location?.latitude ?? null,
           longitude: location?.longitude ?? null,
@@ -244,6 +276,7 @@ export default function AnswerQuestionScreen({ guide, target, onDone }: Props) {
           locationCapturedAt: location?.capturedAt ?? null,
           locationLabel: location?.label ?? null,
           externalPlaceId: location?.externalPlaceId ?? null,
+          locationSource: location?.locationSource ?? null,
         }
       );
       setJustSaved(true);

@@ -111,6 +111,12 @@ def _submissions_needing_nearest_place(
     for _review, submission, _guide in rows:
         if submission.source_place_question_id is not None:
             continue  # already has a CONFIRMED place, no lookup needed
+        if submission.location_label:
+            continue  # already has an authoritative name -- display priority
+            # (describeContributionLocation) always shows location_label
+            # first, so a nearest-place result here would never be shown;
+            # skipping it saves real PostGIS work on every already-labeled
+            # row, on every page load.
         if submission.latitude is not None and submission.longitude is not None:
             points[submission.id] = (float(submission.latitude), float(submission.longitude))
     return points

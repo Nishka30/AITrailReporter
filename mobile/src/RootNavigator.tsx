@@ -168,6 +168,13 @@ export default function RootNavigator() {
       <AnswerQuestionScreen
         guide={guide}
         target={answerTarget}
+        // The guide's currently selected Location, if any -- lets the answer
+        // screen pre-fill (visibly, removably) the same place Explore/
+        // Questions are already scoped to, instead of leaving every answer's
+        // own location to depend solely on a fresh GPS capture. See
+        // AnswerQuestionScreen's Props.place doc for why this is a pre-fill,
+        // never a forced overwrite of the question's own target.
+        place={selectedPlace}
         onDone={() => closePushed('questions')}
       />
     );

@@ -20,8 +20,11 @@ export interface CapturedContributionLocation {
   latitude: number;
   longitude: number;
   accuracyMeters: number | null;
-  /** ISO-8601 — when the DEVICE fixed this position, not when it synced. */
-  capturedAt: string;
+  /** ISO-8601 — when the DEVICE fixed this position, not when it synced. Null
+   * when this value did not come from a live device fix at all (e.g. it was
+   * pre-filled from an explicitly selected Location) — inventing a capture
+   * timestamp for a non-GPS value would overstate what's actually known. */
+  capturedAt: string | null;
   /** Human-readable place name, best-effort. Null when the lookup failed or
    * the guide is somewhere with no known/discoverable place — the coordinate
    * is still perfectly valid and is what actually matters. */
@@ -30,6 +33,13 @@ export interface CapturedContributionLocation {
    * backend reuse the exact same shared Location row rather than re-deriving
    * one from proximity alone. */
   externalPlaceId: string | null;
+  /** Where THIS value came from -- 'gps_live' for a real device fix taken by
+   * this control, 'user_selected' for a value seeded from an explicitly
+   * chosen TrailMind Location (e.g. AnswerQuestionScreen pre-filling from the
+   * guide's currently selected place). Callers use this to set the
+   * Submission's own location_source honestly instead of assuming every
+   * captured value is a live GPS reading. */
+  locationSource: 'gps_live' | 'user_selected';
 }
 
 type Status = 'idle' | 'capturing' | 'denied' | 'error';
@@ -105,7 +115,15 @@ export default function LocationCaptureField({
       // itself succeeded, which is what this control promises.
     }
 
-    onChange({ latitude, longitude, accuracyMeters, capturedAt: recordedAt, label, externalPlaceId });
+    onChange({
+      latitude,
+      longitude,
+      accuracyMeters,
+      capturedAt: recordedAt,
+      label,
+      externalPlaceId,
+      locationSource: 'gps_live',
+    });
     setStatus('idle');
     setMessage(null);
   }
@@ -138,6 +156,20 @@ export default function LocationCaptureField({
             accessibilityLabel="Recapture location"
           >
             <Text style={styles.recaptureText}>{capturing ? 'Updating…' : 'Update'}</Text>
+          </Pressable>
+          {/* Never a forced attachment -- this matters most for a value this
+              control didn't itself capture (e.g. pre-filled from a selected
+              Location): the guide must be able to remove it, not just
+              overwrite it with a fresh GPS fix. */}
+          <Pressable
+            onPress={() => onChange(null)}
+            disabled={disabled || capturing}
+            hitSlop={8}
+            style={styles.removeButton}
+            accessibilityRole="button"
+            accessibilityLabel="Remove location"
+          >
+            <Text style={styles.removeText}>Remove</Text>
           </Pressable>
         </View>
       ) : (
@@ -207,5 +239,7 @@ const styles = StyleSheet.create({
   capturedDetail: { ...type.caption, color: colors.inkFaint },
   recaptureButton: { paddingVertical: spacing.xs, paddingHorizontal: spacing.sm },
   recaptureText: { ...type.captionBold, color: colors.info },
+  removeButton: { paddingVertical: spacing.xs, paddingHorizontal: spacing.sm },
+  removeText: { ...type.captionBold, color: colors.fix },
   message: { ...type.caption, color: colors.fix },
 });

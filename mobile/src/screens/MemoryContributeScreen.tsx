@@ -180,7 +180,7 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
             ...prev,
             latitude: next.latitude,
             longitude: next.longitude,
-            locationSource: 'gps_live',
+            locationSource: next.locationSource,
             locationLabel: next.label,
             locationAccuracyMeters: next.accuracyMeters,
             locationCapturedAt: next.capturedAt,
