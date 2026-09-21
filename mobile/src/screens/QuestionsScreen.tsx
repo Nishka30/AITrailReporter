@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { ApiError, NetworkError } from '../api/client';
 import { describeCandidateKind, type PlaceCandidate } from '../api/placeCandidates';
 import { listPopularQuestions, type GuidePlaceQuestions, type PlaceQuestion } from '../api/placeQuestions';
-import { listAssignedQuestions, type Question } from '../api/questions';
+import { claimQuestion, listAssignedQuestions, listRelevantQuestions, type Question } from '../api/questions';
 import { placeQuestionKindIcon } from '../explore/placeQuestionPrompts';
 import {
   Badge,
@@ -274,6 +274,17 @@ export default function QuestionsScreen({
   // a new place gets its own honest loading state rather than reusing the
   // previous place's.
   const [popularLoaded, setPopularLoaded] = useState(false);
+  // Existing, already-generated knowledge-gap questions near the CHOSEN
+  // place (proximity feature) -- a third, independent source again, same
+  // reasoning as popularLoaded: it can genuinely still be in flight after
+  // the assigned-questions fetch resolves, and a place change deserves its
+  // own fresh "have we heard back yet?" state.
+  const [relevant, setRelevant] = useState<Question[]>([]);
+  const [relevantLoaded, setRelevantLoaded] = useState(false);
+  // The one relevant-question card currently being claimed (auto-claim on
+  // view) -- guards against a double-tap firing two claim requests for the
+  // same question while the first is still in flight.
+  const [claimingId, setClaimingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!guide.serverGuideId) {
@@ -316,6 +327,24 @@ export default function QuestionsScreen({
       // just be `questions === null` (that guards the OTHER fetch).
       setPopularLoaded(true);
     }
+
+    // Proximity-relevant questions load separately too, same "own try/catch,
+    // own loaded flag, never touches `error`/the badge" pattern as popular
+    // questions above -- and only when a place is actually chosen, since
+    // there is nothing to be near otherwise (no fan-out to raw GPS, no
+    // continuous tracking, matching the existing selectedPlace-only model).
+    if (place?.id) {
+      try {
+        setRelevant(await listRelevantQuestions(place.id));
+      } catch {
+        setRelevant([]);
+      } finally {
+        setRelevantLoaded(true);
+      }
+    } else {
+      setRelevant([]);
+      setRelevantLoaded(true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, guide.id, guide.serverGuideId, place?.id]);
 
@@ -329,14 +358,51 @@ export default function QuestionsScreen({
   // so this only needs to clear the flag -- the effect above puts it back.
   useEffect(() => {
     setPopularLoaded(false);
+    setRelevantLoaded(false);
   }, [place?.id]);
+
+  // Auto-claim on view: makes the tapping guide the current assignee of a
+  // proximity-surfaced question (server-side reassignment if someone else
+  // held it and hadn't answered) so the existing, unmodified answer flow
+  // just works -- see backend/app/services/question_answers.py::
+  // claim_question. Skipped entirely when this guide already holds the
+  // current assignment (the common case once they've claimed it once).
+  const handleSelectRelevantQuestion = useCallback(
+    async (question: Question) => {
+      if (!guide.serverGuideId || claimingId) return;
+      if (question.assignment?.guideId === guide.serverGuideId) {
+        onSelectQuestion(question);
+        return;
+      }
+      setClaimingId(question.id);
+      try {
+        const claimed = await claimQuestion(question.id, guide.serverGuideId);
+        onSelectQuestion(claimed);
+      } catch {
+        // Someone else finished answering it between the list read and this
+        // tap (a real, accepted race -- see claim_question's own docstring)
+        // -- refresh instead of opening a now-stale answer screen.
+        await refresh();
+      } finally {
+        setClaimingId(null);
+      }
+    },
+    [guide.serverGuideId, claimingId, onSelectQuestion, refresh]
+  );
 
   // Spinner shows only for a real pull; background loads use the inline
   // "Loading questions…" state below.
   const { pulling, onPull } = usePullToRefresh(refresh);
 
-  const needsAttention = questions?.filter((q) => q.assignment?.status !== 'completed') ?? [];
+  const rawNeedsAttention = questions?.filter((q) => q.assignment?.status !== 'completed') ?? [];
   const answered = questions?.filter((q) => q.assignment?.status === 'completed') ?? [];
+
+  // Dedup rule (stable id, never question text): a question already shown
+  // under Location-Specific Questions never repeats under Still True? --
+  // Location-Specific claims it first since it's the more specific reason
+  // it's being asked right now.
+  const relevantIds = new Set(relevant.map((q) => q.id));
+  const needsAttention = rawNeedsAttention.filter((q) => !relevantIds.has(q.id));
 
   // The two asks this tab exists for, split by SOURCE -- which is also the
   // split the guide experiences:
@@ -371,7 +437,8 @@ export default function QuestionsScreen({
   // Counts as "something to show" even with an empty list: a calm
   // "researching…" message is the honest state here, not the same
   // "No questions right now" shown when there is truly nothing left to ask.
-  const hasAnything = (questions?.length ?? 0) > 0 || placeQuestions.length > 0 || stillResearching;
+  const hasAnything =
+    (questions?.length ?? 0) > 0 || placeQuestions.length > 0 || relevant.length > 0 || stillResearching;
 
   // Bounded, self-terminating auto-refresh while research is in flight -- an
   // optimization, not a requirement: the pipeline runs regardless of whether
@@ -459,19 +526,20 @@ export default function QuestionsScreen({
         />
       ) : error ? (
         <ErrorState message={error} onRetry={refresh} retrying={loading} />
-      ) : loading && (questions === null || !popularLoaded) ? (
-        // Stays up until BOTH sources have reported in at least once for
-        // this place -- the assigned-questions fetch (fast, place-
-        // independent) and the place-scoped one behind the research pipeline
-        // (which can genuinely take a little while for a freshly chosen
-        // place). Previously this only waited on the first of the two, so
-        // the screen could flip to "No questions right now" while the second
-        // was still in flight.
+      ) : loading && (questions === null || !popularLoaded || !relevantLoaded) ? (
+        // Stays up until ALL THREE sources have reported in at least once
+        // for this place -- the assigned-questions fetch (fast, place-
+        // independent), the place-scoped research pipeline, and the
+        // proximity-relevant gap-questions read (fast, but must not race
+        // ahead and claim "no questions" before it's actually answered).
+        // Previously this only waited on the first two, so the screen could
+        // flip to "No questions right now" while a source was still in
+        // flight.
         <View style={styles.loadingWrap}>
           <EmptyState
             icon="hourglass-outline"
             title={
-              place && !popularLoaded
+              place && (!popularLoaded || !relevantLoaded)
                 ? 'Finding questions for this location…'
                 : 'Loading questions…'
             }
@@ -538,6 +606,33 @@ export default function QuestionsScreen({
                   </Text>
                 </View>
               </View>
+            </View>
+          ) : null}
+
+          {/* ── 1.5 LOCATION-SPECIFIC QUESTIONS ──────────────────────────
+              Existing, already-generated knowledge-gap questions near the
+              chosen place -- distinct from "About this place" above (that's
+              AI-researched web content; this is the SAME knowledge-gap
+              system as "Still true?" below, just filtered to this place
+              instead of this guide's own assignments). Never generates
+              anything here -- if it's not already a persisted question, it
+              simply doesn't show up. */}
+          {relevant.length > 0 ? (
+            <View style={styles.popularSection}>
+              <SectionHeader title="Location-Specific Questions" meta={String(relevant.length)} />
+              <Text style={styles.popularIntro}>
+                {place
+                  ? `Existing questions near ${place.name} that could use a fresh answer.`
+                  : 'Existing questions near here that could use a fresh answer.'}
+              </Text>
+              {relevant.map((q) => (
+                <QuestionCard
+                  key={q.id}
+                  question={q}
+                  localAnswer={localAnswers.find((a) => a.serverQuestionId === q.id) ?? null}
+                  onPress={() => handleSelectRelevantQuestion(q)}
+                />
+              ))}
             </View>
           ) : null}
 

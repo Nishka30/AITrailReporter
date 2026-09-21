@@ -8,7 +8,7 @@ this module; extraction remains a separate, explicit action (POST
 submissions -- this step does not change when/how extraction is triggered.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -85,6 +85,77 @@ class AnswerConflictError(Exception):
             f"client_answer_id {existing.client_answer_id!r} was already used "
             "with different answer data"
         )
+
+
+class QuestionNotGeneratedError(Exception):
+    """Raised when claiming a question that isn't in 'generated' status yet
+    (pending/processing/failed) -- nothing to claim or answer."""
+
+    def __init__(self, question_id: UUID):
+        self.question_id = question_id
+        super().__init__(f"Question {question_id} has not finished generating")
+
+
+def claim_question(db: Session, question_id: UUID, guide_id: UUID) -> tuple[QuestionAssignment, bool]:
+    """Proximity feature's 'auto-claim on view': makes `guide_id` the CURRENT
+    assignee of a question, so they can answer it through the existing,
+    unmodified submit_answer flow below. Returns (assignment, claimed) --
+    claimed is False when this guide already held the current assignment
+    (idempotent replay of opening the same question twice).
+
+    Never mutates an existing QuestionAssignment row's guide_id -- creates a
+    NEW row instead, and marks the previous one 'cancelled' if it was being
+    superseded. This is exactly the extension QuestionAssignment's own
+    docstring already reserved ("a question may eventually be REASSIGNED...
+    a new QuestionAssignment row for the same question_id, a different
+    guide_id... schema is simply not artificially constrained against it") --
+    not a new mechanism, just the first code path that uses it. A guide
+    reachable via the geographic-relevance query (questions.py::
+    list_geographically_relevant_questions) is, by construction, someone the
+    backend has already deemed near enough to legitimately pick this
+    question up; claiming performs no further trust decision beyond that.
+
+    Raises QuestionNotFoundError, QuestionNotGeneratedError, or
+    AlreadyAnsweredError (someone else finished answering it between the
+    list read and this claim -- a real, accepted race, same category as
+    generate_question's own documented revalidation gap).
+    """
+    question = db.get(Question, question_id)
+    if question is None:
+        raise QuestionNotFoundError(question_id)
+    if question.status != "generated":
+        raise QuestionNotGeneratedError(question_id)
+
+    stmt = (
+        select(QuestionAssignment)
+        .where(QuestionAssignment.question_id == question_id)
+        .order_by(QuestionAssignment.assigned_at.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    current = db.execute(stmt).scalar_one_or_none()
+
+    if current is not None and current.status == "completed":
+        db.commit()
+        raise AlreadyAnsweredError(current)
+
+    if current is not None and current.guide_id == guide_id and current.status != "cancelled":
+        db.commit()
+        return current, False
+
+    if current is not None and current.status in ("assigned", "active"):
+        current.status = "cancelled"
+
+    new_assignment = QuestionAssignment(
+        question_id=question_id,
+        guide_id=guide_id,
+        status="assigned",
+        assigned_at=datetime.now(timezone.utc),
+    )
+    db.add(new_assignment)
+    db.commit()
+    db.refresh(new_assignment)
+    return new_assignment, True
 
 
 def reward_rule_key_for_question(db: Session, question: Question) -> str:

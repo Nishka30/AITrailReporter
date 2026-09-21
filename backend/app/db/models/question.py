@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 
+from geoalchemy2 import Geography
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -66,15 +67,18 @@ class Question(Base):
     # reclassifies it as 'stale' or 'fresh' (see app/services/questions.py).
     gap_state: Mapped[str] = mapped_column(String(20), nullable=False)
 
-    # No `geog` column here (unlike Observation/Location/GuideLocation) --
-    # deliberately: nothing in this step queries Question spatially (no
-    # "questions near me" endpoint exists yet), and Submission.latitude/
-    # longitude is the existing precedent in this codebase for a coordinate
-    # pair stored as plain columns without PostGIS geography when nothing yet
-    # needs a spatial query against it. Add geog + an index exactly when a
-    # real query needs it, not before.
     target_latitude: Mapped[float] = mapped_column(Numeric(9, 6), nullable=False)
     target_longitude: Mapped[float] = mapped_column(Numeric(9, 6), nullable=False)
+    # Added once a real spatial query needed it (proximity-based question
+    # surfacing): existing questions near a guide's currently selected
+    # Location, staleness-prioritized, without live-recomputing knowledge
+    # state and without a second stale-question system. Always set from
+    # target_latitude/target_longitude at creation time (see
+    # app/services/questions.py); never independently updatable.
+    geog: Mapped[object | None] = mapped_column(
+        Geography(geometry_type="POINT", srid=4326, from_text="ST_GeogFromText", name="geography"),
+        nullable=True,
+    )
 
     # Snapshot from geographic_context_service.resolve_geographic_context at
     # generation time -- a denormalized copy (name + distance), not a live FK

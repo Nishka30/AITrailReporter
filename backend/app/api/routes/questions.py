@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.schemas.question import QuestionCreate, QuestionRead
+from app.schemas.question import QuestionClaimCreate, QuestionCreate, QuestionRead
 from app.schemas.question_answer import QuestionAnswerCreate, QuestionAnswerRead
 from app.services import guides as guide_service
 from app.services import knowledge_state as knowledge_state_service
@@ -14,6 +14,14 @@ from app.services import question_answers as answer_service
 from app.services import questions as question_service
 
 router = APIRouter(prefix="/api/v1/questions", tags=["questions"])
+
+# Separate, prefix-less router for the ONE route that is anchored on a
+# Location rather than a Question id -- kept in this file (not
+# place_questions.py) because it reads the knowledge-gap Question entity,
+# and place_questions.py's own docstring is explicit that its router is
+# deliberately kept clear of anything that touches that entity. Registered
+# alongside `router` in app/main.py.
+location_questions_router = APIRouter(tags=["questions"])
 
 
 @router.post("", response_model=QuestionRead)
@@ -137,3 +145,46 @@ def get_question_answer(question_id: UUID, answer_id: UUID, db: Session = Depend
     if answer is None or answer.question_id != question_id:
         raise HTTPException(status_code=404, detail="Answer not found")
     return answer
+
+
+@router.post("/{question_id}/claim", response_model=QuestionRead)
+def claim_question(question_id: UUID, payload: QuestionClaimCreate, db: Session = Depends(get_db)):
+    """Proximity feature's 'auto-claim on view': the mobile app calls this
+    right before opening the answer screen for a question surfaced by
+    GET .../locations/{location_id}/relevant-questions that isn't already
+    assigned to this guide. Makes `guide_id` the current assignee (see
+    question_answers.py::claim_question for the reassignment semantics),
+    so the existing, unmodified POST .../answers flow below then just works.
+    Never generates anything and never touches questions already assigned to
+    this same guide (idempotent no-op)."""
+    guide = guide_service.get_guide(db, payload.guide_id)
+    if guide is None:
+        raise HTTPException(status_code=404, detail="Guide not found")
+
+    try:
+        answer_service.claim_question(db, question_id, payload.guide_id)
+    except answer_service.QuestionNotFoundError:
+        raise HTTPException(status_code=404, detail="Question not found")
+    except answer_service.QuestionNotGeneratedError:
+        raise HTTPException(status_code=400, detail="This question has not finished generating yet")
+    except answer_service.AlreadyAnsweredError:
+        raise HTTPException(status_code=409, detail="This question has already been answered")
+
+    question = question_service.get_question(db, question_id)
+    return question_service.build_question_read(db, question)
+
+
+@location_questions_router.get(
+    "/api/v1/locations/{location_id}/relevant-questions", response_model=list[QuestionRead]
+)
+def list_relevant_questions(location_id: UUID, db: Session = Depends(get_db)):
+    """Existing, already-generated questions geographically relevant to one
+    known Location, most urgent/stale first -- read-only, no LLM call, no
+    live knowledge-state recomputation. See
+    questions.py::list_geographically_relevant_questions for the full
+    contract (per-knowledge-type radius, single query, staleness-first
+    ranking, excludes already-completed questions)."""
+    try:
+        return question_service.list_geographically_relevant_questions(db, location_id)
+    except question_service.LocationNotFoundError:
+        raise HTTPException(status_code=404, detail="Location not found")

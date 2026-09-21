@@ -164,3 +164,32 @@ export async function listAssignedQuestions(guideId: string): Promise<Question[]
   const wire = await apiRequest<QuestionWire[]>(`/api/v1/guides/${guideId}/questions`);
   return wire.map(questionFromWire);
 }
+
+/**
+ * GET /api/v1/locations/{locationId}/relevant-questions. Read-only, exactly
+ * like listAssignedQuestions -- existing, already-generated questions near
+ * the given known Location, staleness-prioritized. Never triggers
+ * generation and never blocks on AI research; a question this returns may
+ * belong to no one, or to a different guide who hasn't answered yet -- see
+ * claimQuestion below, which is what makes one of these actually answerable
+ * by the CURRENT guide.
+ */
+export async function listRelevantQuestions(locationId: string): Promise<Question[]> {
+  const wire = await apiRequest<QuestionWire[]>(`/api/v1/locations/${locationId}/relevant-questions`);
+  return wire.map(questionFromWire);
+}
+
+/**
+ * POST /api/v1/questions/{questionId}/claim. Call this right before opening
+ * the answer screen for a question that came from listRelevantQuestions and
+ * isn't already assigned to this guide -- makes this guide the current
+ * assignee so the existing answer flow (POST .../answers) just works.
+ * Idempotent/cheap to call even when the guide already holds it.
+ */
+export async function claimQuestion(questionId: string, guideId: string): Promise<Question> {
+  const wire = await apiRequest<QuestionWire>(`/api/v1/questions/${questionId}/claim`, {
+    method: 'POST',
+    body: { guide_id: guideId },
+  });
+  return questionFromWire(wire);
+}

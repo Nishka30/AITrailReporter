@@ -8,13 +8,15 @@ phrasing + persistence + assignment on top.
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.db.geo import make_point
 from app.db.models.guide import Guide
 from app.db.models.knowledge_type_config import KnowledgeTypeConfig
+from app.db.models.location import Location
 from app.db.models.question import Question
 from app.db.models.question_assignment import QuestionAssignment
 from app.schemas.knowledge_decision import RankedGap
@@ -34,6 +36,19 @@ from app.services.question_generation.validation import (
     InvalidQuestionOutputError,
     validate_question_output,
 )
+
+# Mirrors knowledge_decisions.py's _GAP_STATE_URGENCY_RANK -- this module
+# does not recompute urgency, it just re-applies the SAME precedence to
+# already-generated Question rows instead of live-computed gaps. Kept as a
+# separate constant (not imported) because it indexes a different thing --
+# Question.gap_state (a persisted snapshot string), not KnowledgeTypeState.
+_GAP_STATE_URGENCY_RANK: dict[str, int] = {"missing": 0, "stale": 1, "aging": 2}
+
+
+class LocationNotFoundError(Exception):
+    def __init__(self, location_id: UUID):
+        self.location_id = location_id
+        super().__init__(f"Location {location_id} not found")
 
 _GAP_RESOLVED_MESSAGE = (
     "The underlying knowledge gap was resolved (became fresh, or is no longer "
@@ -180,6 +195,91 @@ def list_questions_for_guide(
     return list(db.execute(stmt).scalars().all())
 
 
+def _question_sort_key(question: Question, distance_meters: float) -> tuple:
+    """Mirrors knowledge_decisions.py::_gap_sort_key's precedence (safety
+    first, then gap-state urgency, then priority, then severity) over
+    already-generated Question rows instead of live gaps, plus distance as a
+    final tiebreaker -- proximity is what makes this list exist at all, but
+    it only ever breaks ties among equally-urgent questions, never overrides
+    urgency itself."""
+    return (
+        not question.safety_critical,
+        _GAP_STATE_URGENCY_RANK.get(question.gap_state, 99),
+        -question.default_priority,
+        -question.staleness_severity_hours,
+        distance_meters,
+    )
+
+
+def list_geographically_relevant_questions(
+    db: Session, location_id: UUID, limit: int = 20
+) -> list[QuestionRead]:
+    """Existing, already-generated questions near a known Location, most
+    urgent/stale first -- the read half of the proximity feature. Never
+    generates anything (no LLM call, ever, from this function) and never
+    recomputes knowledge state live: it reuses exactly the ranking snapshot
+    (safety_critical/gap_state/default_priority/staleness_severity_hours)
+    Step 11 already wrote onto each Question row at generation time.
+
+    Anchored on the CALLER'S already-resolved Location (its id), not a raw
+    lat/lon and not a fan-out across every nearby known place -- the caller
+    (mobile's selectedPlace) already knows which single place it means, so
+    there is no second geographic search here and no risk of flooding the
+    user with every place's questions at once.
+
+    Radius is read PER-QUESTION from that question's own knowledge type's
+    KnowledgeTypeConfig.geographic_relevance_radius_meters (never a
+    hardcoded constant) -- one query total, via a JOIN, not one query per
+    candidate question.
+
+    Excludes questions whose current assignment is already 'completed' (the
+    guide-facing "Answered" list already covers those) -- everything else
+    (unassigned, assigned-but-not-yet-answered, or cancelled) is eligible,
+    since claiming happens separately (see question_answers.py::claim_question)
+    only when a guide actually opens one to answer it.
+    """
+    location = db.get(Location, location_id)
+    if location is None:
+        raise LocationNotFoundError(location_id)
+
+    point = make_point(float(location.latitude), float(location.longitude))
+    distance = func.ST_Distance(Question.geog, point).label("distance_meters")
+
+    latest_assignment = (
+        select(
+            QuestionAssignment.question_id,
+            QuestionAssignment.status,
+            func.row_number()
+            .over(
+                partition_by=QuestionAssignment.question_id,
+                order_by=QuestionAssignment.assigned_at.desc(),
+            )
+            .label("rn"),
+        )
+        .subquery()
+    )
+    current_status = (
+        select(latest_assignment.c.status)
+        .where(latest_assignment.c.question_id == Question.id, latest_assignment.c.rn == 1)
+        .correlate(Question)
+        .scalar_subquery()
+    )
+
+    stmt = (
+        select(Question, distance)
+        .join(KnowledgeTypeConfig, KnowledgeTypeConfig.id == Question.knowledge_type_id)
+        .where(
+            Question.status == "generated",
+            Question.geog.isnot(None),
+            func.ST_DWithin(Question.geog, point, KnowledgeTypeConfig.geographic_relevance_radius_meters),
+            or_(current_status.is_(None), current_status != "completed"),
+        )
+    )
+    rows = db.execute(stmt).all()
+    rows.sort(key=lambda row: _question_sort_key(row[0], float(row[1])))
+    return [build_question_read(db, question) for question, _distance in rows[:limit]]
+
+
 def _ensure_compatible(existing: Question, knowledge_type_id, latitude: float, longitude: float) -> None:
     if (
         existing.knowledge_type_id != knowledge_type_id
@@ -243,6 +343,7 @@ def _get_or_create_question_row(
         gap_state=gap.state,
         target_latitude=latitude,
         target_longitude=longitude,
+        geog=make_point(latitude, longitude),
         nearest_known_place_name=nearest_place.name if nearest_place else None,
         nearest_known_place_distance_meters=(
             nearest_place.distance_meters if nearest_place else None

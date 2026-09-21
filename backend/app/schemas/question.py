@@ -49,6 +49,14 @@ class QuestionCreate(BaseModel):
         return value
 
 
+class QuestionClaimCreate(BaseModel):
+    """Request to become the current assignee of a proximity-surfaced
+    question (auto-claim on view) -- see
+    app/services/question_answers.py::claim_question."""
+
+    guide_id: UUID
+
+
 class QuestionAssignmentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
