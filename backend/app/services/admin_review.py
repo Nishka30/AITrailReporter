@@ -37,6 +37,7 @@ from app.schemas.admin import (
 from app.schemas.observation_moderation import ObservationModerationRead
 from app.schemas.submission import SubmissionAudioRead, SubmissionPhotoRead
 from app.schemas.transcription import TranscriptionRead
+from app.schemas.geographic_context import NearestKnownPlace
 from app.services import geographic_context as geographic_context_service
 from app.services import knowledge_state as knowledge_state_service
 
@@ -130,7 +131,7 @@ def _to_item(
     submission: Submission,
     guide: Guide,
     *,
-    include_nearest_known_place: bool = False,
+    nearest_place: NearestKnownPlace | None = None,
 ) -> ReviewQueueItem:
     """Builds one ReviewQueueItem. `latitude`/`longitude` (from the
     Observation itself, copied there from its resolving Submission at
@@ -139,26 +140,22 @@ def _to_item(
     populated here at zero extra query cost -- they are already columns on
     the row this function is handed.
 
-    `nearest_known_place_name`/`_distance_meters` are a SEPARATE, optional
-    enrichment -- "is there a known Location nearby" -- backed by a real
-    PostGIS ST_DWithin query (see geographic_context.py). That query is
-    deliberately NOT run by default: `include_nearest_known_place=False` is
-    the default specifically so the paginated list (list_review_queue) never
-    pays for it -- one extra round trip per row, per page load, purely for
-    a "nearby place" caption nobody is looking at yet. Only get_review_detail
-    (exactly one row) opts in.
+    `nearest_place` is real, optional PostGIS enrichment -- "is there a
+    known Location nearby" -- ALREADY RESOLVED by the caller (batched for a
+    whole page via geographic_context.batch_nearest_known_places, or
+    single-row for a detail read via resolve_geographic_context). This
+    function never queries for it itself, so it costs nothing extra to call
+    per row -- that's what lets list_review_queue show every row's nearby
+    place without the N+1 pattern that was deliberately removed.
     """
     is_new = (datetime.now(timezone.utc) - knowledge_type.created_at) < _NEW_KNOWLEDGE_TYPE_WINDOW
     latitude = float(observation.latitude) if observation.latitude is not None else None
     longitude = float(observation.longitude) if observation.longitude is not None else None
 
-    nearest_known_place_name = None
-    nearest_known_place_distance_meters = None
-    if include_nearest_known_place and latitude is not None and longitude is not None:
-        context = geographic_context_service.resolve_geographic_context(db, latitude, longitude)
-        if context.nearest_known_place is not None:
-            nearest_known_place_name = context.nearest_known_place.name
-            nearest_known_place_distance_meters = context.nearest_known_place.distance_meters
+    nearest_known_place_name = nearest_place.name if nearest_place is not None else None
+    nearest_known_place_distance_meters = (
+        nearest_place.distance_meters if nearest_place is not None else None
+    )
 
     return ReviewQueueItem(
         observation_id=observation.id,
@@ -197,7 +194,20 @@ def list_review_queue(
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
     rows = db.execute(stmt).all()
-    items = [_to_item(db, obs, mod, kt, sub, guide) for obs, mod, kt, sub, guide in rows]
+    # ONE batched PostGIS query for the whole page (see
+    # geographic_context.batch_nearest_known_places), not one per row --
+    # this is what lets the list show a "Near <place>" caption without
+    # reintroducing the N+1 pattern that was deliberately removed.
+    points = {
+        obs.id: (float(obs.latitude), float(obs.longitude))
+        for obs, _mod, _kt, _sub, _guide in rows
+        if obs.latitude is not None and obs.longitude is not None
+    }
+    nearest_places = geographic_context_service.batch_nearest_known_places(db, points)
+    items = [
+        _to_item(db, obs, mod, kt, sub, guide, nearest_place=nearest_places.get(obs.id))
+        for obs, mod, kt, sub, guide in rows
+    ]
     return ReviewQueueResult(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -291,9 +301,15 @@ def get_review_detail(db: Session, observation_id: UUID) -> ReviewDetail | None:
         return None
     observation, moderation, knowledge_type, submission, guide = row
 
+    nearest_place = None
+    if observation.latitude is not None and observation.longitude is not None:
+        context = geographic_context_service.resolve_geographic_context(
+            db, float(observation.latitude), float(observation.longitude)
+        )
+        nearest_place = context.nearest_known_place
     item = _to_item(
         db, observation, moderation, knowledge_type, submission, guide,
-        include_nearest_known_place=True,
+        nearest_place=nearest_place,
     )
 
     transcript = None

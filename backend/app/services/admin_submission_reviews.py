@@ -28,6 +28,7 @@ from app.schemas.admin import (
     ContributionQueueResult,
     RewardBreakdownLine,
 )
+from app.schemas.geographic_context import NearestKnownPlace
 from app.schemas.submission import SubmissionAudioRead, SubmissionPhotoRead
 from app.schemas.submission_review import SubmissionReviewRead
 from app.schemas.transcription import TranscriptionRead
@@ -97,32 +98,22 @@ def _resolve_question_text_and_confirmed_place(
     return None, None, None
 
 
-def _attach_nearest_known_place(
-    db: Session, submission: Submission
-) -> tuple[UUID | None, str | None, float | None]:
-    """(location_id, location_name, location_distance_meters) for the nearest
-    KNOWN Location within settings.geographic_context_radius_meters of a
-    free-form contribution's own raw coordinate -- OPTIONAL ENRICHMENT ONLY,
-    via a real PostGIS ST_DWithin query (geographic_context.py). Callers
-    decide whether this is worth paying for; see get_contribution_detail
-    (yes, one row) vs list_contribution_queue (no -- see this module's
-    docstring on why the list never calls this).
-
-    Honestly reported as an approximation (distance_meters set) rather than
-    presented as if the guide confirmed it. None, None, None when no known
-    place falls within that radius -- which must NEVER be read as "this
-    contribution has no location": check submission.latitude/longitude for
-    that instead, which are already always populated on ContributionQueueItem
-    regardless of whether this function is even called.
+def _submissions_needing_nearest_place(
+    rows: list[tuple[SubmissionReview, Submission, Guide]],
+) -> dict[UUID, tuple[float, float]]:
+    """Which of a PAGE's submissions are even candidates for the nearest-
+    known-place enrichment: free-form contributions (no confirmed place of
+    their own) with a real coordinate. Used to build ONE batched query's
+    input -- see geographic_context.batch_nearest_known_places -- rather
+    than one PostGIS query per row.
     """
-    if submission.latitude is not None and submission.longitude is not None:
-        context = geographic_context_service.resolve_geographic_context(
-            db, float(submission.latitude), float(submission.longitude)
-        )
-        if context.nearest_known_place is not None:
-            place = context.nearest_known_place
-            return place.id, place.name, place.distance_meters
-    return None, None, None
+    points: dict[UUID, tuple[float, float]] = {}
+    for _review, submission, _guide in rows:
+        if submission.source_place_question_id is not None:
+            continue  # already has a CONFIRMED place, no lookup needed
+        if submission.latitude is not None and submission.longitude is not None:
+            points[submission.id] = (float(submission.latitude), float(submission.longitude))
+    return points
 
 
 def _rule_label(rule: RewardRule, fallback: str) -> str:
@@ -172,22 +163,31 @@ def _to_item(
     submission: Submission,
     guide: Guide,
     *,
-    include_nearest_known_place: bool = False,
+    nearest_place: NearestKnownPlace | None = None,
 ) -> ContributionQueueItem:
     """`latitude`/`longitude`/`location_label`/`external_place_id` are always
     populated here at zero extra query cost -- they are plain columns on
-    `submission`, the contribution's OWN authoritative location. The nearest-
-    known-place trio is real, optional PostGIS enrichment and is only
-    resolved when `include_nearest_known_place=True` -- see
-    _attach_nearest_known_place's docstring."""
+    `submission`, the contribution's OWN authoritative location.
+
+    `nearest_place` is real, optional PostGIS enrichment -- "is a known
+    Location nearby" -- ALREADY RESOLVED by the caller (batched for a whole
+    page via geographic_context.batch_nearest_known_places, or single-row
+    for a detail read via resolve_geographic_context). This function never
+    queries for it itself, so it costs nothing extra to call per row.
+    """
     question_text, confirmed_location_id, confirmed_location_name = (
         _resolve_question_text_and_confirmed_place(db, submission)
     )
-    location_id, location_name, location_distance_meters = confirmed_location_id, confirmed_location_name, None
-    if location_id is None and include_nearest_known_place:
-        location_id, location_name, location_distance_meters = _attach_nearest_known_place(
-            db, submission
+    if confirmed_location_id is not None:
+        location_id, location_name, location_distance_meters = (
+            confirmed_location_id, confirmed_location_name, None,
         )
+    elif nearest_place is not None:
+        location_id, location_name, location_distance_meters = (
+            nearest_place.id, nearest_place.name, nearest_place.distance_meters,
+        )
+    else:
+        location_id, location_name, location_distance_meters = None, None, None
     breakdown, total_points = _reward_breakdown(db, submission, review.reward_rule_key)
     return ContributionQueueItem(
         submission_id=submission.id,
@@ -222,7 +222,17 @@ def list_contribution_queue(
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
     rows = db.execute(stmt).all()
-    items = [_to_item(db, review, submission, guide) for review, submission, guide in rows]
+    # ONE batched PostGIS query for the whole page (see
+    # geographic_context.batch_nearest_known_places), not one per row --
+    # this is what lets the list show a "Near <place>" caption without
+    # reintroducing the N+1 pattern that was deliberately removed.
+    nearest_places = geographic_context_service.batch_nearest_known_places(
+        db, _submissions_needing_nearest_place(rows)
+    )
+    items = [
+        _to_item(db, review, submission, guide, nearest_place=nearest_places.get(submission.id))
+        for review, submission, guide in rows
+    ]
     return ContributionQueueResult(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -238,7 +248,13 @@ def get_contribution_detail(db: Session, submission_id: UUID) -> ContributionDet
         return None
     review, submission, guide = row
 
-    item = _to_item(db, review, submission, guide, include_nearest_known_place=True)
+    nearest_place = None
+    if submission.source_place_question_id is None and submission.latitude is not None and submission.longitude is not None:
+        context = geographic_context_service.resolve_geographic_context(
+            db, float(submission.latitude), float(submission.longitude)
+        )
+        nearest_place = context.nearest_known_place
+    item = _to_item(db, review, submission, guide, nearest_place=nearest_place)
 
     transcript = None
     if submission.audio is not None:

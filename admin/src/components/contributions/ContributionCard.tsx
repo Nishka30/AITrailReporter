@@ -2,6 +2,7 @@ import { HelpCircle, Image as ImageIcon, Mic, DollarSign, MapPin } from 'lucide-
 import { Link, useSearchParams } from 'react-router-dom';
 
 import type { ContributionQueueItem } from '../../api/types';
+import { coordinateTooltip, describeContributionLocation } from '../../lib/locationDisplay';
 import StatusBadge, { moderationLabel, moderationTone } from '../ui/StatusBadge';
 
 /**
@@ -50,17 +51,23 @@ export default function ContributionCard({ item }: { item: ContributionQueueItem
           ) : (
             <div className="mt-1 text-sm italic text-ink-faint">No text content</div>
           )}
-          {item.location_name ? (
-            <div className="mt-1 flex items-center gap-1 text-xs text-ink-faint">
-              <MapPin className="h-3.5 w-3.5" />
-              {item.location_distance_meters !== null ? 'Near ' : ''}
-              {item.location_name}
-            </div>
-          ) : (
-            <div className="mt-1 flex items-center gap-1 text-xs italic text-ink-faint">
-              <MapPin className="h-3.5 w-3.5" /> Location not specified
-            </div>
-          )}
+          {(() => {
+            const location = describeContributionLocation({
+              latitude: item.latitude,
+              longitude: item.longitude,
+              locationLabel: item.location_label,
+              nearbyPlaceName: item.location_name,
+              nearbyIsConfirmed: item.location_id != null && item.location_distance_meters === null,
+            });
+            return (
+              <div
+                className={`mt-1 flex items-center gap-1 text-xs text-ink-faint ${location.hasCoordinates ? '' : 'italic'}`}
+                title={coordinateTooltip(item.latitude, item.longitude)}
+              >
+                <MapPin className="h-3.5 w-3.5" /> {location.text}
+              </div>
+            );
+          })()}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1 text-xs text-ink-faint">
           <span className="rounded-full bg-paper-muted px-2 py-0.5">{item.submission_type}</span>

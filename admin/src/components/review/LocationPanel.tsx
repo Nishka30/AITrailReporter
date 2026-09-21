@@ -1,22 +1,20 @@
 import { MapPin } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
+import { coordinateTooltip, describeContributionLocation } from '../../lib/locationDisplay';
+
 /**
  * THE single "where is this contribution" display, shared by every
- * contribution-facing page (Contribution Review, Content Review) so the
- * rule lives in exactly one place: a contribution's OWN stored
- * latitude/longitude is the authoritative answer, always -- a nearby known
- * Location is optional enrichment, shown separately, and NEVER substitutes
- * for or hides the coordinate.
+ * contribution-facing detail page (Contribution Review, Content Review) --
+ * see src/lib/locationDisplay.ts for the shared priority rule this renders
+ * (also used by the list cards, so wording never drifts between the queue
+ * and its detail page).
  *
- * WHY THIS EXISTS: before this component, both detail pages rendered
- * "Location not specified" whenever no known Location fell within the
- * backend's ~500m radius of the contribution's coordinate -- even when that
- * coordinate was a real, valid, non-null value. A contribution reported from
- * genuinely unmapped ground (no nearby discovered POI) looked, to an admin,
- * indistinguishable from one that had no location captured at all. See the
- * "Fix and Simplify Contribution Location Architecture" audit this session
- * for the full incident.
+ * Deliberately does NOT show raw latitude/longitude as the primary text --
+ * an admin reviewer doesn't need to read "40.43605, -74.46057" to do their
+ * job. The exact coordinate stays fully available in the API/database (for
+ * a future map view, and for the Travelers website); here it is attached
+ * only as a hover tooltip on the location line, never printed outright.
  *
  * Two, DELIBERATELY DISTINCT, kinds of "known place" the backend can offer
  * alongside the coordinate -- never conflated, because they mean different
@@ -27,7 +25,7 @@ import { Link } from 'react-router-dom';
  *   - nearestPlace: no confirmed place exists, but a known Location happens
  *     to fall within the backend's proximity radius of the coordinate --
  *     an honest, distance-labeled approximation, never presented as if the
- *     guide confirmed it.
+ *     guide confirmed it. Shown as "Near <place>", not "<place>".
  */
 export default function LocationPanel({
   latitude,
@@ -45,7 +43,14 @@ export default function LocationPanel({
    * on a detail page that does. */
   nearestPlace?: { name: string; locationId: string | null; distanceMeters: number } | null;
 }) {
-  const hasCoordinates = latitude != null && longitude != null;
+  const place = confirmedPlace ?? nearestPlace ?? null;
+  const location = describeContributionLocation({
+    latitude,
+    longitude,
+    locationLabel,
+    nearbyPlaceName: place?.name ?? null,
+    nearbyIsConfirmed: confirmedPlace != null,
+  });
 
   return (
     <div>
@@ -53,40 +58,23 @@ export default function LocationPanel({
         <MapPin className="h-3.5 w-3.5" /> Location
       </h2>
 
-      {hasCoordinates ? (
-        <div>
-          {locationLabel ? <div className="font-bold text-ink">{locationLabel}</div> : null}
-          <div className={locationLabel ? 'text-sm text-ink-soft' : 'font-bold text-ink'}>
-            {latitude.toFixed(5)}, {longitude.toFixed(5)}
-          </div>
-          {confirmedPlace ? (
-            <div className="mt-1 text-xs text-ink-faint">
-              Confirmed place:{' '}
-              {confirmedPlace.locationId ? (
-                <Link to={`/places/${confirmedPlace.locationId}`} className="font-bold text-marigold-deep hover:underline">
-                  {confirmedPlace.name}
-                </Link>
-              ) : (
-                <span className="font-bold">{confirmedPlace.name}</span>
-              )}
-            </div>
-          ) : nearestPlace ? (
-            <div className="mt-1 text-xs italic text-ink-faint">
-              Nearby known place:{' '}
-              {nearestPlace.locationId ? (
-                <Link to={`/places/${nearestPlace.locationId}`} className="text-marigold-deep hover:underline">
-                  {nearestPlace.name}
-                </Link>
-              ) : (
-                nearestPlace.name
-              )}{' '}
-              (~{Math.round(nearestPlace.distanceMeters)}m away)
-            </div>
-          ) : null}
+      <div
+        className={location.hasCoordinates ? 'font-bold text-ink' : 'text-sm italic text-ink-faint'}
+        title={coordinateTooltip(latitude, longitude)}
+      >
+        {place?.locationId ? (
+          <Link to={`/places/${place.locationId}`} className="text-marigold-deep hover:underline">
+            {location.text}
+          </Link>
+        ) : (
+          location.text
+        )}
+      </div>
+      {nearestPlace && !confirmedPlace ? (
+        <div className="mt-0.5 text-xs italic text-ink-faint">
+          (~{Math.round(nearestPlace.distanceMeters)}m away)
         </div>
-      ) : (
-        <span className="text-sm italic text-ink-faint">No location captured for this contribution</span>
-      )}
+      ) : null}
     </div>
   );
 }

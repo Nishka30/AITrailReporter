@@ -2,6 +2,7 @@ import { AlertTriangle, MapPin, Mic, Image as ImageIcon, MessageSquare, Sparkles
 import { Link, useSearchParams } from 'react-router-dom';
 
 import type { ReviewQueueItem } from '../../api/types';
+import { coordinateTooltip, describeContributionLocation } from '../../lib/locationDisplay';
 import StatusBadge, { moderationLabel, moderationTone } from '../ui/StatusBadge';
 
 const SOURCE_ICON: Record<string, typeof Mic> = {
@@ -53,14 +54,22 @@ export default function ObservationCard({ item }: { item: ReviewQueueItem }) {
           {item.evidence ? (
             <div className="mt-1 line-clamp-2 text-sm italic text-ink-faint">“{item.evidence}”</div>
           ) : null}
-          <div className="mt-1 flex items-center gap-1 text-xs text-ink-faint">
-            <MapPin className="h-3.5 w-3.5" />
-            {item.nearest_known_place_name ? (
-              <>Near {item.nearest_known_place_name}</>
-            ) : (
-              <span className="italic">Location not specified</span>
-            )}
-          </div>
+          {(() => {
+            const location = describeContributionLocation({
+              latitude: item.latitude,
+              longitude: item.longitude,
+              locationLabel: item.location_label,
+              nearbyPlaceName: item.nearest_known_place_name,
+            });
+            return (
+              <div
+                className={`mt-1 flex items-center gap-1 text-xs text-ink-faint ${location.hasCoordinates ? '' : 'italic'}`}
+                title={coordinateTooltip(item.latitude, item.longitude)}
+              >
+                <MapPin className="h-3.5 w-3.5" /> {location.text}
+              </div>
+            );
+          })()}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1 text-xs text-ink-faint">
           <span className="flex items-center gap-1">
