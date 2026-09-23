@@ -57,13 +57,6 @@ _UNCLASSIFIED_PENALTY_METERS = 150.0
 # confidence one can still win, but not by treating the two as equal.
 _LOW_CONFIDENCE_PENALTY_METERS = 60.0
 
-# Added per place already chosen from the same category, so six hotels in a
-# row become a hotel, a mall, a station, a hotel... Deliberately small: the
-# task is explicit that diversity must not push obviously closer relevant
-# places out of the list, and at 60m per repeat a genuinely nearer place of a
-# repeated category still beats a further one of a fresh category.
-_REPEAT_CATEGORY_PENALTY_METERS = 60.0
-
 # Names that describe an administrative unit rather than somewhere a guide can
 # stand and report on. Same defensive filter the geocoder applies when naming
 # areas -- repeated here because a Location may predate that filter.
@@ -254,33 +247,57 @@ def _base_score(row) -> float:
     return score
 
 
-def _rank(rows: list, limit: int) -> list:
-    """Greedy selection: repeatedly take whichever remaining place has the
-    lowest adjusted distance, where "adjusted" grows slightly each time its
-    category has already been picked.
+def _rank(rows: list, limit: int, category_cap: int) -> list:
+    """Category-diverse selection: bucket by TrailMind category, rank each
+    bucket by distance/quality, then round-robin across buckets so one dense
+    category cannot fill the whole list on its own.
 
-    Greedy rather than a single sort because the diversity term depends on
-    what has been chosen SO FAR -- it cannot be computed up front. The penalty
-    is small and bounded by design (see _REPEAT_CATEGORY_PENALTY_METERS), so
-    this can reorder near-ties but can never drop an obviously closer place
-    below a much further one.
+    Why buckets-and-rounds rather than one sort with a penalty (the previous
+    approach): a flat per-repeat penalty is either too weak to matter (an
+    8th restaurant still beats a 1st park a little further out, exactly the
+    dominance this replaces) or, made strong enough to fix that, starts
+    dropping obviously closer places for no good reason. Guaranteeing each
+    present category an actual turn is what the task calls for, not a bigger
+    distance fudge.
+
+    Each round orders the categories that still have something to offer by
+    THEIR OWN best remaining candidate's score, and takes one from each in
+    that order -- so distance still decides who goes first within a round,
+    and diversity only decides which category's turn is next, never
+    overrides a closer place with a worse one just to vary the category. A
+    category drops out once it has contributed `category_cap` candidates (a
+    soft ceiling, never a reason to pad a thin list) or has none left.
+    Selection stops once `limit` is reached or every category has dropped
+    out -- so a single real category still fills the list on its own when
+    nothing else is around, exactly as it did before.
+
+    Rows within a bucket are pre-sorted by _base_score, the same
+    distance-plus-confidence adjustment ranking has always used, so ordering
+    inside a category is unchanged from before this function existed.
     """
-    remaining = list(rows)
-    chosen: list = []
-    category_counts: dict[str, int] = {}
+    buckets: dict[str, list] = {}
+    for row in rows:
+        buckets.setdefault(row.category or "?", []).append(row)
+    for bucket in buckets.values():
+        bucket.sort(key=_base_score)
 
-    while remaining and len(chosen) < limit:
-        best_index = 0
-        best_score = float("inf")
-        for index, row in enumerate(remaining):
-            key = row.category or "?"
-            repeats = category_counts.get(key, 0)
-            score = _base_score(row) + repeats * _REPEAT_CATEGORY_PENALTY_METERS
-            if score < best_score:
-                best_score, best_index = score, index
-        picked = remaining.pop(best_index)
-        category_counts[picked.category or "?"] = category_counts.get(picked.category or "?", 0) + 1
-        chosen.append(picked)
+    taken: dict[str, int] = dict.fromkeys(buckets, 0)
+    chosen: list = []
+
+    while len(chosen) < limit:
+        available = [
+            key
+            for key, bucket in buckets.items()
+            if taken[key] < category_cap and taken[key] < len(bucket)
+        ]
+        if not available:
+            break
+        available.sort(key=lambda key: _base_score(buckets[key][taken[key]]))
+        for key in available:
+            if len(chosen) >= limit:
+                break
+            chosen.append(buckets[key][taken[key]])
+            taken[key] += 1
 
     return chosen
 
@@ -340,6 +357,7 @@ def find_place_candidates(
     *,
     limit: int | None = None,
     radius_meters: float | None = None,
+    category_cap: int | None = None,
 ) -> list[PlaceCandidateResult]:
     """Ranked places the guide could contribute to, nearest and most useful
     first, with the containing area offered last as the broadest option.
@@ -364,6 +382,7 @@ def find_place_candidates(
     """
     limit = limit or settings.place_candidate_limit
     radius_meters = radius_meters or settings.place_candidate_radius_meters
+    category_cap = category_cap or settings.place_candidate_category_cap
 
     poi_discovery_service.maybe_ensure_discovered(
         db, latitude, longitude, timeout=settings.google_places_inline_timeout_seconds
@@ -377,7 +396,7 @@ def find_place_candidates(
     # than a small neighbourhood sits outside the candidate radius -- so the
     # areas that happen to fall inside it are not a reliable way to find the
     # one the guide is actually inside. That question has its own resolver.
-    ranked = _rank(_deduplicate(pois), limit)
+    ranked = _rank(_deduplicate(pois), limit, category_cap)
     results = [_to_result(row, is_area=False) for row in ranked]
 
     # The broadest honest option: the named area this coordinate is inside.

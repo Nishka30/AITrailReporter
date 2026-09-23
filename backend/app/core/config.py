@@ -165,12 +165,22 @@ class Settings(BaseSettings):
     # resolves to a SHORTLIST the guide picks from, rather than to one place
     # chosen for them.
     #
-    # How many to offer. Small on purpose: a list long enough to need
-    # scrolling turns a one-tap decision into a search task.
-    place_candidate_limit: int = 6
+    # How many to offer, AT MOST -- never a target to pad up to. Raised from
+    # the original 6 to 9 so that, once ranking guarantees each nearby
+    # category a fair turn (see place_candidate_category_cap below), a
+    # handful of distinct categories can still each get a slot in the same
+    # pass instead of one dominant category eating the whole list.
+    place_candidate_limit: int = 9
     # Hard ceiling a caller may request, so this can never become an
     # unbounded query.
     place_candidate_max_limit: int = 20
+    # Soft per-category ceiling the round-robin ranker applies once a
+    # category has had this many turns (see place_candidates._rank) -- what
+    # stops one very dense category (e.g. eight nearby restaurants) from
+    # filling the whole list even across several rounds. "Soft" because nothing
+    # stops it from being reached earlier by place_candidate_limit or by
+    # every other category running out first; it only ever trims, never pads.
+    place_candidate_category_cap: int = 3
     # How far out to look. Wider than geographic_context_radius_meters (500m,
     # which answers the much stricter "is the guide AT this place?") because a
     # place worth reporting on can be a few minutes' walk away, and narrower

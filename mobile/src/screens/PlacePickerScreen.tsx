@@ -15,6 +15,7 @@ import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { captureCurrentLocation } from '../location/locationService';
 import { colors, radii, spacing, type } from '../theme/theme';
 import type { LocalGuide } from '../types/models';
+import { groupByCategory } from './placeCandidateGrouping';
 
 type Props = {
   guide: LocalGuide;
@@ -200,6 +201,12 @@ export default function PlacePickerScreen({
   // just another nearby place.
   const places = candidates?.filter((c) => !c.isArea) ?? [];
   const area = candidates?.find((c) => c.isArea) ?? null;
+  // Section headers only earn their keep once there is more than one
+  // category to tell apart -- one category ("only restaurants nearby") is
+  // shown as the same plain list this screen always had, not a single
+  // redundantly-labelled group.
+  const placeGroups = groupByCategory(places);
+  const showCategoryHeadings = placeGroups.length > 1;
 
   return (
     // footerSpace matches the other tab screens so the last row never sits
@@ -267,17 +274,32 @@ export default function PlacePickerScreen({
         </View>
       ) : candidates && candidates.length > 0 ? (
         <>
-          {places.length > 0 ? (
-            <View style={styles.list}>
-              {places.map((candidate) => (
-                <PlaceRow
-                  key={candidate.id}
-                  candidate={candidate}
-                  onPress={() => onSelect(candidate)}
-                />
-              ))}
-            </View>
-          ) : null}
+          {showCategoryHeadings
+            ? placeGroups.map((group) => (
+                <View key={group.key}>
+                  <Text style={styles.groupLabel}>{group.label}</Text>
+                  <View style={styles.list}>
+                    {group.candidates.map((candidate) => (
+                      <PlaceRow
+                        key={candidate.id}
+                        candidate={candidate}
+                        onPress={() => onSelect(candidate)}
+                      />
+                    ))}
+                  </View>
+                </View>
+              ))
+            : places.length > 0 && (
+                <View style={styles.list}>
+                  {places.map((candidate) => (
+                    <PlaceRow
+                      key={candidate.id}
+                      candidate={candidate}
+                      onPress={() => onSelect(candidate)}
+                    />
+                  ))}
+                </View>
+              )}
 
           {area ? (
             <>
