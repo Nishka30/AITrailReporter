@@ -151,6 +151,33 @@ class PlaceQuestion(Base):
     # Groups every question produced by ONE research run, so a refresh can
     # deactivate a previous batch wholesale without deleting history.
     research_batch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # --- PRIMARY (category-driven) knowledge system fields -----------------
+    # Which assigned category this question targets. NULL for a question that
+    # predates this feature, or a curated seed question with no category
+    # targeting -- both keep working exactly as before (see
+    # services/place_questions.py's answer path, which only takes the
+    # category-knowledge branch when this is set). RESTRICT: an assignment
+    # can't be deleted out from under a question that already references it.
+    category_assignment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("location_category_assignments.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    # Set ONLY for a re-verification question (this CategoryKnowledge already
+    # exists and has gone stale) -- NULL means "first ask", a category with no
+    # verified knowledge yet. SET NULL rather than RESTRICT/CASCADE: the
+    # question's own history should survive even if the knowledge item it was
+    # re-verifying is later superseded.
+    verifying_knowledge_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("category_knowledge.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # One of category_knowledge_policy.VOLATILITY_CLASSES. Assigned at
+    # generation time (the same moment Claude characterizes what kind of fact
+    # is being asked about), copied onto the resulting CategoryKnowledge row
+    # if/when one is created. NULL for non-category questions.
+    volatility: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # One of PLACE_QUESTION_SOURCES. server_default 'ai_research' so the
     # column could be added NOT NULL without a backfill guessing at intent --
     # every row that existed before this column did was genuinely produced

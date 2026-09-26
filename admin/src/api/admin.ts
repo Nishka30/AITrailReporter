@@ -3,6 +3,7 @@ import type {
   AdminOverview,
   AdminQuestionQueueFilters,
   AdminQuestionQueueResult,
+  CategoryKnowledgeConflict,
   ContributionDetail,
   ContributionQueueFilters,
   ContributionQueueResult,
@@ -143,6 +144,29 @@ export function getPlaceCategoryGroups(): Promise<PlaceCategoryGroupOptions[]> {
 
 export function getPlaceDetail(locationId: string): Promise<PlaceDetail> {
   return apiRequest(`/api/v1/admin/places/${locationId}`);
+}
+
+export function getKnowledgeConflicts(status: string = 'open'): Promise<CategoryKnowledgeConflict[]> {
+  return apiRequest(`/api/v1/admin/knowledge-conflicts${toQueryString({ status })}`);
+}
+
+export function resolveKnowledgeConflict(
+  conflictId: string,
+  resolution: 'confirmed' | 'superseded' | 'dismissed',
+  newKnowledgeText?: string,
+  volatility?: string
+): Promise<CategoryKnowledgeConflict> {
+  return apiRequest(`/api/v1/admin/knowledge-conflicts/${conflictId}/resolve`, {
+    method: 'POST',
+    body: {
+      resolution,
+      new_knowledge_text: newKnowledgeText || null,
+      // Admin only ever picks the volatility CLASS -- the backend maps it
+      // to a duration (category_knowledge_policy.resolve_freshness_duration_hours).
+      // Omitted (null) means "keep the existing item's own volatility".
+      volatility: volatility || null,
+    },
+  });
 }
 
 export function getContributors(

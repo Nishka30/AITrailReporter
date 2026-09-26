@@ -10,9 +10,12 @@ from app.core.config import settings
 from app.db.geo import make_point
 from app.db.models.extraction import Extraction
 from app.db.models.observation import Observation
+from app.db.models.place_question import PlaceQuestion
 from app.db.models.submission import Submission
 from app.schemas.extraction import ExtractionRead
 from app.schemas.observation import ObservationRead
+from app.services import category_knowledge as category_knowledge_service
+from app.services import category_knowledge_policy
 from app.services import geographic_context as geographic_context_service
 from app.services import guide_locations as guide_location_service
 from app.services.geo_validation import is_valid_coordinate_pair
@@ -341,17 +344,38 @@ def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]
     # create_or_get_dynamic_type flushes but never commits, so it composes with
     # that single final commit. A concurrent extraction proposing the same
     # category is resolved inside it via IntegrityError-catch-and-refetch.
-    for proposal in validated_new_types:
-        config, _created = knowledge_type_service.create_or_get_dynamic_type(
-            db, proposal.policy
-        )
-        validated_observations.append(
-            ValidatedObservation(
-                knowledge_type_id=config.id,
-                value=proposal.value,
-                confidence=proposal.confidence,
-                evidence=proposal.evidence,
+    #
+    # GATED behind settings.dynamic_knowledge_type_creation_enabled (default
+    # False): CategoryKnowledge is now the home for general, non-hazard
+    # knowledge (see app/services/category_knowledge.py) -- leaving this path
+    # open would let extraction silently recreate a parallel general-knowledge
+    # taxonomy inside KnowledgeTypeConfig, which is exactly what the
+    # Location->Category->CategoryKnowledge architecture exists to replace.
+    # KnowledgeTypeConfig's four existing hazard types are entirely unaffected
+    # by this flag -- it only gates whether a FIFTH type can be added. Any
+    # proposal is simply dropped (never persisted as an Observation either --
+    # there is no knowledge_type_id to attach it to) rather than raising, so a
+    # disabled flag never turns an otherwise-successful extraction into a
+    # failure.
+    if settings.dynamic_knowledge_type_creation_enabled:
+        for proposal in validated_new_types:
+            config, _created = knowledge_type_service.create_or_get_dynamic_type(
+                db, proposal.policy
             )
+            validated_observations.append(
+                ValidatedObservation(
+                    knowledge_type_id=config.id,
+                    value=proposal.value,
+                    confidence=proposal.confidence,
+                    evidence=proposal.evidence,
+                )
+            )
+        validated_new_types = []
+    if validated_new_types:
+        logger.info(
+            "Dropped %d new-knowledge-type proposal(s) for submission %s "
+            "-- dynamic_knowledge_type_creation_enabled is False.",
+            len(validated_new_types), submission_id,
         )
 
     for obs in validated_observations:
@@ -395,6 +419,112 @@ def start_extraction(db: Session, submission_id: UUID) -> tuple[Extraction, str]
     db.commit()
     db.refresh(extraction)
     return extraction, "completed"
+
+
+def extract_category_knowledge_observation(
+    db: Session, submission: Submission, place_question: PlaceQuestion
+) -> Observation | None:
+    """Turns a CATEGORY-scoped PlaceQuestion answer directly into ONE
+    Observation -- deliberately bypassing the generic multi-knowledge-type LLM
+    extraction pipeline (extract_observations/validate_llm_output) above.
+
+    WHY THIS IS A SEPARATE, SIMPLER PATH: the generic pipeline exists because
+    an LLM has to figure out WHICH knowledge_type (if any) a piece of free
+    text is evidence for, out of several active candidates. A category
+    question has no such ambiguity -- it already declares exactly which
+    concern it's asking about (category_assignment_id for a first ask,
+    verifying_knowledge_id for a re-verification), so there is nothing left
+    for a model to classify. Running the free-form extractor here would cost
+    an LLM call to re-derive an answer this function already has for free,
+    and would require this Location's category concern to also exist as a
+    KnowledgeTypeConfig row -- exactly the coupling this architecture split
+    exists to avoid.
+
+    Only returns None when there's genuinely nothing to do (no category
+    targeting, no answer text) -- the caller (place_question_answers.py)
+    falls back to the ordinary maybe_trigger_extraction path in that case, so
+    a non-category-tagged PlaceQuestion (one predating this feature, or a
+    curated seed question with no category) keeps working exactly as before.
+
+    Returns the created Observation, or None. Raises on a genuine failure --
+    see maybe_extract_category_knowledge_observation for the best-effort
+    wrapper every real caller should use instead.
+    """
+    if place_question.category_assignment_id is None:
+        return None
+    text = (submission.raw_text or "").strip()
+    if not text:
+        return None
+
+    resolved = _resolve_observation_coordinates(db, submission)
+    coordinates = resolved[:2] if resolved is not None else None
+    location_source = resolved[2] if resolved is not None else None
+    location_evidence = resolved[3] if resolved is not None else None
+
+    if place_question.verifying_knowledge_id is not None:
+        # Re-verification: this Observation is evidence for the SAME existing
+        # knowledge item, never a new row -- see category_knowledge.py's
+        # mark_verified, which updates it in place once this is approved.
+        category_knowledge_id = place_question.verifying_knowledge_id
+    else:
+        # First ask: a new, PENDING (unverified) knowledge item -- it only
+        # starts counting toward coverage once THIS observation clears
+        # moderation (observation_moderation.py calls category_knowledge.
+        # mark_verified on approval, never before).
+        volatility = place_question.volatility or category_knowledge_policy.DEFAULT_VOLATILITY
+        item = category_knowledge_service.create_knowledge_item(
+            db,
+            location_id=place_question.location_id,
+            category_assignment_id=place_question.category_assignment_id,
+            knowledge_text=text,
+            volatility=volatility,
+            source_question_id=place_question.id,
+            source_finding_id=place_question.source_finding_id,
+        )
+        category_knowledge_id = item.id
+
+    observation = Observation(
+        submission_id=submission.id,
+        guide_id=submission.guide_id,
+        knowledge_type_id=None,
+        category_knowledge_id=category_knowledge_id,
+        latitude=coordinates[0] if coordinates else None,
+        longitude=coordinates[1] if coordinates else None,
+        geog=make_point(*coordinates) if coordinates else None,
+        location_source=location_source,
+        location_evidence=location_evidence,
+        value={"answer_text": text},
+        confidence=None,
+        evidence=text[:2000],
+        observed_at=submission.occurred_at or submission.submitted_at,
+    )
+    db.add(observation)
+    db.flush()
+    observation_moderation_service.ensure_pending_moderation(db, observation.id)
+    db.commit()
+    db.refresh(observation)
+    return observation
+
+
+def maybe_extract_category_knowledge_observation(
+    db: Session, submission_id: UUID, place_question_id: UUID
+) -> None:
+    """Best-effort wrapper -- same swallow-everything contract as
+    maybe_trigger_extraction below. A failure here must never break the
+    guide's contribution; the answer/Submission/SubmissionReview it produced
+    already succeeded and committed before this is ever called."""
+    submission = db.get(Submission, submission_id)
+    place_question = db.get(PlaceQuestion, place_question_id)
+    if submission is None or place_question is None:
+        return
+    try:
+        extract_category_knowledge_observation(db, submission, place_question)
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "Category-knowledge extraction failed for submission %s / place_question %s",
+            submission_id, place_question_id, exc_info=True,
+        )
 
 
 def maybe_trigger_extraction(db: Session, submission_id: UUID) -> None:

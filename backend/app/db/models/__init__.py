@@ -1,3 +1,5 @@
+from app.db.models.category_knowledge import CategoryKnowledge
+from app.db.models.category_knowledge_conflict import CategoryKnowledgeConflict
 from app.db.models.curated_hub import CuratedHub
 from app.db.models.extraction import Extraction
 from app.db.models.guide import Guide
@@ -22,6 +24,8 @@ from app.db.models.submission_review import SubmissionReview
 from app.db.models.transcription import Transcription
 
 __all__ = [
+    "CategoryKnowledge",
+    "CategoryKnowledgeConflict",
     "CuratedHub",
     "Extraction",
     "Guide",

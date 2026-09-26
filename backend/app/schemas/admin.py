@@ -296,6 +296,10 @@ class PlaceDetail(BaseModel):
     categories: list["PlaceCategoryDetail"] = []
     created_at: datetime
     recent_observations: list[ReviewQueueItem]
+    # PRIMARY (category-driven) knowledge coverage -- what TrailMind actually
+    # knows and trusts, per category, distinct from `categories` above (which
+    # only says what this place IS). See services/category_knowledge.py.
+    knowledge_coverage: list["PlaceKnowledgeCoverageDetail"] = []
 
 
 class PlaceCategoryDetail(BaseModel):
@@ -305,7 +309,65 @@ class PlaceCategoryDetail(BaseModel):
     relevance: int
     confidence: float
     is_primary: bool
+
+
+class PlaceKnowledgeCoverageDetail(BaseModel):
+    """One category's CategoryKnowledge state, for the Admin Location detail
+    coverage dashboard. Deliberately separate from hazard state
+    (KnowledgeTypeConfig) and general Explore prompts -- neither belongs in
+    this Location-coverage view (architecture doc Part 18)."""
+
+    category_assignment_id: UUID
+    slug: str
+    kind: str
+    display_name: str
+    relevance: int
+    is_primary: bool
+    # 'missing' / 'fresh' / 'stale' / 'partially_stale'
+    state: str
+    verified_item_count: int
+    last_verified_at: datetime | None
+    next_stale_at: datetime | None
     source: str
+
+
+class CategoryKnowledgeConflictRead(BaseModel):
+    """One open (or resolved) CONFIRMS/CONTRADICTS/UNCERTAIN judgement an
+    admin needs to resolve by hand -- see
+    app/services/knowledge_relation.py for why this exists (Part 2E of the
+    knowledge-architecture hardening pass: a re-verification's relationship
+    to standing knowledge that could not be confidently classified). The
+    existing CategoryKnowledge row is untouched for as long as this is
+    'open'."""
+
+    id: UUID
+    category_knowledge_id: UUID
+    observation_id: UUID
+    location_id: UUID
+    location_name: str
+    category_display_name: str
+    existing_knowledge_text: str
+    # The knowledge item's CURRENT volatility class (one of
+    # category_knowledge_policy.VOLATILITY_CLASSES) -- the Admin UI defaults
+    # its "supersede" volatility selector to this, but may override it (see
+    # ResolveCategoryKnowledgeConflictRequest.volatility below).
+    existing_volatility: str
+    new_answer_text: str
+    status: str
+    resolution: str | None
+    resolved_by: str | None
+    resolved_at: datetime | None
+    created_at: datetime
+
+
+class ResolveCategoryKnowledgeConflictRequest(BaseModel):
+    # One of CONFLICT_RESOLUTIONS (app/db/models/category_knowledge_conflict.py):
+    # 'confirmed' (keep the existing knowledge, just refresh last_verified_at),
+    # 'superseded' (the new evidence wins -- requires new_knowledge_text),
+    # 'dismissed' (neither -- the new answer wasn't real evidence either way).
+    resolution: str
+    new_knowledge_text: str | None = None
+    volatility: str | None = None
 
 
 class ContributorSummary(BaseModel):

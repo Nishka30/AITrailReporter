@@ -17,6 +17,7 @@ from app.db.session import get_db
 from app.schemas.admin import (
     AdminOverview,
     AdminQuestionQueueResult,
+    CategoryKnowledgeConflictRead,
     ContributionDetail,
     ContributionQueueResult,
     ContributorDetail,
@@ -24,6 +25,7 @@ from app.schemas.admin import (
     PlaceCategoryGroup,
     PlaceDetail,
     PlaceQueueResult,
+    ResolveCategoryKnowledgeConflictRequest,
     ReviewDetail,
     ReviewQueueResult,
 )
@@ -39,6 +41,7 @@ from app.schemas.observation_moderation import (
     RejectObservationRequest,
 )
 from app.schemas.submission_review import RejectSubmissionRequest, SubmissionReviewRead
+from app.services import admin_category_conflicts as category_conflict_service
 from app.services import admin_contributors as contributor_service
 from app.services import admin_overview as overview_service
 from app.services import admin_places as place_service
@@ -46,6 +49,7 @@ from app.services import admin_questions as question_service
 from app.services import admin_review as review_service
 from app.services import admin_rewards as admin_reward_service
 from app.services import admin_submission_reviews as contribution_service
+from app.services import category_knowledge as category_knowledge_service
 from app.services import observation_moderation as moderation_service
 from app.services import submission_review as submission_review_service
 from app.services import submissions as submission_service
@@ -346,6 +350,49 @@ def get_place(
     if place is None:
         raise HTTPException(status_code=404, detail="Place not found")
     return place
+
+
+@router.get("/knowledge-conflicts", response_model=list[CategoryKnowledgeConflictRead])
+def list_knowledge_conflicts(
+    status: str | None = Query(default="open"),
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """The Part 2E resolution queue: a re-verification whose relationship to
+    standing CategoryKnowledge could not be confidently classified as
+    CONFIRMS or CONTRADICTS (see app/services/knowledge_relation.py).
+    Defaults to 'open'; pass status='' to see resolved ones too."""
+    return category_conflict_service.list_conflicts(db, status=status or None)
+
+
+@router.post(
+    "/knowledge-conflicts/{conflict_id}/resolve",
+    response_model=CategoryKnowledgeConflictRead,
+)
+def resolve_knowledge_conflict(
+    conflict_id: UUID,
+    payload: ResolveCategoryKnowledgeConflictRequest,
+    admin: AdminPrincipal = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        category_knowledge_service.resolve_conflict(
+            db,
+            conflict_id,
+            resolution=payload.resolution,
+            resolved_by=admin.name,
+            new_knowledge_text=payload.new_knowledge_text,
+            volatility=payload.volatility,
+        )
+    except category_knowledge_service.ConflictNotFoundError:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    detail = category_conflict_service.get_conflict(db, conflict_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    return detail
 
 
 @router.get("/contributors", response_model=ContributorQueueResult)

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from geoalchemy2 import Geography
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,7 +10,19 @@ from app.db.base import Base
 
 
 class Observation(Base):
-    """A structured fact, eventually extracted from a submission (e.g. trail_condition=muddy)."""
+    """A structured fact, eventually extracted from a submission (e.g. trail_condition=muddy).
+
+    THE SHARED VERIFICATION LEDGER for BOTH knowledge systems -- not
+    KnowledgeTypeConfig's private table. Exactly one of knowledge_type_id /
+    category_knowledge_id is populated on any given row (never both, never
+    neither -- see the CHECK constraint below):
+      - knowledge_type_id: a hazard/coordinate-based observation (the
+        EXCEPTION system -- weather, trail_condition, snow_ice, obstruction).
+      - category_knowledge_id: a Location+category verification event (the
+        PRIMARY system). Moderation approving THIS observation is the one
+        trigger that sets CategoryKnowledge.last_verified_at (see
+        app/services/observation_moderation.py).
+    """
 
     __tablename__ = "observations"
     __table_args__ = (
@@ -23,6 +35,15 @@ class Observation(Base):
         # not auto-index foreign key columns); the existing GiST index on `geog`
         # (auto-created by GeoAlchemy2) already covers the ST_DWithin side.
         Index("ix_observations_knowledge_type_id_observed_at", "knowledge_type_id", "observed_at"),
+        Index("ix_observations_category_knowledge_id", "category_knowledge_id"),
+        # Every Observation serves exactly one of the two systems -- never
+        # both (a row can't be simultaneously hazard AND category evidence)
+        # and never neither (an Observation with no purpose at all would be
+        # silent dead weight in the ledger).
+        CheckConstraint(
+            "(knowledge_type_id IS NOT NULL) <> (category_knowledge_id IS NOT NULL)",
+            name="ck_observations_exactly_one_knowledge_target",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -34,10 +55,23 @@ class Observation(Base):
     guide_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("guides.id", ondelete="CASCADE"), nullable=False
     )
-    knowledge_type_id: Mapped[uuid.UUID] = mapped_column(
+    # Nullable as of the category-knowledge system: NOT NULL was the original
+    # constraint back when KnowledgeTypeConfig was the only knowledge system --
+    # now populated only for a hazard/coordinate-based observation. See the
+    # CHECK constraint above for the "exactly one of the two" guarantee this
+    # relies on instead.
+    knowledge_type_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("knowledge_type_config.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
+    )
+    # Populated only for a category-knowledge verification event (the PRIMARY
+    # system). RESTRICT: a CategoryKnowledge row with verification history
+    # attached can't be deleted out from under it -- deactivate instead.
+    category_knowledge_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("category_knowledge.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6), nullable=True)

@@ -1,4 +1,5 @@
 import type { GuideContext, KnowledgeTypeState } from '../api/guideContext';
+import type { CategoryCoverage } from '../api/locationKnowledge';
 
 /**
  * Explore prompt generation (Step 16).
@@ -271,6 +272,22 @@ function describeGap(state: KnowledgeTypeState): string | null {
   }
 }
 
+/** Same idea as describeGap above, for a PRIMARY (category-driven) coverage
+ * gap rather than a hazard one -- only ever called with a real backend
+ * state, never invented. */
+function describeCategoryGap(category: CategoryCoverage): string | null {
+  switch (category.state) {
+    case 'missing':
+      return `Nothing has been reported yet about ${category.displayName.toLowerCase()} here`;
+    case 'stale':
+      return `What we know about ${category.displayName.toLowerCase()} here is out of date`;
+    case 'partially_stale':
+      return `Some of what we know about ${category.displayName.toLowerCase()} here needs a fresh check`;
+    default:
+      return null;
+  }
+}
+
 /**
  * Builds the Explore deck.
  *
@@ -302,7 +319,16 @@ function describeGap(state: KnowledgeTypeState): string | null {
 export function buildPrompts(
   context: GuideContext | null,
   knowledgeStates: KnowledgeTypeState[] | null,
-  hasResearchedPlaceContent: boolean = false
+  hasResearchedPlaceContent: boolean = false,
+  /** PRIMARY (category-driven) coverage gaps for the resolved place, when
+   * there is one -- see api/locationKnowledge.ts::coverageGaps. Grounds
+   * prompts the SAME way hazard gaps do below, via the SAME mechanism (a
+   * capped, backend-data-only, never-fabricated card) -- the one
+   * integration point between the PRIMARY knowledge system and this
+   * EXISTING general-fallback deck. Nothing here creates a Location, a
+   * CategoryKnowledge row, or a persisted question -- the prompt stays an
+   * ordinary Explore prompt, answered through the normal Submission path. */
+  categoryGaps: CategoryCoverage[] | null = null
 ): ExplorePrompt[] {
   const place = context?.nearestKnownPlace?.name ?? null;
   const hasRealPlace = place !== null;
@@ -310,7 +336,8 @@ export function buildPrompts(
 
   const prompts: ExplorePrompt[] = [];
 
-  // 1. Grounded prompts, from REAL gaps the backend reported. Safety-critical
+  // 1a. Grounded prompts, from REAL hazard gaps the backend reported (the
+  //     EXCEPTION system). Safety-critical
   //    gaps first, then missing before stale before aging — the same urgency
   //    order the backend's own ranking uses (knowledge_decisions.py), applied
   //    here purely for display ordering.
@@ -337,6 +364,28 @@ export function buildPrompts(
       voiceCopy: `Tell us about the ${gap.displayName.toLowerCase()} here`,
       wantsPhoto: false,
       reason: describeGap(gap),
+    });
+  }
+
+  // 1b. Grounded prompt, from a REAL category coverage gap (the PRIMARY
+  //     system) -- only when a Location was actually resolved (categoryGaps
+  //     is null/empty otherwise: no known Location, or no GPS at all). One
+  //     at most, alongside the hazard cards above: Explore stays a discovery
+  //     surface, not a backlog, regardless of which system a gap came from.
+  const categoryGap = (categoryGaps ?? [])[0];
+  if (categoryGap) {
+    const label = categoryGap.displayName.toLowerCase();
+    prompts.push({
+      id: `category-gap:${categoryGap.categoryAssignmentId}`,
+      kind: 'discovery',
+      title: categoryGap.displayName,
+      body: hasRealPlace
+        ? `You are near ${placeLabel} -- what should we know about ${label} here?`
+        : `What should we know about ${label} here?`,
+      placeholder: `What you would tell someone about ${label}...`,
+      voiceCopy: `Tell us about ${label} here`,
+      wantsPhoto: false,
+      reason: describeCategoryGap(categoryGap),
     });
   }
 

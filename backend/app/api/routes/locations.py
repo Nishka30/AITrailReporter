@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -7,14 +8,18 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.schemas.location import (
     CategorisedLocationRead,
+    CategoryCoverageRead,
+    CategoryKnowledgeItemRead,
     LocationCategoriesResponse,
     LocationCategoryRead,
     LocationCreate,
+    LocationKnowledgeStatusRead,
     LocationRead,
     NearbyLocationResult,
     PlaceCandidate,
     PlaceCandidateResponse,
 )
+from app.services import category_knowledge as category_knowledge_service
 from app.services import locations as location_service
 from app.services import place_candidates as place_candidate_service
 from app.services import poi_discovery as poi_discovery_service
@@ -198,5 +203,57 @@ def get_location_categories(location_id: UUID, db: Session = Depends(get_db)):
         categories=[
             LocationCategoryRead(**vars(category))
             for category in category_assignment.list_location_categories(db, location_id)
+        ],
+    )
+
+
+@router.get("/{location_id}/knowledge-status", response_model=LocationKnowledgeStatusRead)
+def get_location_knowledge_status(location_id: UUID, db: Session = Depends(get_db)):
+    """PRIMARY (category-driven) knowledge coverage for this Location --
+    Location -> Categories -> CategoryKnowledge -> Fresh/Stale/Missing.
+
+    Read-only, never triggers generation or research -- mirrors
+    GET .../popular-questions' own "never blocks on a web search" rule.
+    Categories below settings.category_coverage_min_relevance are omitted
+    entirely, matching what actually counts toward coverage (see
+    services/category_knowledge.py::get_location_coverage).
+    """
+    location = location_service.get_location(db, location_id)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    coverage = category_knowledge_service.get_location_coverage(db, location_id)
+    now = datetime.now(timezone.utc)
+    return LocationKnowledgeStatusRead(
+        location_id=location.id,
+        location_name=location.name,
+        categories=[
+            CategoryCoverageRead(
+                category_assignment_id=cov.category_assignment_id,
+                kind=cov.kind,
+                slug=cov.slug,
+                display_name=cov.display_name,
+                relevance=cov.relevance,
+                is_primary=cov.is_primary,
+                state=cov.state,
+                items=[
+                    CategoryKnowledgeItemRead(
+                        id=item.id,
+                        knowledge_text=item.knowledge_text,
+                        volatility=item.volatility,
+                        verified=category_knowledge_service.is_verified(item),
+                        last_verified_at=item.last_verified_at,
+                        stale_at=category_knowledge_service.stale_at(item),
+                        fresh=(
+                            category_knowledge_service.is_fresh(item, now)
+                            if category_knowledge_service.is_verified(item)
+                            else None
+                        ),
+                    )
+                    for item in cov.items
+                    if item.active
+                ],
+            )
+            for cov in coverage
         ],
     )

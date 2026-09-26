@@ -15,10 +15,15 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.db.models.location import Location
+from app.db.models.observation import Observation
 from app.db.models.observation_moderation import (
     REJECTION_REASONS,
     ObservationModeration,
 )
+from app.db.models.submission import Submission
+from app.services import category_knowledge as category_knowledge_service
+from app.services import knowledge_relation as knowledge_relation_service
 
 
 class ModerationNotFoundError(Exception):
@@ -95,6 +100,112 @@ def ensure_pending_moderation(db: Session, observation_id: UUID) -> ObservationM
     return moderation
 
 
+def _answer_text_from_observation(observation: Observation) -> str:
+    """The guide's raw answer text this Observation carries -- see
+    extractions.py::extract_category_knowledge_observation, which always
+    stores it as value={"answer_text": ...} for a category-knowledge
+    Observation. Falls back to `evidence` (also set to the same text there)
+    so this never breaks on a shape this function doesn't expect."""
+    value = observation.value
+    if isinstance(value, dict):
+        text = value.get("answer_text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return (observation.evidence or "").strip()
+
+
+def _source_question_id_for(db: Session, observation: Observation) -> UUID | None:
+    """The PlaceQuestion this Observation's answer was submitted against, if
+    any -- Observation itself carries no such column (see its model
+    docstring: it is the SHARED ledger for both knowledge systems), so this
+    is resolved one hop out via the originating Submission, exactly the way
+    place_question_answers.py already links the two."""
+    submission = db.get(Submission, observation.submission_id)
+    return submission.source_place_question_id if submission is not None else None
+
+
+def _maybe_verify_category_knowledge(db: Session, observation_id: UUID, decided_at: datetime) -> None:
+    """THE single call site that ever mutates CategoryKnowledge trust state
+    (last_verified_at, or a supersession) -- fires only when the Observation
+    being approved is category-knowledge evidence (category_knowledge_id
+    set), which is exactly the PRIMARY system's definition of "a trusted
+    guide verified this." A hazard Observation (category_knowledge_id NULL)
+    is a no-op here.
+
+    TWO CASES, per the architecture hardening directive's Part 2:
+
+    1. The targeted CategoryKnowledge row has never been verified before
+       (last_verified_at is NULL) -- this IS the first verification, and its
+       own knowledge_text already came directly from this same answer (see
+       extractions.py's first-ask branch). Nothing to compare against yet:
+       just mark_verified.
+
+    2. The row was already verified once -- this new, approved Observation
+       is necessarily a RE-verification of standing knowledge, and its
+       relationship to that knowledge must be classified before anything is
+       mutated (see knowledge_relation.classify_relation): CONFIRMS refreshes
+       the same row, CONTRADICTS supersedes it (full history preserved),
+       UNCERTAIN mutates nothing and opens an explicit admin-resolvable
+       conflict instead (category_knowledge.record_conflict). Never a naive
+       string-equality check -- see knowledge_relation.py's module docstring
+       for why.
+    """
+    observation = db.get(Observation, observation_id)
+    if observation is None or observation.category_knowledge_id is None:
+        return
+
+    item = category_knowledge_service.get_knowledge_item(db, observation.category_knowledge_id)
+    if item is None:
+        return
+
+    if item.last_verified_at is None:
+        category_knowledge_service.mark_verified(db, item.id, decided_at)
+        return
+
+    new_answer_text = _answer_text_from_observation(observation)
+    if not new_answer_text:
+        # Nothing to classify a relationship from -- leave standing knowledge
+        # untouched and flag it rather than silently doing nothing at all.
+        category_knowledge_service.record_conflict(
+            db,
+            category_knowledge_id=item.id,
+            observation_id=observation.id,
+            new_answer_text=new_answer_text,
+        )
+        return
+
+    location = db.get(Location, item.location_id)
+    labels = category_knowledge_service.get_category_labels_for_assignments(
+        db, [item.category_assignment_id]
+    )
+    _slug, category_display_name = labels.get(item.category_assignment_id, ("", "this category"))
+    place_name = location.name if location is not None else "this place"
+
+    result = knowledge_relation_service.classify_relation(
+        item.knowledge_text, new_answer_text, category_display_name, place_name
+    )
+
+    if result.relation == knowledge_relation_service.RELATION_CONFIRMS:
+        category_knowledge_service.mark_verified(db, item.id, decided_at)
+    elif result.relation == knowledge_relation_service.RELATION_CONTRADICTS:
+        source_question_id = _source_question_id_for(db, observation)
+        category_knowledge_service.supersede_knowledge_item(
+            db,
+            old_item=item,
+            new_knowledge_text=result.new_knowledge_text,
+            volatility=item.volatility,
+            source_question_id=source_question_id,
+            verified_at=decided_at,
+        )
+    else:
+        category_knowledge_service.record_conflict(
+            db,
+            category_knowledge_id=item.id,
+            observation_id=observation.id,
+            new_answer_text=new_answer_text,
+        )
+
+
 def _lock_moderation(db: Session, observation_id: UUID) -> ObservationModeration:
     stmt = (
         select(ObservationModeration)
@@ -133,6 +244,7 @@ def approve(db: Session, observation_id: UUID, decided_by: str) -> ObservationMo
     moderation.decided_at = datetime.now(timezone.utc)
     moderation.rejection_reason = None
     moderation.rejection_note = None
+    _maybe_verify_category_knowledge(db, observation_id, moderation.decided_at)
     db.commit()
     db.refresh(moderation)
     return moderation
@@ -200,6 +312,7 @@ def change_decision(
     if new_status == "approved":
         moderation.rejection_reason = None
         moderation.rejection_note = None
+        _maybe_verify_category_knowledge(db, observation_id, moderation.decided_at)
     else:
         moderation.rejection_reason = reason
         moderation.rejection_note = note

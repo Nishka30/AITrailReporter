@@ -244,6 +244,24 @@ export type PlaceCategoryGroupOptions = {
   options: PlaceCategoryOption[];
 };
 
+/** PRIMARY (category-driven) knowledge coverage for one category on this
+ * Location -- distinct from PlaceCategoryDetail above (which only says WHAT
+ * this place is, not what TrailMind actually knows and trusts about it).
+ * Deliberately excludes hazard state and Explore prompts -- neither belongs
+ * in this Location-scoped coverage view. */
+export type PlaceKnowledgeCoverageDetail = {
+  category_assignment_id: string;
+  slug: string;
+  kind: 'theme' | 'place_type';
+  display_name: string;
+  relevance: number;
+  is_primary: boolean;
+  state: 'missing' | 'fresh' | 'stale' | 'partially_stale';
+  verified_item_count: number;
+  last_verified_at: string | null;
+  next_stale_at: string | null;
+};
+
 export type PlaceDetail = {
   location_id: string;
   name: string;
@@ -257,8 +275,39 @@ export type PlaceDetail = {
   external_place_id: string | null;
   formatted_address: string | null;
   categories: PlaceCategoryDetail[];
+  knowledge_coverage: PlaceKnowledgeCoverageDetail[];
   created_at: string;
   recent_observations: ReviewQueueItem[];
+};
+
+/** Mirrors backend/app/services/category_knowledge_policy.py's
+ * VOLATILITY_CLASSES exactly -- the backend is the sole authority on what
+ * duration each class maps to (resolve_freshness_duration_hours); the Admin
+ * UI only ever selects the class, never a raw duration. */
+export const VOLATILITY_CLASSES = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'VERY_LOW'] as const;
+export type VolatilityClass = (typeof VOLATILITY_CLASSES)[number];
+
+/** One open (or resolved) CONFIRMS/CONTRADICTS/UNCERTAIN judgement an admin
+ * needs to resolve by hand -- mirrors backend's CategoryKnowledgeConflictRead
+ * exactly. The existing CategoryKnowledge row is untouched while this is
+ * 'open'; see backend/app/services/knowledge_relation.py. */
+export type CategoryKnowledgeConflict = {
+  id: string;
+  category_knowledge_id: string;
+  observation_id: string;
+  location_id: string;
+  location_name: string;
+  category_display_name: string;
+  existing_knowledge_text: string;
+  /** The existing knowledge item's CURRENT volatility class -- the
+   * "supersede" volatility selector defaults to this. */
+  existing_volatility: VolatilityClass;
+  new_answer_text: string;
+  status: 'open' | 'resolved';
+  resolution: 'confirmed' | 'superseded' | 'dismissed' | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_at: string;
 };
 
 export type ContributorSummary = {

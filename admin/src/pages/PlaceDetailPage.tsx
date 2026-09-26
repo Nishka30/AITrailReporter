@@ -3,8 +3,27 @@ import { ArrowLeft, MapPin } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { getPlaceDetail } from '../api/admin';
+import type { PlaceKnowledgeCoverageDetail } from '../api/types';
 import ObservationCard from '../components/review/ObservationCard';
 import { EmptyState, ErrorState, LoadingState } from '../components/ui/States';
+
+/** Label + tone for the PRIMARY (category-driven) coverage state -- see
+ * services/category_knowledge.py for where these four states come from.
+ * Deliberately not the same visual weight as a moderation/urgent state:
+ * this is a status readout, not an alert. */
+const COVERAGE_STATE_STYLE: Record<
+  PlaceKnowledgeCoverageDetail['state'],
+  { label: string; className: string }
+> = {
+  fresh: { label: 'Fresh', className: 'bg-ok-soft text-ok-deep' },
+  partially_stale: { label: 'Partially stale', className: 'bg-marigold-soft text-marigold-deep' },
+  stale: { label: 'Stale', className: 'bg-fix-soft text-fix' },
+  missing: { label: 'Missing', className: 'bg-paper-elevated text-ink-faint' },
+};
+
+function formatDate(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleDateString() : '—';
+}
 
 export default function PlaceDetailPage() {
   const { locationId } = useParams<{ locationId: string }>();
@@ -82,6 +101,48 @@ export default function PlaceDetailPage() {
           </div>
         ) : null}
       </dl>
+
+      <h2 className="mb-3 font-heading text-base font-bold text-ink">Knowledge coverage</h2>
+      {data.knowledge_coverage.length === 0 ? (
+        <EmptyState title="No categories above the coverage threshold for this place yet" />
+      ) : (
+        <div className="mb-6 overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-paper-elevated text-ink-faint">
+              <tr>
+                <th className="px-3 py-2 font-bold">Category</th>
+                <th className="px-3 py-2 font-bold">State</th>
+                <th className="px-3 py-2 font-bold">Last verified</th>
+                <th className="px-3 py-2 font-bold">Next stale</th>
+                <th className="px-3 py-2 font-bold">Verified items</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.knowledge_coverage.map((cov) => {
+                const style = COVERAGE_STATE_STYLE[cov.state];
+                return (
+                  <tr key={cov.category_assignment_id} className="border-t border-border">
+                    <td className="px-3 py-2 text-ink">
+                      {cov.display_name}
+                      {cov.is_primary ? (
+                        <span className="ml-1 text-xs text-ink-faint">(primary)</span>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${style.className}`}>
+                        {style.label}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-ink-soft">{formatDate(cov.last_verified_at)}</td>
+                    <td className="px-3 py-2 text-ink-soft">{formatDate(cov.next_stale_at)}</td>
+                    <td className="px-3 py-2 text-ink-soft">{cov.verified_item_count}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <h2 className="mb-3 font-heading text-base font-bold text-ink">Recent observations nearby</h2>
       {data.recent_observations.length === 0 ? (

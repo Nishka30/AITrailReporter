@@ -46,6 +46,9 @@ from app.db.models.curated_hub import CuratedHub
 from app.db.models.location import Location
 from app.db.models.place_question import PlaceQuestion, PlaceQuestionResearch
 from app.db.models.place_research_finding import PlaceResearchFinding
+from app.services import category_knowledge as category_knowledge_service
+from app.services import category_knowledge_policy
+from app.services import category_research as category_research_service
 from app.services import rewards as reward_service
 from app.services.place_question_research import (
     anthropic_provider,
@@ -98,6 +101,250 @@ def list_place_questions(db: Session, location_id: UUID) -> list[PlaceQuestion]:
 
 def get_place_question(db: Session, place_question_id: UUID) -> PlaceQuestion | None:
     return db.get(PlaceQuestion, place_question_id)
+
+
+# ---------------------------------------------------------------------------
+# PRIMARY (category-driven) question generation -- Location -> Categories ->
+# CategoryKnowledge -> Questions. Deliberately deterministic/template-based
+# rather than a new LLM call: unlike the AI-research pipeline above (which
+# exists to discover what's worth asking at all), a category gap already
+# fully specifies what to ask -- which category, and for a re-verification,
+# the exact existing knowledge_text to re-check. Templating it costs zero
+# additional Perplexity/Anthropic spend, which is the simplest way to honor
+# "reuse before spending" for this half of the system. Upgrading to
+# LLM-phrased questions grounded in existing place_research_findings is a
+# valid follow-up (see the accompanying report), not implemented here.
+# ---------------------------------------------------------------------------
+
+
+def _has_open_first_ask_question(db: Session, category_assignment_id: UUID) -> bool:
+    stmt = (
+        select(PlaceQuestion.id)
+        .where(
+            PlaceQuestion.category_assignment_id == category_assignment_id,
+            PlaceQuestion.verifying_knowledge_id.is_(None),
+            PlaceQuestion.active.is_(True),
+        )
+        .limit(1)
+    )
+    return db.execute(stmt).scalar_one_or_none() is not None
+
+
+def _has_open_reverification_question(db: Session, category_knowledge_id: UUID) -> bool:
+    stmt = (
+        select(PlaceQuestion.id)
+        .where(
+            PlaceQuestion.verifying_knowledge_id == category_knowledge_id,
+            PlaceQuestion.active.is_(True),
+        )
+        .limit(1)
+    )
+    return db.execute(stmt).scalar_one_or_none() is not None
+
+
+def _build_first_ask_text(location_name: str, category_display_name: str) -> str:
+    return f"What is {location_name} known for, when it comes to {category_display_name.lower()}?"
+
+
+def _build_reverification_text(
+    location_name: str, category_display_name: str, knowledge_text: str
+) -> str:
+    # Deliberately NOT a verbatim repeat of the original question (see the
+    # architecture doc's Part 11) -- re-asking the identical question reads as
+    # if the system forgot the answer. This names what we currently believe
+    # and asks whether it still holds, which reads as "we remembered, we're
+    # just confirming."
+    return (
+        f"Is {location_name} still like this — \"{knowledge_text}\" — or has that changed? "
+        f"(Checking in on {category_display_name.lower()}.)"
+    )
+
+
+def _add_category_question(
+    db: Session,
+    *,
+    location_id: UUID,
+    text: str,
+    category_assignment_id: UUID,
+    verifying_knowledge_id: UUID | None,
+    volatility: str,
+    source_finding_id: UUID | None = None,
+) -> bool:
+    """Inserts one category-driven PlaceQuestion, honoring the SAME
+    (location_id, normalized_text) uniqueness the AI-research/seed paths
+    already rely on. Per-row savepoint (mirrors category_backfill.py's
+    pattern): a collision here just means this exact question already exists
+    under this Location -- skipped, not an error, never rolls back sibling
+    inserts in the same run."""
+    key = normalize_question(text)
+    if not key:
+        return False
+    try:
+        with db.begin_nested():
+            db.add(
+                PlaceQuestion(
+                    location_id=location_id,
+                    question_text=text,
+                    normalized_text=key,
+                    contribution_kind="observation",
+                    category_assignment_id=category_assignment_id,
+                    verifying_knowledge_id=verifying_knowledge_id,
+                    volatility=volatility,
+                    source_finding_id=source_finding_id,
+                    source="ai_research",
+                    active=True,
+                )
+            )
+        return True
+    except IntegrityError:
+        return False
+
+
+def _generate_grounded_first_ask(
+    db: Session, location: Location, cov
+) -> tuple[str, UUID | None] | None:
+    """Tries to produce an LLM-phrased, research-grounded first-ask question
+    for a MISSING category -- reusing existing Perplexity research first,
+    performing at most one targeted query only when nothing existing is
+    relevant (see category_research.get_or_create_category_finding), and
+    NEVER treating the research as confirmed fact: this only ever produces
+    a QUESTION, and the resulting PlaceQuestion's source_finding_id is
+    provenance for "why was this asked", not evidence for CategoryKnowledge
+    (only a moderated guide answer ever creates that -- see extractions.py).
+
+    Returns None on ANY failure along the way -- no usable existing/targeted
+    research, provider unavailable, provider error, or output that fails
+    validation -- so the caller falls back to the deterministic template.
+    That fallback is not a degraded mode; it is this feature's designed
+    failure path (architecture directive Part 1E), and it is applied
+    identically regardless of WHY grounding wasn't possible.
+    """
+    finding = category_research_service.get_or_create_category_finding(
+        db, location, cov.slug, cov.display_name
+    )
+    if finding is None:
+        return None
+    try:
+        text = anthropic_provider.generate_category_question(
+            location.name, cov.display_name, finding.summary, finding.source_urls or []
+        )
+    except anthropic_provider.PlaceQuestionResearchProviderError:
+        return None
+    if not text:
+        return None
+    return text, finding.id
+
+
+def generate_category_questions_for_location(
+    db: Session, location_id: UUID, *, limit: int | None = None
+) -> int:
+    """Location -> category coverage -> missing/stale detection -> questions.
+
+    For each category at/above the coverage relevance threshold:
+      - MISSING (no verified knowledge) -> a first-ask question, UNLESS one is
+        already open (never floods the same gap with duplicates).
+      - STALE/PARTIALLY_STALE -> a re-verification question per stale item,
+        referencing that item's id via verifying_knowledge_id, UNLESS one is
+        already open for it.
+      - FRESH -> nothing generated; a category with nothing to check needs no
+        question (architecture doc Part 6/12).
+
+    Bounded per call by settings.category_question_max_new_per_run so one
+    under-covered Location can't flood a guide with a dozen questions at once.
+    Best-effort per row (a normalized-text collision just skips that one
+    question); commits once at the end. Returns the number of questions
+    actually created.
+    """
+    location = db.get(Location, location_id)
+    if location is None:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    coverage = category_knowledge_service.get_location_coverage(db, location_id, evaluation_time=now)
+    cap = limit if limit is not None else settings.category_question_max_new_per_run
+
+    created = 0
+    for cov in coverage:
+        if created >= cap:
+            break
+
+        if cov.state == category_knowledge_service.CATEGORY_STATE_MISSING:
+            if _has_open_first_ask_question(db, cov.category_assignment_id):
+                continue
+            grounded = None
+            try:
+                grounded = _generate_grounded_first_ask(db, location, cov)
+            except Exception:
+                # Best-effort augmentation: any unexpected failure here must
+                # never break generation for this (or any other) category --
+                # falls through to the deterministic template exactly like a
+                # handled failure would (Part 1E).
+                logger.warning(
+                    "Grounded category-question generation failed for %s / %s",
+                    location_id, cov.slug, exc_info=True,
+                )
+                grounded = None
+            if grounded is not None:
+                text, source_finding_id = grounded
+            else:
+                text, source_finding_id = _build_first_ask_text(location.name, cov.display_name), None
+            if _add_category_question(
+                db,
+                location_id=location_id,
+                text=text,
+                category_assignment_id=cov.category_assignment_id,
+                verifying_knowledge_id=None,
+                volatility=category_knowledge_policy.DEFAULT_VOLATILITY,
+                source_finding_id=source_finding_id,
+            ):
+                created += 1
+            continue
+
+        if cov.state in (
+            category_knowledge_service.CATEGORY_STATE_STALE,
+            category_knowledge_service.CATEGORY_STATE_PARTIALLY_STALE,
+        ):
+            for item in cov.stale_items:
+                if created >= cap:
+                    break
+                if category_knowledge_service.is_fresh(item, now):
+                    continue  # only the STALE items within a partially-stale category
+                if _has_open_reverification_question(db, item.id):
+                    continue
+                text = _build_reverification_text(location.name, cov.display_name, item.knowledge_text)
+                if _add_category_question(
+                    db,
+                    location_id=location_id,
+                    text=text,
+                    category_assignment_id=cov.category_assignment_id,
+                    verifying_knowledge_id=item.id,
+                    volatility=item.volatility,
+                ):
+                    created += 1
+
+    # Always committed, not just when created > 0: a research-grounding
+    # attempt (category_research.get_or_create_category_finding) may have
+    # persisted a new PlaceResearchFinding row even on a run that ultimately
+    # added zero PlaceQuestions (e.g. every candidate collided with an
+    # existing question) -- that finding row must survive to satisfy the
+    # "never repeat a targeted query for the same (location, category)"
+    # cost guarantee, so it cannot be left uncommitted for db.close() to
+    # silently roll back.
+    db.commit()
+    return created
+
+
+def maybe_generate_category_questions(db: Session, location_id: UUID) -> None:
+    """Best-effort wrapper, same swallow-everything contract as
+    maybe_ensure_researched below -- a failure here must never break whatever
+    read triggered it."""
+    try:
+        generate_category_questions_for_location(db, location_id)
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "Category-question generation failed for location %s", location_id, exc_info=True
+        )
 
 
 def hub_eligible_questions(

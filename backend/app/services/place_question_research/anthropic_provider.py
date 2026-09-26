@@ -34,8 +34,11 @@ import anthropic
 
 from app.core.config import settings
 from app.services.place_question_research.prompt import (
+    CATEGORY_QUESTION_OUTPUT_SCHEMA,
+    CATEGORY_QUESTION_SYSTEM_PROMPT,
     OUTPUT_SCHEMA,
     SYSTEM_PROMPT,
+    build_category_question_user_message,
     build_user_message,
 )
 
@@ -147,3 +150,65 @@ def generate_place_questions(
         ) from exc
 
     return _extract_json(response)
+
+
+def generate_category_question(
+    place_name: str,
+    category_display_name: str,
+    finding_summary: str,
+    source_urls: list[str],
+) -> str | None:
+    """Phrases ONE category-gap question grounded in an already-retrieved
+    research finding (see app/services/category_research.py, which decides
+    WHICH finding to pass in, reusing existing research before ever running a
+    new query). Returns None -- never raises past this function -- whenever
+    the output isn't a genuinely usable question, so the caller
+    (place_questions.py) can fall back to its deterministic template exactly
+    as it does for any other failure mode (Part 1E).
+
+    Raises PlaceQuestionResearchProviderError only for a genuine provider
+    failure (no key configured, network/API error) -- callers must catch it
+    themselves, same contract as generate_place_questions above.
+    """
+    client = _get_client()
+
+    try:
+        response = client.messages.create(
+            model=settings.anthropic_model,
+            max_tokens=300,
+            system=CATEGORY_QUESTION_SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": build_category_question_user_message(
+                        place_name, category_display_name, finding_summary, source_urls
+                    ),
+                }
+            ],
+            output_config={"format": CATEGORY_QUESTION_OUTPUT_SCHEMA},
+        )
+    except anthropic.APIStatusError as exc:
+        logger.warning(
+            "Anthropic API error (category question phrasing): status=%s", exc.status_code
+        )
+        raise PlaceQuestionResearchProviderError(
+            f"Category question phrasing request failed (status {exc.status_code})."
+        ) from exc
+    except Exception as exc:
+        logger.warning(
+            "Anthropic request failed (category question phrasing): %s", type(exc).__name__
+        )
+        raise PlaceQuestionResearchProviderError(
+            "Could not reach the question generation service."
+        ) from exc
+
+    parsed = _extract_json(response)
+    if not parsed.get("found_information"):
+        return None
+    text = parsed.get("question_text")
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    if not text or not text.endswith("?") or len(text) > 200:
+        return None
+    return text

@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   LogOut,
   MapPin,
+  ShieldAlert,
   Users,
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
@@ -19,6 +20,7 @@ const NAV_ITEMS = [
   { to: '/places', label: 'Places', icon: MapPin },
   { to: '/contributors', label: 'Guides', icon: Users },
   { to: '/questions', label: 'Questions', icon: HelpCircle },
+  { to: '/knowledge-conflicts', label: 'Knowledge Conflicts', icon: ShieldAlert },
   { to: '/points', label: 'Points Rules', icon: Coins },
 ];
 

@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { ApiError, NetworkError } from '../api/client';
 import { getGuideContext, type GuideContext } from '../api/guideContext';
+import { coverageGaps, getLocationKnowledgeStatus, type CategoryCoverage } from '../api/locationKnowledge';
 import {
   describeCandidateDistance,
   describeCandidateKind,
@@ -150,6 +151,15 @@ export default function ExploreScreen({
   // never hardcodes what a contribution is worth. Null until loaded, in which
   // case cards simply show no reward rather than a guessed one.
   const [rewardConfig, setRewardConfig] = useState<RewardConfig | null>(null);
+  // PRIMARY (category-driven) MISSING-only coverage gaps for the chosen
+  // place -- STALE/PARTIALLY_STALE gaps deliberately stay off this screen,
+  // same reasoning this screen already applies to hazard gaps and place
+  // questions (see the comment on buildPrompts below): re-verifying
+  // something already known is "verification work about one specific spot",
+  // which belongs on the Questions tab, not here. A genuinely MISSING
+  // category is closer to Explore's own purpose -- inviting the guide to
+  // tell us something before we knew to ask.
+  const [categoryGaps, setCategoryGaps] = useState<CategoryCoverage[]>([]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -180,6 +190,21 @@ export default function ExploreScreen({
       } catch {
         setRewardConfig(null);
       }
+
+      // Same best-effort, never-fails-the-screen treatment: a chosen place's
+      // category coverage is enrichment for the deck below, not a
+      // precondition for it. No place chosen -> no fetch at all (never
+      // fabricates coordinates or a Location).
+      if (place) {
+        try {
+          const status = await getLocationKnowledgeStatus(place.id);
+          setCategoryGaps(coverageGaps(status).filter((c) => c.state === 'missing'));
+        } catch {
+          setCategoryGaps([]);
+        }
+      } else {
+        setCategoryGaps([]);
+      }
     } catch (err) {
       const message =
         err instanceof ApiError || err instanceof NetworkError
@@ -192,7 +217,7 @@ export default function ExploreScreen({
       setLoading(false);
       setLoaded(true);
     }
-  }, [db, guide.id, guide.serverGuideId]);
+  }, [db, guide.id, guide.serverGuideId, place]);
 
   useEffect(() => {
     refresh();
@@ -227,7 +252,9 @@ export default function ExploreScreen({
           },
         }
       : context,
-    null
+    null,
+    false,
+    categoryGaps
   );
 
   /** What an Explore contribution answering THIS prompt is currently worth.

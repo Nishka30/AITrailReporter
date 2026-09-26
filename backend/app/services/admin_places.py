@@ -9,6 +9,7 @@ grouping on top of that same data for the admin filter sidebar.
 """
 
 from collections import defaultdict
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import case, func, select
@@ -24,9 +25,11 @@ from app.schemas.admin import (
     PlaceCategoryGroup,
     PlaceCategoryOption,
     PlaceDetail,
+    PlaceKnowledgeCoverageDetail,
     PlaceQueueResult,
     PlaceSummary,
 )
+from app.services import category_knowledge as category_knowledge_service
 from app.services.admin_review import ReviewQueueFilters, list_review_queue
 from app.services.places import category_assignment
 from app.services.places.category_catalog import KIND_PLACE_TYPE
@@ -186,6 +189,37 @@ def get_place_detail(db: Session, location_id: UUID, limit: int = 25) -> PlaceDe
         ],
         created_at=location.created_at,
         recent_observations=result.items,
+        # PRIMARY (category-driven) knowledge coverage -- separate from the
+        # legacy/new category lists above, which only say WHAT this place is,
+        # not what TrailMind actually knows and trusts about it yet. Hazard
+        # state (KnowledgeTypeConfig) and general Explore prompts are
+        # deliberately NOT folded in here -- see services/category_knowledge.py's
+        # module docstring: this dashboard is the PRIMARY system's view only.
+        knowledge_coverage=[
+            PlaceKnowledgeCoverageDetail(
+                category_assignment_id=cov.category_assignment_id,
+                slug=cov.slug,
+                kind=cov.kind,
+                display_name=cov.display_name,
+                relevance=cov.relevance,
+                is_primary=cov.is_primary,
+                state=cov.state,
+                verified_item_count=len(cov.stale_items),
+                last_verified_at=max(
+                    (item.last_verified_at for item in cov.stale_items if item.last_verified_at),
+                    default=None,
+                ),
+                next_stale_at=max(
+                    (
+                        category_knowledge_service.stale_at(item)
+                        for item in cov.stale_items
+                        if category_knowledge_service.is_fresh(item, datetime.now(timezone.utc))
+                    ),
+                    default=None,
+                ),
+            )
+            for cov in category_knowledge_service.get_location_coverage(db, location.id)
+        ],
     )
 
 

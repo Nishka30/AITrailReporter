@@ -280,6 +280,41 @@ class Settings(BaseSettings):
     # audit why a question was asked; not a copy of the web.
     place_research_max_summary_chars: int = 4000
 
+    # --- CategoryKnowledge (PRIMARY knowledge system) ----------------------
+    # A LocationCategoryAssignment counts toward knowledge-coverage
+    # requirements only when its relevance meets this floor. Below it, a
+    # category is real but minor enough that requiring verified knowledge for
+    # it would generate noise questions nobody wants to ask or answer (see
+    # category_rules.py's own relevance scale: 'nightlife'=55, 'photography'
+    # =60 read as minor/incidental in the catalog's own descriptions, versus
+    # 'food_drink'=85, 'safety'=95). Configurable, not hardcoded inline,
+    # because 60 is a considered starting point, not data-derived yet.
+    category_coverage_min_relevance: int = 60
+    # Minimum verified CategoryKnowledge items for a category to count as
+    # covered. Starts at 1 deliberately -- see the architecture doc's Part 13:
+    # inventing a higher bar now would be guessing at data this product
+    # doesn't have yet.
+    category_coverage_min_verified_items: int = 1
+    # Hard cap on new category-driven PlaceQuestions created per generation
+    # call for one Location -- same "small, bounded batch" reasoning as
+    # poi_discovery's per-run caps, so a Location with many uncovered
+    # categories doesn't flood a guide with a dozen questions at once.
+    category_question_max_new_per_run: int = 3
+
+    # --- KnowledgeTypeConfig dynamic-type creation (Step 16) ---------------
+    # Whether extraction may propose and create BRAND NEW KnowledgeTypeConfig
+    # rows (see app/services/knowledge_types.py::create_or_get_dynamic_type).
+    # Disabled by default now that CategoryKnowledge is the home for general
+    # (non-hazard) knowledge -- leaving this open would let a future
+    # extraction silently recreate the exact sprawl (a "cafe_specialty" or
+    # "parking_availability" KnowledgeTypeConfig row) this architecture split
+    # exists to prevent. KnowledgeTypeConfig's four existing hazard types
+    # (weather, trail_condition, snow_ice, obstruction) are UNAFFECTED --
+    # this only gates whether a FIFTH type can ever be added automatically.
+    # A config flag, not a code deletion: reversible, and the hazard
+    # infrastructure itself is untouched either way.
+    dynamic_knowledge_type_creation_enabled: bool = False
+
     # Step 18: reward points -> money. `100` means 100 points = 1.00 of
     # reward_currency_code. Configured here rather than in the mobile app so
     # the rate can change without an app release -- the app only ever DISPLAYS

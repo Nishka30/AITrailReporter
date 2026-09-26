@@ -6,6 +6,7 @@ import ContributionDetailPage from './pages/ContributionDetailPage';
 import ContributionQueuePage from './pages/ContributionQueuePage';
 import ContributorDetailPage from './pages/ContributorDetailPage';
 import ContributorsPage from './pages/ContributorsPage';
+import KnowledgeConflictsPage from './pages/KnowledgeConflictsPage';
 import LoginPage from './pages/LoginPage';
 import OverviewPage from './pages/OverviewPage';
 import PlaceDetailPage from './pages/PlaceDetailPage';
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="contributors" element={<ContributorsPage />} />
         <Route path="contributors/:guideId" element={<ContributorDetailPage />} />
         <Route path="questions" element={<QuestionsPage />} />
+        <Route path="knowledge-conflicts" element={<KnowledgeConflictsPage />} />
         <Route path="points" element={<PointsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

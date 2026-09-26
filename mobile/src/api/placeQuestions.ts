@@ -43,6 +43,14 @@ export interface PlaceQuestion {
   /** What the BACKEND says THIS contribution is worth, already resolved for its
    * kind. Never computed here. */
   rewardPoints: number;
+  /** PRIMARY (category-driven) grouping — null for a question with no
+   * category targeting (predates this feature, or a curated seed question).
+   * Ungrouped questions render under a plain fallback heading. */
+  categoryDisplayName: string | null;
+  categorySlug: string | null;
+  /** True only for a re-verification ask (existing knowledge may have
+   * changed) — lets the UI frame it as "still true?" rather than a fresh ask. */
+  isReverification: boolean;
 }
 
 /** The place questions for wherever the guide currently is. `locationName` is
@@ -75,6 +83,9 @@ interface PlaceQuestionWire {
   source_urls: string[] | null;
   created_at: string;
   reward_points: number;
+  category_display_name?: string | null;
+  category_slug?: string | null;
+  is_reverification?: boolean;
 }
 
 interface GuidePlaceQuestionsWire {
@@ -98,6 +109,9 @@ function placeQuestionFromWire(wire: PlaceQuestionWire): PlaceQuestion {
     sourceUrls: wire.source_urls,
     createdAt: wire.created_at,
     rewardPoints: wire.reward_points,
+    categoryDisplayName: wire.category_display_name ?? null,
+    categorySlug: wire.category_slug ?? null,
+    isReverification: wire.is_reverification ?? false,
   };
 }
 

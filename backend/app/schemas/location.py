@@ -147,3 +147,39 @@ class PlaceCandidateResponse(BaseModel):
     longitude: float
     radius_meters: float
     candidates: list[PlaceCandidate]
+
+
+class CategoryKnowledgeItemRead(BaseModel):
+    """One verified (or pending) knowledge item under a category -- see
+    app/db/models/category_knowledge.py."""
+
+    id: UUID
+    knowledge_text: str
+    volatility: str
+    verified: bool
+    last_verified_at: datetime | None
+    stale_at: datetime | None
+    fresh: bool | None  # null when not yet verified -- freshness is undefined for a pending item
+
+
+class CategoryCoverageRead(BaseModel):
+    """One assigned category's current knowledge state for a Location -- the
+    PRIMARY system's coverage/freshness read (Location -> Categories ->
+    CategoryKnowledge -> Fresh/Stale/Missing)."""
+
+    category_assignment_id: UUID
+    kind: str
+    slug: str
+    display_name: str
+    relevance: int
+    is_primary: bool
+    # One of 'missing' / 'fresh' / 'stale' / 'partially_stale' -- derived,
+    # never stored (see services/category_knowledge.py).
+    state: str
+    items: list[CategoryKnowledgeItemRead]
+
+
+class LocationKnowledgeStatusRead(BaseModel):
+    location_id: UUID
+    location_name: str
+    categories: list[CategoryCoverageRead]

@@ -23,6 +23,7 @@ from app.schemas.place_question import (
     PlaceQuestionRead,
     PlaceQuestionResearchRead,
 )
+from app.services import category_knowledge as category_knowledge_service
 from app.services import guides as guide_service
 from app.services import place_question_answers as place_answer_service
 from app.services import place_questions as place_question_service
@@ -31,7 +32,13 @@ from app.services import submission_review as submission_review_service
 router = APIRouter(tags=["place-questions"])
 
 
-def _to_read(question, reward_points: int) -> PlaceQuestionRead:
+def _to_read(
+    question,
+    reward_points: int,
+    category_labels: dict[UUID, tuple[str, str]] | None = None,
+) -> PlaceQuestionRead:
+    labels = category_labels or {}
+    label = labels.get(question.category_assignment_id) if question.category_assignment_id else None
     return PlaceQuestionRead(
         id=question.id,
         location_id=question.location_id,
@@ -42,6 +49,9 @@ def _to_read(question, reward_points: int) -> PlaceQuestionRead:
         source_urls=question.source_urls,
         created_at=question.created_at,
         reward_points=reward_points,
+        category_slug=label[0] if label else None,
+        category_display_name=label[1] if label else None,
+        is_reverification=question.verifying_knowledge_id is not None,
     )
 
 
@@ -62,13 +72,20 @@ def list_location_popular_questions(
 
     questions = place_question_service.list_place_questions(db, location_id)
     research = place_question_service.get_research(db, location_id)
+    category_labels = category_knowledge_service.get_category_labels_for_assignments(
+        db, [q.category_assignment_id for q in questions if q.category_assignment_id]
+    )
 
     return PlaceQuestionList(
         location_id=location.id,
         location_name=location.name,
         # Points resolved PER question, from its own contribution kind.
         questions=[
-            _to_read(q, place_question_service.place_question_reward_points(db, q.contribution_kind))
+            _to_read(
+                q,
+                place_question_service.place_question_reward_points(db, q.contribution_kind),
+                category_labels,
+            )
             for q in questions
         ],
         research=(
@@ -126,6 +143,7 @@ def research_location_popular_questions(
 
     try:
         place_question_service.ensure_researched(db, location_id, force=force)
+        place_question_service.generate_category_questions_for_location(db, location_id)
     except LookupError:
         raise HTTPException(status_code=404, detail="Location not found")
 

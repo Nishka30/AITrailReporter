@@ -17,6 +17,7 @@ from app.schemas.place_search import PlaceSearchResponse, PlaceSearchResult
 from app.schemas.question import QuestionRead
 from app.schemas.reward import GuideRewardSummary
 from app.schemas.submission_review import GuideSubmissionReviewRead
+from app.services import category_knowledge as category_knowledge_service
 from app.services import geographic_context as geographic_context_service
 from app.services import guide_locations as guide_location_service
 from app.services import guides as guide_service
@@ -95,6 +96,11 @@ def _resolve_position_place(
 
 
 def _research_place_questions_job(location_id: UUID) -> None:
+    """Perplexity/Claude research ONLY -- the AI-research refresh, on its own
+    30-day clock. PRIMARY (category-driven) generation runs separately and
+    unconditionally in get_guide_popular_questions below, on its own,
+    independent clock -- see that call site's comment for why the two must
+    never share a gate."""
     db = SessionLocal()
     try:
         place_question_service.maybe_ensure_researched(db, location_id)
@@ -379,6 +385,19 @@ def get_guide_popular_questions(
     if research_stale:
         background.add_task(_research_place_questions_job, place.id)
 
+    # PRIMARY (category-driven) generation runs on its OWN clock, INLINE and
+    # UNCONDITIONALLY -- deliberately NOT gated on research_stale above. The
+    # two are independent freshness systems (architecture doc Part 4/14):
+    # Perplexity's 30-day window governs whether it's worth spending money
+    # re-researching the whole place, but category coverage can go missing or
+    # stale on a much shorter cycle (a category's own volatility) that must
+    # not wait on that unrelated clock. Safe to run synchronously, unlike the
+    # research job above -- this is pure DB reads/writes and deterministic
+    # templating, no LLM/Perplexity call, so it costs nothing to check on
+    # every request (its own internal duplicate-question guards make repeat
+    # calls a no-op once a gap's question already exists).
+    place_question_service.maybe_generate_category_questions(db, place.id)
+
     # Own questions (AI-researched + this Location's own curated seed
     # questions) PLUS any curated hub's seed questions this place is within
     # range of, de-duplicated -- see list_all_place_questions. Seed questions
@@ -388,6 +407,9 @@ def get_guide_popular_questions(
     # read and never blocks it.
     questions = place_question_service.list_all_place_questions(
         db, place.id, place_latitude, place_longitude
+    )
+    category_labels = category_knowledge_service.get_category_labels_for_assignments(
+        db, [q.category_assignment_id for q in questions if q.category_assignment_id]
     )
 
     return GuidePlaceQuestions(
@@ -410,6 +432,17 @@ def get_guide_popular_questions(
                 reward_points=place_question_service.place_question_reward_points(
                     db, q.contribution_kind
                 ),
+                category_slug=(
+                    category_labels[q.category_assignment_id][0]
+                    if q.category_assignment_id in category_labels
+                    else None
+                ),
+                category_display_name=(
+                    category_labels[q.category_assignment_id][1]
+                    if q.category_assignment_id in category_labels
+                    else None
+                ),
+                is_reverification=q.verifying_knowledge_id is not None,
             )
             for q in questions
         ],

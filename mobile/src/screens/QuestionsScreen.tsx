@@ -82,6 +82,28 @@ function gapStateBadge(question: Question): { label: string; tone: BadgeTone } |
   }
 }
 
+/** Groups "About this place" questions by their PRIMARY (category-driven)
+ * category, when they have one -- preserving each question's own order
+ * within its group. Ungrouped questions (predate this feature, or a curated
+ * seed question with no category) fall into a single trailing bucket with no
+ * heading, rendering exactly as before. Purely a display grouping: it
+ * doesn't touch what's fetched, claimed or answered. */
+type PlaceQuestionGroup = { key: string; label: string | null; questions: PlaceQuestion[] };
+
+function groupPlaceQuestionsByCategory(questions: PlaceQuestion[]): PlaceQuestionGroup[] {
+  const groups = new Map<string, PlaceQuestionGroup>();
+  const order: string[] = [];
+  for (const q of questions) {
+    const key = q.categorySlug ?? '__ungrouped__';
+    if (!groups.has(key)) {
+      groups.set(key, { key, label: q.categoryDisplayName, questions: [] });
+      order.push(key);
+    }
+    groups.get(key)!.questions.push(q);
+  }
+  return order.map((k) => groups.get(k)!);
+}
+
 function QuestionCard({
   question,
   localAnswer,
@@ -210,6 +232,9 @@ function PopularQuestionRow({
         />
       </View>
       <View style={styles.popularBody}>
+        {!answered && question.isReverification ? (
+          <Text style={styles.popularReverificationLabel}>CHECKING IN</Text>
+        ) : null}
         <Text style={styles.popularText}>{question.questionText}</Text>
         {!answered && question.contextNote ? (
           <Text style={styles.popularContextNote} numberOfLines={2}>
@@ -575,17 +600,24 @@ export default function QuestionsScreen({
                   ? ' Some of this was researched a while ago, so it is worth a second look.'
                   : ''}
               </Text>
-              <View style={styles.popularGroup}>
-                {placeQuestions.map((q) => (
-                  <PopularQuestionRow
-                    key={q.id}
-                    question={q}
-                    localAnswer={localAnswers.find((a) => a.serverQuestionId === q.id) ?? null}
-                    captureStatus={answeredPlaceQuestions.get(q.id) ?? null}
-                    onPress={() => onSelectPopularQuestion(q, popular?.locationName ?? null)}
-                  />
-                ))}
-              </View>
+              {groupPlaceQuestionsByCategory(placeQuestions).map((group) => (
+                <View key={group.key} style={styles.categoryGroupWrap}>
+                  {group.label ? (
+                    <Text style={styles.categoryGroupLabel}>{group.label}</Text>
+                  ) : null}
+                  <View style={styles.popularGroup}>
+                    {group.questions.map((q) => (
+                      <PopularQuestionRow
+                        key={q.id}
+                        question={q}
+                        localAnswer={localAnswers.find((a) => a.serverQuestionId === q.id) ?? null}
+                        captureStatus={answeredPlaceQuestions.get(q.id) ?? null}
+                        onPress={() => onSelectPopularQuestion(q, popular?.locationName ?? null)}
+                      />
+                    ))}
+                  </View>
+                </View>
+              ))}
             </View>
           ) : stillResearching ? (
             // The pipeline is genuinely still working, not genuinely empty --
@@ -737,6 +769,21 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     paddingVertical: spacing.xxs,
     paddingHorizontal: spacing.xxs,
+  },
+  categoryGroupWrap: { marginBottom: spacing.sm },
+  categoryGroupLabel: {
+    ...type.captionBold,
+    color: colors.inkFaint,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+    marginLeft: 2,
+  },
+  popularReverificationLabel: {
+    ...type.captionBold,
+    color: colors.marigoldDeep,
+    letterSpacing: 0.3,
+    marginBottom: 1,
   },
   popularRow: {
     flexDirection: 'row',

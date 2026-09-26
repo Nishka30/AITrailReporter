@@ -222,6 +222,75 @@ def build_user_message(
 # Structured output schema. `output_config.format` rather than a forced tool
 # call: kept from the previous web-search version because the shape is stable
 # and the validator in validation.py is written against it.
+# --- Category-driven single-question phrasing (Part 1 of the knowledge-
+# architecture hardening pass) -- a SEPARATE, much smaller prompt from the
+# batch generation above. Where SYSTEM_PROMPT judges "which of several
+# researched details are worth asking about", this one has already been told
+# exactly what to ask about (one category gap, one research finding) and its
+# only job is phrasing it as a short, honest, answerable question -- never
+# stating the research as settled fact (see extractions.py's category-
+# knowledge path: only a moderated guide answer, never a finding, ever
+# creates CategoryKnowledge).
+CATEGORY_QUESTION_SYSTEM_PROMPT = """You write ONE short, second-person, \
+present-tense question asking a guide standing at a specific place right now \
+to VERIFY whether something a web source said about it is still true.
+
+RULES YOU MUST FOLLOW EXACTLY
+- Ground the question in the SPECIFIC researched detail given. Never invent a \
+fact beyond what the research states, and never state the researched detail \
+as settled fact -- phrase it as something to confirm ("Sources say X -- is \
+that still true?"), not as "X is true, right?".
+- The question must be about ONE concern only, answerable by someone \
+physically there right now (seen, heard, checked, or personally confirmed).
+- Address the guide directly: "you", "here", "today", "right now".
+- Must end with a question mark, and be under 160 characters.
+- If the research given does not actually say anything specific and usable \
+for this category, set found_information=false and return no question -- \
+that is a correct and expected answer, not a failure."""
+
+
+def build_category_question_user_message(
+    place_name: str, category_display_name: str, finding_summary: str, source_urls: list[str]
+) -> str:
+    lines = [
+        f"Place: {place_name}",
+        f"Category to ask about: {category_display_name}",
+        "",
+        "RESEARCH ABOUT THIS PLACE:",
+        sanitize.as_untrusted_block(finding_summary),
+    ]
+    if source_urls:
+        lines.append("")
+        lines.append("Sources you may reference (do not quote URLs in the question itself):")
+        lines.extend(f"  {url}" for url in source_urls)
+    return "\n".join(lines)
+
+
+CATEGORY_QUESTION_OUTPUT_SCHEMA = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "question_text": {
+                "type": ["string", "null"],
+                "description": (
+                    "The verification question, or null when found_information is false."
+                ),
+            },
+            "found_information": {
+                "type": "boolean",
+                "description": (
+                    "True only if the supplied research contained something specific and "
+                    "usable for this category. False means question_text must be null."
+                ),
+            },
+        },
+        "required": ["question_text", "found_information"],
+        "additionalProperties": False,
+    },
+}
+
+
 OUTPUT_SCHEMA = {
     "type": "json_schema",
     "schema": {

@@ -180,9 +180,19 @@ def submit_place_question_answer(
     db.commit()
     db.refresh(submission)
 
-    # Same automatic-extraction trigger every other text submission uses --
-    # called AFTER commit, never raises (see extractions.py).
-    extraction_service.maybe_trigger_extraction(db, submission.id)
+    # PRIMARY (category-driven) questions bypass the generic multi-knowledge-
+    # type extraction pipeline entirely -- see extractions.py::
+    # extract_category_knowledge_observation's docstring for why. A question
+    # that predates this feature (category_assignment_id NULL, e.g. a
+    # curated seed question) falls through to the ordinary path unchanged.
+    if place_question.category_assignment_id is not None:
+        extraction_service.maybe_extract_category_knowledge_observation(
+            db, submission.id, place_question.id
+        )
+    else:
+        # Same automatic-extraction trigger every other text submission uses --
+        # called AFTER commit, never raises (see extractions.py).
+        extraction_service.maybe_trigger_extraction(db, submission.id)
     # Always 0 now -- see this function's docstring. The guide is paid only
     # on admin approval.
     return submission, True, 0

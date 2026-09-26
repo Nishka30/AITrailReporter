@@ -40,6 +40,17 @@ class PlaceQuestionRead(BaseModel):
     # worth more than a status check without the app knowing anything about
     # rates.
     reward_points: int = 0
+    # PRIMARY (category-driven) grouping, for the mobile "About this place"
+    # section (architecture doc Part 17/21). Null for a question that predates
+    # this feature or has no category targeting (e.g. a curated seed
+    # question) -- the app groups those under a plain, ungrouped fallback.
+    category_display_name: str | None = None
+    category_slug: str | None = None
+    # True only for a re-verification question (this already-known fact may
+    # have changed) -- lets the app phrase/frame it distinctly from a
+    # first-ask ("Still true?" vs "Tell us about..."), matching how the
+    # knowledge-gap side already distinguishes urgency framing.
+    is_reverification: bool = False
 
 
 class PlaceQuestionResearchRead(BaseModel):
