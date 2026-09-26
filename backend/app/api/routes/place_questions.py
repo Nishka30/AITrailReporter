@@ -12,6 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
+from app.core.admin_auth import AdminPrincipal, require_admin
 from app.core.config import settings
 from app.db.models.location import Location
 from app.db.session import get_db
@@ -89,9 +90,23 @@ def research_location_popular_questions(
             "refresh window. Costs a real web search -- use deliberately."
         ),
     ),
+    admin: AdminPrincipal = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Triggers (or refreshes) web research for this place.
+    """Triggers (or refreshes) web research for this place. ADMIN-ONLY.
+
+    This is a manual/ops trigger, not part of the guide-facing app -- the
+    normal, automatic path is GET .../popular-questions on the guides router,
+    which best-effort refreshes stale research on its own (see
+    maybe_ensure_researched) and is deliberately left open to any guide, same
+    as before. This endpoint exists so an operator can force a re-research on
+    demand (`force=True` bypasses the 30-day freshness window entirely), which
+    is exactly why it must not be reachable by an arbitrary caller: unlike the
+    guide-facing path, nothing here is naturally bounded by staleness, so an
+    unauthenticated caller could otherwise spend real Perplexity + Anthropic
+    money on repeat by simply calling this in a loop. Gated with the same
+    admin token every other /admin-adjacent write in this backend uses (see
+    app/core/admin_auth.py) -- no new auth mechanism introduced.
 
     Always returns 200 with the current state: 'failed' is an honest outcome
     of a successfully-handled request, not an HTTP error -- the same

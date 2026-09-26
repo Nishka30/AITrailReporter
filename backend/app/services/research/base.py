@@ -52,6 +52,13 @@ class ResearchFinding:
     model: str
     retrieved_at: datetime
     sources: list[ResearchSource] = field(default_factory=list)
+    # Cost/usage provenance for this one call, straight from the provider's own
+    # response -- never estimated or recomputed here. All optional: a provider
+    # that doesn't report usage (or a shape this system doesn't yet parse)
+    # simply leaves these None rather than blocking the finding on it.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
 
     @property
     def is_usable(self) -> bool:

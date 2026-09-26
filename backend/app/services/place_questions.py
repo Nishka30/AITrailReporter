@@ -299,6 +299,9 @@ def _persist_findings(
             source_urls=finding.source_urls or None,
             source_titles=finding.source_titles or None,
             retrieved_at=finding.retrieved_at,
+            input_tokens=finding.input_tokens,
+            output_tokens=finding.output_tokens,
+            cost_usd=finding.cost_usd,
         )
         db.add(row)
         stored[finding.topic] = row

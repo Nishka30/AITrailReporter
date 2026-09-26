@@ -180,6 +180,19 @@ class PerplexityResearchProvider:
         except (KeyError, IndexError, TypeError) as exc:
             raise ResearchProviderError("Web research returned an unexpected response.") from exc
 
+        # Cost/usage provenance, straight from Perplexity's own response --
+        # never estimated. `usage` and its nested `cost` are both optional in
+        # the documented schema, so every read here is defensive: a missing or
+        # reshaped field must degrade to None, never break a successful research
+        # call over a field this system only uses for after-the-fact auditing.
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        cost = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+        input_tokens = usage.get("prompt_tokens") if isinstance(usage.get("prompt_tokens"), int) else None
+        output_tokens = (
+            usage.get("completion_tokens") if isinstance(usage.get("completion_tokens"), int) else None
+        )
+        cost_usd = cost.get("total_cost") if isinstance(cost.get("total_cost"), (int, float)) else None
+
         # Scrubbed HERE, at the edge, so no untrusted web text ever exists
         # inside this system in a form that could reach a prompt unprocessed --
         # including the copy that gets persisted for provenance.
@@ -189,7 +202,8 @@ class PerplexityResearchProvider:
         sources = _extract_sources(payload)
 
         logger.info(
-            "Research [%s]: %d chars, %d source(s).", topic, len(summary), len(sources)
+            "Research [%s]: %d chars, %d source(s), cost=%s.",
+            topic, len(summary), len(sources), cost_usd,
         )
         return ResearchFinding(
             topic=topic,
@@ -199,6 +213,9 @@ class PerplexityResearchProvider:
             model=str(payload.get("model") or self._model),
             retrieved_at=datetime.now(timezone.utc),
             sources=sources,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
         )
 
 
