@@ -562,6 +562,7 @@ def maybe_trigger_extraction(db: Session, submission_id: UUID) -> None:
     try:
         start_extraction(db, submission_id)
     except Exception:
+        db.rollback()
         logger.warning(
             "Automatic extraction trigger failed for submission %s", submission_id, exc_info=True
         )

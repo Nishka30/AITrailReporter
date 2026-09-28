@@ -126,13 +126,20 @@ export type TranscriptionRead = {
   updated_at: string;
 };
 
+/** One photo attached to a submission (multi-image support) -- mirrors
+ * backend's SubmissionPhotoRead exactly. `id` addresses this specific photo
+ * for GET /api/v1/admin/submissions/{submission_id}/photos/{id}. */
+export type SubmissionPhoto = SubmissionMediaMeta & { id: string };
+
 export type ReviewSourceSubmission = {
   submission_id: string;
   submission_type: string;
   raw_text: string | null;
   submitted_at: string;
   audio: SubmissionMediaMeta | null;
-  photo: SubmissionMediaMeta | null;
+  /** Every photo attached to this submission, oldest first -- empty, never
+   * null, when none has been uploaded. A submission may now carry several. */
+  photos: SubmissionPhoto[];
   transcript: TranscriptionRead | null;
 };
 
@@ -451,7 +458,7 @@ export type ContributionQueueResult = {
 export type ContributionDetail = {
   item: ContributionQueueItem;
   audio: SubmissionMediaMeta | null;
-  photo: SubmissionMediaMeta | null;
+  photos: SubmissionPhoto[];
   transcript: TranscriptionRead | null;
   guide_phone_number: string | null;
 };

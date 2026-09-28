@@ -2,7 +2,14 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { generateClientId } from '../db/uuid';
 import { isValidCoordinatePair } from '../location/coordinateValidation';
-import type { LocalAnswer, QuestionKind, SyncStatus } from '../types/models';
+import type { PhotoInput } from './captureRepository';
+import type {
+  AttachedPhotoRecord,
+  LocalAnswer,
+  PhotoSyncStatus,
+  QuestionKind,
+  SyncStatus,
+} from '../types/models';
 
 interface LocalAnswerRow {
   id: number;
@@ -51,8 +58,91 @@ export interface AnswerMediaInput {
   localAudioUri?: string | null;
   audioDurationMillis?: number | null;
   audioContentType?: string | null;
-  localPhotoUri?: string | null;
-  photoContentType?: string | null;
+  /** Zero or more photos to attach at creation time (multi-image support) --
+   * mirrors captureRepository.ts's ExploreLikeOptions.photos exactly. */
+  photos?: PhotoInput[];
+}
+
+interface LocalAnswerPhotoRow {
+  id: number;
+  answer_id: number;
+  local_uri: string;
+  client_photo_id: string;
+  content_type: string | null;
+  position: number;
+  sync_status: string;
+  last_sync_error: string | null;
+  created_at: string;
+}
+
+function mapPhotoRow(row: LocalAnswerPhotoRow): AttachedPhotoRecord {
+  return {
+    id: row.id,
+    localUri: row.local_uri,
+    clientPhotoId: row.client_photo_id,
+    contentType: row.content_type,
+    position: row.position,
+    syncStatus: row.sync_status as PhotoSyncStatus,
+    lastSyncError: row.last_sync_error,
+  };
+}
+
+/** Every photo attached to one answer, oldest position first. */
+export async function listAnswerPhotos(
+  db: SQLiteDatabase,
+  answerId: number
+): Promise<AttachedPhotoRecord[]> {
+  const rows = await db.getAllAsync<LocalAnswerPhotoRow>(
+    'SELECT * FROM local_answer_photos WHERE answer_id = ? ORDER BY position ASC, id ASC',
+    answerId
+  );
+  return rows.map(mapPhotoRow);
+}
+
+/** Batched equivalent of listAnswerPhotos for a whole page of answers -- ONE
+ * query grouped in JS, not one per answer. */
+async function listPhotosForAnswers(
+  db: SQLiteDatabase,
+  answerIds: number[]
+): Promise<Map<number, AttachedPhotoRecord[]>> {
+  const result = new Map<number, AttachedPhotoRecord[]>();
+  if (answerIds.length === 0) return result;
+  const placeholders = answerIds.map(() => '?').join(', ');
+  const rows = await db.getAllAsync<LocalAnswerPhotoRow>(
+    `SELECT * FROM local_answer_photos WHERE answer_id IN (${placeholders})
+     ORDER BY answer_id ASC, position ASC, id ASC`,
+    ...answerIds
+  );
+  for (const row of rows) {
+    const photo = mapPhotoRow(row);
+    const existing = result.get(row.answer_id);
+    if (existing) existing.push(photo);
+    else result.set(row.answer_id, [photo]);
+  }
+  return result;
+}
+
+export async function markAnswerPhotoUploading(db: SQLiteDatabase, photoId: number): Promise<void> {
+  await db.runAsync(`UPDATE local_answer_photos SET sync_status = 'uploading' WHERE id = ?`, photoId);
+}
+
+export async function markAnswerPhotoUploaded(db: SQLiteDatabase, photoId: number): Promise<void> {
+  await db.runAsync(
+    `UPDATE local_answer_photos SET sync_status = 'uploaded', last_sync_error = NULL WHERE id = ?`,
+    photoId
+  );
+}
+
+export async function markAnswerPhotoFailed(
+  db: SQLiteDatabase,
+  photoId: number,
+  errorMessage: string
+): Promise<void> {
+  await db.runAsync(
+    `UPDATE local_answer_photos SET sync_status = 'failed', last_sync_error = ? WHERE id = ?`,
+    errorMessage,
+    photoId
+  );
 }
 
 /**
@@ -75,7 +165,7 @@ export interface AnswerLocationInput {
   locationSource?: string | null;
 }
 
-function mapRow(row: LocalAnswerRow): LocalAnswer {
+function mapRow(row: LocalAnswerRow, photos: AttachedPhotoRecord[] = []): LocalAnswer {
   return {
     id: row.id,
     localGuideId: row.local_guide_id,
@@ -94,6 +184,7 @@ function mapRow(row: LocalAnswerRow): LocalAnswer {
     localPhotoUri: row.local_photo_uri,
     clientPhotoId: row.client_photo_id,
     photoContentType: row.photo_content_type,
+    photos,
     syncStatus: row.sync_status as SyncStatus,
     syncAttemptCount: row.sync_attempt_count,
     lastSyncError: row.last_sync_error,
@@ -161,48 +252,67 @@ export async function createAnswer(
   const now = new Date().toISOString();
   const clientAnswerId = generateClientId();
   const clientAudioId = media.localAudioUri ? generateClientId() : null;
-  const clientPhotoId = media.localPhotoUri ? generateClientId() : null;
-  const result = await db.runAsync(
-    `INSERT INTO local_answer
-       (local_guide_id, server_question_id, question_kind, client_answer_id, answer_text, answered_at, reward_points,
-        local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
-        local_photo_uri, client_photo_id, photo_content_type,
-        latitude, longitude, location_accuracy_meters, location_captured_at, location_label, external_place_id, location_source,
-        sync_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-    localGuideId,
-    serverQuestionId,
-    questionKind,
-    clientAnswerId,
-    answerText,
-    answeredAt,
-    rewardPoints,
-    media.localAudioUri ?? null,
-    clientAudioId,
-    media.audioDurationMillis ?? null,
-    media.audioContentType ?? null,
-    media.localPhotoUri ?? null,
-    clientPhotoId,
-    media.photoContentType ?? null,
-    safeLocation.latitude ?? null,
-    safeLocation.longitude ?? null,
-    safeLocation.locationAccuracyMeters ?? null,
-    safeLocation.locationCapturedAt ?? null,
-    safeLocation.locationLabel ?? null,
-    safeLocation.externalPlaceId ?? null,
-    safeLocation.locationSource ?? null,
-    now,
-    now
-  );
+  const photoInputs = media.photos ?? [];
+
+  // The answer row and its photo rows are inserted together, atomically --
+  // same reasoning as insertExploreLikeCapture in captureRepository.ts.
+  let answerId = 0;
+  await db.withTransactionAsync(async () => {
+    const result = await db.runAsync(
+      `INSERT INTO local_answer
+         (local_guide_id, server_question_id, question_kind, client_answer_id, answer_text, answered_at, reward_points,
+          local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
+          latitude, longitude, location_accuracy_meters, location_captured_at, location_label, external_place_id, location_source,
+          sync_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      localGuideId,
+      serverQuestionId,
+      questionKind,
+      clientAnswerId,
+      answerText,
+      answeredAt,
+      rewardPoints,
+      media.localAudioUri ?? null,
+      clientAudioId,
+      media.audioDurationMillis ?? null,
+      media.audioContentType ?? null,
+      safeLocation.latitude ?? null,
+      safeLocation.longitude ?? null,
+      safeLocation.locationAccuracyMeters ?? null,
+      safeLocation.locationCapturedAt ?? null,
+      safeLocation.locationLabel ?? null,
+      safeLocation.externalPlaceId ?? null,
+      safeLocation.locationSource ?? null,
+      now,
+      now
+    );
+    answerId = result.lastInsertRowId;
+
+    for (let position = 0; position < photoInputs.length; position++) {
+      const photo = photoInputs[position];
+      await db.runAsync(
+        `INSERT INTO local_answer_photos
+           (answer_id, local_uri, client_photo_id, content_type, position, sync_status, created_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+        answerId,
+        photo.localUri,
+        generateClientId(),
+        photo.contentType ?? null,
+        position,
+        now
+      );
+    }
+  });
 
   const row = await db.getFirstAsync<LocalAnswerRow>(
     'SELECT * FROM local_answer WHERE id = ?',
-    result.lastInsertRowId
+    answerId
   );
   if (!row) {
     throw new Error('Failed to read back the newly created local answer.');
   }
-  return mapRow(row);
+  const photos = await listAnswerPhotos(db, answerId);
+  return mapRow(row, photos);
 }
 
 /** The local answer for this server question, if the guide has already
@@ -215,7 +325,8 @@ export async function getAnswerByQuestionId(
     'SELECT * FROM local_answer WHERE server_question_id = ?',
     serverQuestionId
   );
-  return row ? mapRow(row) : null;
+  if (!row) return null;
+  return mapRow(row, await listAnswerPhotos(db, row.id));
 }
 
 /**
@@ -273,7 +384,8 @@ export async function listAnswersForGuide(
     'SELECT * FROM local_answer WHERE local_guide_id = ? ORDER BY answered_at DESC',
     localGuideId
   );
-  return rows.map(mapRow);
+  const photosByAnswer = await listPhotosForAnswers(db, rows.map((r) => r.id));
+  return rows.map((row) => mapRow(row, photosByAnswer.get(row.id) ?? []));
 }
 
 /** Answers eligible for a sync attempt (see SYNCABLE_STATUSES above), oldest
@@ -290,7 +402,8 @@ export async function listSyncableAnswers(
     localGuideId,
     ...SYNCABLE_STATUSES
   );
-  return rows.map(mapRow);
+  const photosByAnswer = await listPhotosForAnswers(db, rows.map((r) => r.id));
+  return rows.map((row) => mapRow(row, photosByAnswer.get(row.id) ?? []));
 }
 
 /**

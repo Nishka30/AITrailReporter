@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.schemas.knowledge_state import KnowledgeState
+from app.schemas.place_summary import PlaceResearchSummaryRead
 
 
 class PublicKnowledgeType(BaseModel):
@@ -87,7 +88,10 @@ class PublicObservation(BaseModel):
     external_place_id: str | None = None
     has_photo: bool
     has_audio: bool
-    photo_url: str | None
+    # Every photo attached to this observation's submission (multi-image
+    # support) -- empty, never null, when none exists. Each URL addresses one
+    # specific photo (see GET /api/v1/public/media/{submission_id}/photos/{photo_id}).
+    photo_urls: list[str] = []
     audio_url: str | None
     # Only ever populated from a COMPLETED transcription of a submission that
     # produced at least one approved observation -- see
@@ -126,6 +130,12 @@ class PublicLocationDetail(PublicLocationSummary):
     recent_observations: list[PublicObservation]
     photo_count: int
     voice_story_count: int
+    # WEB-RESEARCHED, UNVERIFIED orientation content -- deliberately its own
+    # field, never merged into `description` above or into `conditions`
+    # (live data) or `recent_observations` (TrailMind-verified traveler
+    # contributions). None when this Location has never had a summary
+    # attempt. See app/db/models/location_research_summary.py.
+    research_summary: PlaceResearchSummaryRead | None = None
 
 
 class PublicSearchResult(BaseModel):

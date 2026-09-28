@@ -1,10 +1,14 @@
+import logging
 import mimetypes
 import uuid
 from pathlib import Path
 
+from storage3.utils import StorageException
 from supabase import Client, create_client
 
-from app.services.storage.base import MediaStorage, StoredFile
+from app.services.storage.base import MediaStorage, MediaStorageError, StoredFile
+
+logger = logging.getLogger(__name__)
 
 # Mirrors the extension sets in local_filesystem.py — used only to pick a
 # sensible MIME type for the Content-Type header on upload. The actual
@@ -54,34 +58,88 @@ class SupabaseMediaStorage(MediaStorage):
     def save(self, content: bytes, original_filename: str) -> StoredFile:
         """Uploads `content` to the bucket and returns a StoredFile whose
         storage_key is a server-generated UUID path (never the client filename).
+
+        Raises MediaStorageError on any upload failure. This used to have NO
+        error handling at all: a rejected upload (bad/expired service-role
+        key, a missing bucket, an RLS policy mismatch, a transient 5xx, ...)
+        propagated as a raw, uncaught storage3 exception all the way to
+        FastAPI's default handler -- an opaque 500 with no logged status code
+        or response body anywhere, indistinguishable from every other kind of
+        failure. That made a genuinely small, valid upload that Supabase
+        rejected for an unrelated reason look identical to "your photo is too
+        big" from the client's perspective. Logging the real status/code here
+        (never the service-role key, which the SDK never puts in these
+        fields) is what makes that diagnosable going forward.
         """
         ext = self._safe_extension(original_filename)
         storage_key = f"{uuid.uuid4().hex}{ext}"
         mime = _mime_for(f"file{ext}")
 
-        self._client.storage.from_(self._bucket).upload(
-            path=storage_key,
-            file=content,
-            file_options={
-                "content-type": mime,
-                "cache-control": "3600",
-                "upsert": "false",
-            },
-        )
+        try:
+            self._client.storage.from_(self._bucket).upload(
+                path=storage_key,
+                file=content,
+                file_options={
+                    "content-type": mime,
+                    "cache-control": "3600",
+                    "upsert": "false",
+                },
+            )
+        except StorageException as exc:
+            status = getattr(exc, "status", None)
+            code = getattr(exc, "code", None)
+            message = getattr(exc, "message", str(exc))
+            logger.warning(
+                "Supabase Storage upload failed: bucket=%r status=%s code=%s message=%s",
+                self._bucket, status, code, message,
+            )
+            raise MediaStorageError(
+                f"Could not store the uploaded file (storage backend rejected it: {message})."
+            ) from exc
+        except Exception as exc:
+            logger.warning(
+                "Supabase Storage upload failed with an unexpected error: bucket=%r %s",
+                self._bucket, type(exc).__name__,
+            )
+            raise MediaStorageError("Could not store the uploaded file.") from exc
+
         return StoredFile(storage_key=storage_key, size_bytes=len(content))
 
     def read_bytes(self, storage_key: str) -> bytes:
         """Downloads and returns the raw bytes for a previously saved file.
-        Raises FileNotFoundError if the object does not exist in the bucket.
+
+        Raises FileNotFoundError only when the object genuinely does not
+        exist in the bucket (a 404 from Supabase); raises MediaStorageError
+        for any other storage-backend failure (auth/config/network/5xx).
+        This used to collapse EVERY exception into FileNotFoundError with no
+        logging at all -- a transient Supabase outage or an expired
+        service-role key made every already-uploaded photo/audio file look
+        identical to "genuinely deleted," with no operator-visible signal to
+        tell the two apart. Same fix shape as save() above.
         """
         try:
             data: bytes = self._client.storage.from_(self._bucket).download(storage_key)
-        except Exception as exc:
-            # supabase-py raises a generic StorageException on 404; wrap it so
-            # callers can catch FileNotFoundError uniformly regardless of backend.
-            raise FileNotFoundError(
-                f"Object {storage_key!r} not found in bucket {self._bucket!r}"
+        except StorageException as exc:
+            status = getattr(exc, "status", None)
+            code = getattr(exc, "code", None)
+            message = getattr(exc, "message", str(exc))
+            logger.warning(
+                "Supabase Storage download failed: bucket=%r key=%r status=%s code=%s message=%s",
+                self._bucket, storage_key, status, code, message,
+            )
+            if status == 404:
+                raise FileNotFoundError(
+                    f"Object {storage_key!r} not found in bucket {self._bucket!r}"
+                ) from exc
+            raise MediaStorageError(
+                f"Could not retrieve the stored file (storage backend error: {message})."
             ) from exc
+        except Exception as exc:
+            logger.warning(
+                "Supabase Storage download failed with an unexpected error: bucket=%r key=%r %s",
+                self._bucket, storage_key, type(exc).__name__,
+            )
+            raise MediaStorageError("Could not retrieve the stored file.") from exc
         return data
 
     def resolve_path(self, storage_key: str) -> Path:  # type: ignore[override]

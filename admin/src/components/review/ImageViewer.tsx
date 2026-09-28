@@ -6,8 +6,12 @@ import { ErrorState, LoadingState } from '../ui/States';
 
 /** Evidence photo preview for Review Detail -- a thumbnail that opens a
  * larger view on click. Same blob-fetch approach as AudioPlayer, for the
- * same reason (the media route needs an auth header). */
-export default function ImageViewer({ submissionId }: { submissionId: string }) {
+ * same reason (the media route needs an auth header).
+ *
+ * `photoId` addresses ONE specific photo (multi-image support -- a
+ * submission may have several; render one ImageViewer per entry in
+ * source.photos). */
+export default function ImageViewer({ submissionId, photoId }: { submissionId: string; photoId: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -16,7 +20,7 @@ export default function ImageViewer({ submissionId }: { submissionId: string }) 
     let objectUrl: string | null = null;
     let cancelled = false;
 
-    fetchMediaBlobUrl(`/api/v1/admin/submissions/${submissionId}/photo`)
+    fetchMediaBlobUrl(`/api/v1/admin/submissions/${submissionId}/photos/${photoId}`)
       .then((blobUrl) => {
         if (cancelled) {
           URL.revokeObjectURL(blobUrl);
@@ -31,7 +35,7 @@ export default function ImageViewer({ submissionId }: { submissionId: string }) 
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [submissionId]);
+  }, [submissionId, photoId]);
 
   if (error) return <ErrorState message={error} />;
   if (!url) return <LoadingState label="Loading photo…" />;

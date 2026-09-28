@@ -27,6 +27,7 @@ from app.services import transcriptions as transcription_service
 from app.services.audio_validation import InvalidAudioUploadError, validate_audio_upload
 from app.services.photo_validation import InvalidPhotoUploadError, validate_photo_upload
 from app.services.storage import get_audio_storage, get_photo_storage
+from app.services.storage.base import MediaStorageError
 
 router = APIRouter(prefix="/api/v1/submissions", tags=["submissions"])
 
@@ -53,7 +54,7 @@ def create_submission(payload: SubmissionCreate, response: Response, db: Session
         )
 
     response.status_code = 201 if created else 200
-    return submission
+    return submission_service.build_submission_read(db, submission)
 
 
 @router.post("/{submission_id}/audio", response_model=SubmissionRead)
@@ -134,6 +135,8 @@ async def upload_submission_audio(
             detail="client_audio_id was already used with a different audio attachment "
             "for this submission",
         )
+    except MediaStorageError as exc:
+        raise HTTPException(status_code=502, detail=exc.message)
 
     # Scheduled on BOTH the first attach and an idempotent replay, on purpose.
     # A replay is how the mobile app retries an upload whose response it never
@@ -147,7 +150,7 @@ async def upload_submission_audio(
     transcription_service.schedule_transcription(background_tasks, db, submission_id)
 
     response.status_code = 201 if created else 200
-    return submission
+    return submission_service.build_submission_read(db, submission)
 
 
 @router.post("/{submission_id}/photo", response_model=SubmissionRead)
@@ -158,13 +161,17 @@ async def upload_submission_photo(
     client_photo_id: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    """Uploads and durably attaches a photo to an 'explore' submission created
-    via POST /api/v1/submissions (Step 16). Idempotent on client_photo_id — a
-    third distinct stable id alongside client_submission_id and client_audio_id
-    (see Submission.client_photo_id): a retried request with the same
-    client_photo_id returns the existing reference (200) instead of storing a
-    duplicate file; the same submission with a DIFFERENT client_photo_id is
-    rejected with 409.
+    """Uploads and durably attaches ONE photo to an 'explore'/'memory'/'answer'
+    submission created via POST /api/v1/submissions. Multi-image: call this
+    once PER PHOTO, each with its own client_photo_id -- a submission may
+    carry up to settings.max_photos_per_submission this way (see
+    app/services/submissions.py:attach_photo_to_submission and
+    app/db/models/submission_photo.py). Idempotent per photo: a retried
+    request with the same client_photo_id returns the existing reference
+    (200) instead of storing a duplicate file; a client_photo_id already used
+    for a photo on a DIFFERENT submission is rejected with 409 (a real id
+    collision); a submission already at the configured photo cap is rejected
+    with 409 too.
 
     Restricted to PHOTO_CAPABLE_SUBMISSION_TYPES on purpose: photos come from
     the Explore/memory composer and, since the answer composer gained the same
@@ -216,9 +223,15 @@ async def upload_submission_photo(
     except submission_service.PhotoConflictError:
         raise HTTPException(
             status_code=409,
-            detail="client_photo_id was already used with a different photo attachment "
-            "for this submission",
+            detail="client_photo_id was already used for a photo on a different submission",
         )
+    except submission_service.TooManyPhotosError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This submission already has the maximum of {exc.limit} photos attached.",
+        )
+    except MediaStorageError as exc:
+        raise HTTPException(status_code=502, detail=exc.message)
 
     response.status_code = 201 if created else 200
-    return submission
+    return submission_service.build_submission_read(db, submission)

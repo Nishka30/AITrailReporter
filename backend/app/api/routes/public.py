@@ -17,6 +17,7 @@ from app.db.session import get_db
 from app.services import public_content as public_service
 from app.services import submissions as submission_service
 from app.services.storage import get_audio_storage, get_photo_storage
+from app.services.storage.base import MediaStorageError
 
 from app.db.models.observation import Observation
 from app.db.models.observation_moderation import ObservationModeration
@@ -108,24 +109,31 @@ def _submission_has_approved_observation(db: Session, submission_id: UUID) -> bo
     return db.execute(stmt).first() is not None
 
 
-@router.get("/media/{submission_id}/photo")
-def get_public_photo(submission_id: UUID, db: Session = Depends(get_db)):
-    """Streams a photo ONLY when the submission it belongs to produced at
-    least one approved observation -- same reasoning as
-    app/api/routes/admin.py's equivalent route, plus the approval gate. A
-    submission with unapproved-only observations 404s, indistinguishable
-    from a submission that doesn't exist, so this endpoint never confirms
-    the existence of unapproved content."""
-    submission = submission_service.get_submission(db, submission_id)
-    if submission is None or submission.photo is None:
+@router.get("/media/{submission_id}/photos/{photo_id}")
+def get_public_photo(submission_id: UUID, photo_id: UUID, db: Session = Depends(get_db)):
+    """Streams ONE specific photo (multi-image: a submission may have
+    several -- see app/db/models/submission_photo.py) ONLY when the
+    submission it belongs to produced at least one approved observation --
+    same reasoning as app/api/routes/admin.py's equivalent route, plus the
+    approval gate. A submission with unapproved-only observations, or a
+    photo_id that doesn't belong to this submission, both 404 identically to
+    a submission that doesn't exist, so this endpoint never confirms the
+    existence of unapproved content."""
+    photo = next(
+        (p for p in submission_service.list_submission_photos(db, submission_id) if p.id == photo_id),
+        None,
+    )
+    if photo is None:
         raise HTTPException(status_code=404, detail="Photo not found")
     if not _submission_has_approved_observation(db, submission_id):
         raise HTTPException(status_code=404, detail="Photo not found")
     try:
-        content = get_photo_storage().read_bytes(submission.photo_storage_key)
+        content = get_photo_storage().read_bytes(photo.storage_key)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Photo not found")
-    return Response(content=content, media_type=submission.photo.content_type)
+    except MediaStorageError as exc:
+        raise HTTPException(status_code=502, detail=exc.message)
+    return Response(content=content, media_type=photo.content_type)
 
 
 @router.get("/media/{submission_id}/audio")
@@ -139,4 +147,6 @@ def get_public_audio(submission_id: UUID, db: Session = Depends(get_db)):
         content = get_audio_storage().read_bytes(submission.audio_storage_key)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Audio not found")
+    except MediaStorageError as exc:
+        raise HTTPException(status_code=502, detail=exc.message)
     return Response(content=content, media_type=submission.audio.content_type)

@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models.submission import Submission
+from app.db.models.submission_photo import SubmissionPhoto
 from app.db.models.submission_review import REJECTION_REASONS, SubmissionReview
 from app.services import rewards as reward_service
 
@@ -245,7 +246,10 @@ def award_media_bonus(db: Session, submission: Submission, review: SubmissionRev
         return 0
     if submission.source_place_question_id is not None:
         return 0
-    if submission.client_audio_id is None and submission.client_photo_id is None:
+    has_photo = db.execute(
+        select(SubmissionPhoto.id).where(SubmissionPhoto.submission_id == submission.id).limit(1)
+    ).first() is not None
+    if submission.client_audio_id is None and not has_photo:
         return 0
 
     bonus_points = reward_service.award(

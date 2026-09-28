@@ -49,6 +49,7 @@ from app.db.models.place_research_finding import PlaceResearchFinding
 from app.services import category_knowledge as category_knowledge_service
 from app.services import category_knowledge_policy
 from app.services import category_research as category_research_service
+from app.services import place_summary_service
 from app.services import rewards as reward_service
 from app.services.place_question_research import (
     anthropic_provider,
@@ -767,11 +768,20 @@ def ensure_researched(db: Session, location_id: UUID, force: bool = False) -> Pl
         logger.info("No usable research for location %s -- no questions generated.", location_id)
         return done
 
-    # --- 2. GENERATION: which of those details can someone here check? -------
     # Only URLs genuinely retrieved above are citable. This is what makes a
-    # question's provenance a fact rather than a claim -- see
-    # validation._keep_only_cited_urls.
+    # question's (and the place summary's) provenance a fact rather than a
+    # claim -- see validation._keep_only_cited_urls.
     allowed_urls = {url for finding in findings for url in finding.source_urls}
+
+    # --- 1.5. SUMMARY: a reusable, structured orientation for the future
+    # Travelers website, built from the SAME findings above at zero extra
+    # Perplexity cost (see place_summary_service's module docstring). Never
+    # raises and never affects question generation's own outcome below --
+    # this is best-effort enrichment, not part of ensure_researched's
+    # success/failure contract.
+    place_summary_service.maybe_generate_summary(db, location, findings, allowed_urls=allowed_urls)
+
+    # --- 2. GENERATION: which of those details can someone here check? -------
     try:
         raw = anthropic_provider.generate_place_questions(
             place_name,
@@ -818,6 +828,7 @@ def maybe_ensure_researched(db: Session, location_id: UUID) -> None:
     try:
         ensure_researched(db, location_id)
     except Exception as exc:  # noqa: BLE001 -- deliberate best-effort boundary
+        db.rollback()
         logger.warning(
             "Best-effort place question research failed for %s: %s",
             location_id,

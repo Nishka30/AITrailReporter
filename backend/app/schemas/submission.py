@@ -248,12 +248,18 @@ class SubmissionAudioRead(BaseModel):
 
 
 class SubmissionPhotoRead(BaseModel):
-    """Durable photo metadata for an 'explore' submission (Step 16). Like
-    SubmissionAudioRead, deliberately omits the server storage key/path — that
-    is an internal implementation detail, never exposed to clients."""
+    """Durable metadata for ONE photo attached to a submission (multi-image:
+    a submission may carry several of these -- see
+    app/db/models/submission_photo.py). Like SubmissionAudioRead,
+    deliberately omits the server storage key/path — that is an internal
+    implementation detail, never exposed to clients. `id` IS exposed (unlike
+    the single-photo version this replaced) because it is now needed to
+    address one specific photo when reading it back, e.g.
+    GET /api/v1/admin/submissions/{submission_id}/photos/{photo_id}."""
 
     model_config = ConfigDict(from_attributes=True)
 
+    id: UUID
     content_type: str
     original_filename: str
     size_bytes: int
@@ -274,6 +280,9 @@ class SubmissionRead(BaseModel):
     # Populated from the ORM's Submission.audio property (see db/models/submission.py)
     # — present only once audio has actually been uploaded for this submission.
     audio: SubmissionAudioRead | None = None
-    # Same contract, from Submission.photo — null until a photo has actually
-    # been uploaded (Step 16).
-    photo: SubmissionPhotoRead | None = None
+    # Every photo attached to this submission so far, oldest first (multi-image
+    # support) -- empty, never null, when none has been uploaded yet. Populated
+    # explicitly by the service layer (SubmissionPhoto is a separate table, not
+    # an ORM relationship -- see app/services/submissions.py:list_submission_photos),
+    # so a bare `Submission.model_validate()` will NOT fill this in on its own.
+    photos: list[SubmissionPhotoRead] = []

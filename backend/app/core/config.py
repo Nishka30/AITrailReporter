@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # original-resolution capture.
     max_photo_upload_size_bytes: int = 10_485_760  # 10 MiB
 
+    # Multi-image support: hard cap on how many photos ONE submission may
+    # carry. Same "bounded batch" reasoning as every other per-run/per-entity
+    # cap in this codebase (poi_discovery_max_places,
+    # category_question_max_new_per_run, ...) -- a guide reporting on one
+    # place/moment legitimately wants several photos, but nothing here should
+    # accept an unbounded number per submission. Enforced in
+    # app/services/submissions.py:attach_photo_to_submission.
+    max_photos_per_submission: int = 6
+
     # Step 8: Sarvam AI (Saaras) transcription. The backend is the ONLY thing that
     # ever holds this key — never sent to, or read by, the mobile app. `None` (not
     # set) is a valid, expected local-dev state: the transcribe endpoint reports a

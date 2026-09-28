@@ -12,6 +12,31 @@ export type SyncStatus =
   | 'failed'
   | 'dead_letter';
 
+/** Per-photo sync lifecycle (multi-image support) -- independent of the
+ * parent capture/answer's own SyncStatus, so ONE photo failing to upload
+ * never forces a re-upload of photos that already succeeded (see
+ * sync/syncService.ts, which retries only photos not in 'uploaded'). */
+export type PhotoSyncStatus = 'pending' | 'uploading' | 'uploaded' | 'failed';
+
+/** One photo attached to a capture or answer -- the local counterpart of the
+ * backend's SubmissionPhoto (app/db/models/submission_photo.py). Lives in
+ * its own table (local_capture_photos / local_answer_photos), not columns on
+ * the parent row, for the same "a submission/capture may carry several"
+ * reason the backend moved off flat columns. */
+export interface AttachedPhotoRecord {
+  id: number;
+  localUri: string;
+  /** Makes this ONE photo's upload independently idempotent/retryable -- see
+   * backend Submission.client_photo_id's replacement, SubmissionPhoto. */
+  clientPhotoId: string;
+  contentType: string | null;
+  /** 0-based attachment order, for stable display -- carries no other
+   * meaning and is never read by anything that decides sync behavior. */
+  position: number;
+  syncStatus: PhotoSyncStatus;
+  lastSyncError: string | null;
+}
+
 /** Admin-approval status for a rewarded contribution (Step 19) -- mirrors
  * backend SUBMISSION_REVIEW_STATUSES exactly. Distinct from SyncStatus:
  * that is about reaching the server at all, this is about a human deciding
@@ -158,19 +183,24 @@ export interface LocalCapture {
   audioDurationMillis: number | null;
   audioContentType: string | null;
   /**
-   * Photo fields (Step 16) — only ever set for `captureType === 'explore'`
-   * rows, and even then only when the guide actually attached a photo (an
-   * Explore contribution can be text-only). Always null for note/voice.
-   *
-   * `localPhotoUri` is the on-device file path; the image bytes are never
-   * stored in SQLite, exactly like audio. `clientPhotoId` is a THIRD distinct
-   * stable id (alongside clientSubmissionId and clientAudioId) making the
-   * photo upload step independently idempotent, since it is its own backend
-   * request during sync.
+   * LEGACY single-photo fields (Step 16). No longer written by new code --
+   * superseded by `photos` below (multi-image support). Left in the schema,
+   * unread by current code, purely so a row created by an older build of the
+   * app still has its data somewhere; a fresh install never populates these.
+   * See database.ts's v16->v17 migration for the backfill that moved any
+   * pre-existing value here into `local_capture_photos`.
    */
   localPhotoUri: string | null;
   clientPhotoId: string | null;
   photoContentType: string | null;
+  /**
+   * Every photo attached to this capture, in attachment order (multi-image
+   * support) -- empty, never null, when none has been attached. See
+   * repositories/captureRepository.ts's listCapturePhotos, which is what
+   * actually populates this (SubmissionPhoto's local counterpart is its own
+   * table, not a column on this row).
+   */
+  photos: AttachedPhotoRecord[];
   /**
    * NOTE (Step 17): the audio fields above are no longer voice-only. An
    * 'explore' capture may now populate the SAME `localAudioUri` /
@@ -382,9 +412,15 @@ export interface LocalAnswer {
   clientAudioId: string | null;
   audioDurationMillis: number | null;
   audioContentType: string | null;
+  /** LEGACY single-photo fields -- superseded by `photos` below. See
+   * LocalCapture's identical fields for why these stay unread but present. */
   localPhotoUri: string | null;
   clientPhotoId: string | null;
   photoContentType: string | null;
+  /** Every photo attached to this answer, in attachment order (multi-image
+   * support) -- empty, never null, when none has been attached. See
+   * repositories/answerRepository.ts's listAnswerPhotos. */
+  photos: AttachedPhotoRecord[];
   syncStatus: SyncStatus;
   syncAttemptCount: number;
   lastSyncError: string | null;

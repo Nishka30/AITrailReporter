@@ -30,6 +30,7 @@ from app.schemas.admin import (
     PlaceSummary,
 )
 from app.services import category_knowledge as category_knowledge_service
+from app.services import place_summary_service
 from app.services.admin_review import ReviewQueueFilters, list_review_queue
 from app.services.places import category_assignment
 from app.services.places.category_catalog import KIND_PLACE_TYPE
@@ -220,6 +221,9 @@ def get_place_detail(db: Session, location_id: UUID, limit: int = 25) -> PlaceDe
             )
             for cov in category_knowledge_service.get_location_coverage(db, location.id)
         ],
+        research_summary=place_summary_service.to_read(
+            place_summary_service.get_summary(db, location.id)
+        ),
     )
 
 

@@ -108,6 +108,28 @@ def _research_place_questions_job(location_id: UUID) -> None:
         db.close()
 
 
+def _category_question_job(location_id: UUID) -> None:
+    """PRIMARY (category-driven) generation -- backgrounded because, despite
+    this function's name, the chain it triggers is NOT "pure DB reads/writes
+    and deterministic templating": generate_category_questions_for_location ->
+    _generate_grounded_first_ask -> category_research.get_or_create_category_finding
+    can make a live, blocking Perplexity call (up to
+    perplexity_request_timeout_seconds) followed by a live, blocking Anthropic
+    call (place_question_research.anthropic_provider.generate_category_question),
+    for EACH missing category on the location (up to
+    category_question_max_new_per_run per run). Running that inline on the hot
+    GET /guides/{id}/popular-questions path could block a request thread for
+    minutes. Runs on its own independent clock from the whole-location
+    research job above -- see that job's docstring for why the two must never
+    share a gate. Its own internal duplicate-question guards make scheduling
+    it on every request a no-op once a gap's question already exists."""
+    db = SessionLocal()
+    try:
+        place_question_service.maybe_generate_category_questions(db, location_id)
+    finally:
+        db.close()
+
+
 @router.post("", response_model=GuideRead, status_code=201)
 def create_guide(payload: GuideCreate, response: Response, db: Session = Depends(get_db)):
     """Creates a guide. If payload.client_guide_id was already used, this is
@@ -385,18 +407,21 @@ def get_guide_popular_questions(
     if research_stale:
         background.add_task(_research_place_questions_job, place.id)
 
-    # PRIMARY (category-driven) generation runs on its OWN clock, INLINE and
-    # UNCONDITIONALLY -- deliberately NOT gated on research_stale above. The
-    # two are independent freshness systems (architecture doc Part 4/14):
-    # Perplexity's 30-day window governs whether it's worth spending money
-    # re-researching the whole place, but category coverage can go missing or
-    # stale on a much shorter cycle (a category's own volatility) that must
-    # not wait on that unrelated clock. Safe to run synchronously, unlike the
-    # research job above -- this is pure DB reads/writes and deterministic
-    # templating, no LLM/Perplexity call, so it costs nothing to check on
-    # every request (its own internal duplicate-question guards make repeat
-    # calls a no-op once a gap's question already exists).
-    place_question_service.maybe_generate_category_questions(db, place.id)
+    # PRIMARY (category-driven) generation runs on its OWN clock, scheduled as
+    # a background task -- NOT run inline. It can make live Perplexity +
+    # Anthropic calls per missing category (see _category_question_job's
+    # docstring), so running it inline here could block this request for
+    # minutes. Deliberately NOT gated on research_stale above -- the two are
+    # independent freshness systems (architecture doc Part 4/14): Perplexity's
+    # 30-day window governs whether it's worth spending money re-researching
+    # the whole place, but category coverage can go missing or stale on a much
+    # shorter cycle (a category's own volatility) that must not wait on that
+    # unrelated clock. Its own internal duplicate-question guards make
+    # scheduling it on every request a no-op once a gap's question already
+    # exists, so this costs nothing extra to schedule every time -- but the
+    # NEWLY generated questions from THIS run won't appear until the guide's
+    # next poll, same as the whole-location research job above.
+    background.add_task(_category_question_job, place.id)
 
     # Own questions (AI-researched + this Location's own curated seed
     # questions) PLUS any curated hub's seed questions this place is within

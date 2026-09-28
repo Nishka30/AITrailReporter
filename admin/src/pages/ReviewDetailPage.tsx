@@ -176,9 +176,13 @@ export default function ReviewDetailPage() {
               <AudioPlayer submissionId={source.submission_id} />
             </div>
           ) : null}
-          {source.photo ? (
-            <div className="mt-3 max-w-sm">
-              <ImageViewer submissionId={source.submission_id} />
+          {source.photos.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-3">
+              {source.photos.map((photo) => (
+                <div key={photo.id} className="w-full max-w-sm">
+                  <ImageViewer submissionId={source.submission_id} photoId={photo.id} />
+                </div>
+              ))}
             </div>
           ) : null}
 

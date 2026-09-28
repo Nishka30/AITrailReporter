@@ -17,6 +17,8 @@ into the built frontend bundle. Replace this with real per-admin accounts
 before exposing the admin app beyond a small trusted team.
 """
 
+import hmac
+
 from fastapi import Header, HTTPException
 
 from app.core.config import settings
@@ -40,7 +42,7 @@ def require_admin(
             status_code=503,
             detail="The admin API is not configured on this server (ADMIN_API_TOKEN is unset).",
         )
-    if not x_admin_token or x_admin_token != settings.admin_api_token:
+    if not x_admin_token or not hmac.compare_digest(x_admin_token, settings.admin_api_token):
         raise HTTPException(status_code=401, detail="Invalid or missing admin token")
 
     display_name = (x_admin_name or "").strip() or "admin"

@@ -276,6 +276,13 @@ def process_transcription_in_background(submission_id: UUID) -> None:
     try:
         run_claimed_transcription(db, submission_id)
     except Exception:
+        # Must roll back BEFORE the recovery block below reuses this same
+        # session -- under SQLAlchemy 2.0, a session left dirty after a failed
+        # flush/statement raises PendingRollbackError on its very next use,
+        # which would silently swallow the _mark_failed attempt (caught by
+        # its own bare except) and leave the row stuck in 'processing' until
+        # the abandoned-run reclaim timeout, instead of honestly marked failed.
+        db.rollback()
         logger.exception("Background transcription failed for submission %s", submission_id)
         try:
             transcription = get_transcription_by_submission_id(db, submission_id)
@@ -308,6 +315,13 @@ def schedule_transcription(background_tasks, db: Session, submission_id: UUID) -
     try:
         _transcription, outcome = claim_transcription(db, submission_id)
     except Exception:
+        # Every HTTP caller keeps using this SAME request-scoped session right
+        # after this returns (e.g. routes/submissions.py builds the response
+        # from it) -- an un-rolled-back session here would turn an already-
+        # durably-saved submission into a client-visible 500 for a reason
+        # unrelated to the guide's request. Same fix shape as
+        # extractions.maybe_trigger_extraction.
+        db.rollback()
         logger.warning(
             "Could not claim transcription for submission %s", submission_id, exc_info=True
         )
@@ -329,6 +343,7 @@ def maybe_trigger_transcription(db: Session, submission_id: UUID) -> None:
     try:
         start_transcription(db, submission_id)
     except Exception:
+        db.rollback()
         logger.warning(
             "Automatic transcription trigger failed for submission %s", submission_id, exc_info=True
         )

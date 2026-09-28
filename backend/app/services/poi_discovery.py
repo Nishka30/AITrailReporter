@@ -456,6 +456,7 @@ def maybe_ensure_discovered(
             return
         ensure_discovered(db, latitude, longitude, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 -- deliberate best-effort boundary
+        db.rollback()
         logger.warning(
             "Best-effort POI discovery failed for %.5f,%.5f: %s",
             latitude,

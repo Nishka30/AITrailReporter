@@ -204,6 +204,36 @@ def test_c_perplexity_unavailable_falls_back_to_deterministic_question(db, locat
     )
 
 
+def test_provider_failure_leaves_no_orphaned_cooldown_row(db, location_with_category, monkeypatch):
+    """Regression test for the pre-launch audit's concurrency fix to
+    get_or_create_category_finding: a genuinely transient Perplexity failure
+    must NOT leave behind a row that would block every later request for this
+    (location, category) for a full place_question_refresh_days cooldown --
+    that cooldown is only earned by a successful call that came back too thin
+    to use, never by the provider being briefly unavailable."""
+    location, assignment = location_with_category
+
+    def _raise_unavailable():
+        raise ResearchProviderError("Web research is not configured on the server.")
+
+    monkeypatch.setattr(
+        "app.services.category_research.perplexity_provider.get_provider", _raise_unavailable
+    )
+
+    result = category_research_service.get_or_create_category_finding(
+        db, location, "food_drink", "Food & Drink"
+    )
+    assert result is None
+
+    rows = db.execute(
+        select(PlaceResearchFinding).where(
+            PlaceResearchFinding.location_id == location.id,
+            PlaceResearchFinding.topic == "category:food_drink",
+        )
+    ).scalars().all()
+    assert rows == []
+
+
 def test_d_same_location_category_research_reused_no_duplicate_rows(db, location_with_category, monkeypatch):
     location, assignment = location_with_category
 

@@ -1,14 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-  Image,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -19,14 +10,12 @@ import type { RecordedAudio } from '../audio/audioRecordingService';
 import LocationCaptureField, {
   type CapturedContributionLocation,
 } from '../components/LocationCaptureField';
+import MultiPhotoPicker, { type AttachedPhoto } from '../components/MultiPhotoPicker';
 import { AppHeader, Badge, Button, Card, LoadingState, RewardChip, Screen } from '../components/ui';
 import VoiceNoteComposer from '../components/VoiceNoteComposer';
-import { choosePhoto, takePhoto, type PhotoPickResult } from '../photo/photoPickerService';
 import { createAnswer, getAnswerByQuestionId } from '../repositories/answerRepository';
 import { colors, spacing, type } from '../theme/theme';
 import type { LocalAnswer, LocalGuide, QuestionKind } from '../types/models';
-
-type AttachedPhoto = { uri: string; contentType: string };
 
 /**
  * A question to answer, normalized across the TWO sources (Step 18).
@@ -164,8 +153,7 @@ export default function AnswerQuestionScreen({ guide, target, place, onDone }: P
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   const [voice, setVoice] = useState<RecordedAudio | null>(null);
-  const [photo, setPhoto] = useState<AttachedPhoto | null>(null);
-  const [pickingPhoto, setPickingPhoto] = useState(false);
+  const [photos, setPhotos] = useState<AttachedPhoto[]>([]);
   // Where the guide is answering FROM. Pre-filled from the currently
   // selected Location (if any) as a VISIBLE, editable default -- see
   // placeToCapturedLocation and the Props.place doc above. Never silently
@@ -176,40 +164,6 @@ export default function AnswerQuestionScreen({ guide, target, place, onDone }: P
   const [location, setLocation] = useState<CapturedContributionLocation | null>(() =>
     place ? placeToCapturedLocation(place) : null
   );
-  const [photoNotice, setPhotoNotice] = useState<string | null>(null);
-
-  function applyPhotoResult(result: PhotoPickResult) {
-    switch (result.status) {
-      case 'success':
-        setPhoto({ uri: result.uri, contentType: result.contentType });
-        setPhotoNotice(null);
-        break;
-      case 'cancelled':
-        // Not an error, and not worth a message — the guide chose to back out.
-        break;
-      case 'permission-denied':
-        setPhotoNotice(
-          result.canAskAgain
-            ? 'Photo permission is needed for this. Please allow it and try again.'
-            : 'Photo permission was denied. You can enable it for this app in your device settings.'
-        );
-        break;
-      case 'error':
-        setPhotoNotice(result.message);
-        break;
-    }
-  }
-
-  async function handlePickPhoto(useCamera: boolean) {
-    if (pickingPhoto || saving) return;
-    setPickingPhoto(true);
-    setPhotoNotice(null);
-    try {
-      applyPhotoResult(useCamera ? await takePhoto() : await choosePhoto());
-    } finally {
-      setPickingPhoto(false);
-    }
-  }
 
   const loadExisting = useCallback(async () => {
     try {
@@ -239,7 +193,7 @@ export default function AnswerQuestionScreen({ guide, target, place, onDone }: P
     // with no text at all.)
     if (!trimmed) {
       setError(
-        voice || photo
+        voice || photos.length > 0
           ? 'Add a few words as well — an answer needs some text alongside the recording or photo.'
           : 'Please enter an answer before saving.'
       );
@@ -263,8 +217,7 @@ export default function AnswerQuestionScreen({ guide, target, place, onDone }: P
           localAudioUri: voice?.uri ?? null,
           audioDurationMillis: voice?.durationMillis ?? null,
           audioContentType: voice?.contentType ?? null,
-          localPhotoUri: photo?.uri ?? null,
-          photoContentType: photo?.contentType ?? null,
+          photos: photos.map((p) => ({ localUri: p.uri, contentType: p.contentType })),
         },
         // Null throughout when there's no location at all (no place was
         // selected AND the guide didn't capture one) -- the server then
@@ -370,56 +323,12 @@ export default function AnswerQuestionScreen({ guide, target, place, onDone }: P
             </View>
 
             <Text style={styles.mediaLabel}>
-              <Ionicons name="camera-outline" size={13} color={colors.inkFaint} /> Photo
+              <Ionicons name="camera-outline" size={13} color={colors.inkFaint} /> Photos
               <Text style={styles.mediaHint}>  ·  Optional</Text>
             </Text>
-            {photo ? (
-              <View style={styles.photoWrap}>
-                <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
-                <Pressable
-                  onPress={() => setPhoto(null)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Remove photo"
-                  hitSlop={8}
-                  style={styles.photoRemove}
-                  disabled={saving}
-                >
-                  <Ionicons name="close" size={17} color={colors.white} />
-                </Pressable>
-              </View>
-            ) : (
-              <View style={styles.photoActions}>
-                <Pressable
-                  onPress={() => handlePickPhoto(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Take photo"
-                  disabled={pickingPhoto || saving}
-                  style={({ pressed }) => [
-                    styles.photoAction,
-                    pressed && styles.photoActionPressed,
-                    (pickingPhoto || saving) && styles.photoActionDisabled,
-                  ]}
-                >
-                  <Ionicons name="camera-outline" size={21} color={colors.marigoldDeep} />
-                  <Text style={styles.photoActionText}>Take photo</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => handlePickPhoto(false)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Choose photo"
-                  disabled={pickingPhoto || saving}
-                  style={({ pressed }) => [
-                    styles.photoAction,
-                    pressed && styles.photoActionPressed,
-                    (pickingPhoto || saving) && styles.photoActionDisabled,
-                  ]}
-                >
-                  <Ionicons name="images-outline" size={21} color={colors.marigoldDeep} />
-                  <Text style={styles.photoActionText}>Choose photo</Text>
-                </Pressable>
-              </View>
-            )}
-            {photoNotice ? <Text style={styles.notice}>{photoNotice}</Text> : null}
+            <View style={styles.photoPickerWrap}>
+              <MultiPhotoPicker photos={photos} onChange={setPhotos} disabled={saving} />
+            </View>
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -520,36 +429,7 @@ const styles = StyleSheet.create({
   mediaHint: { ...type.caption, color: colors.inkFaint, fontWeight: '400' },
   voiceWrap: { marginBottom: spacing.xs },
   locationWrap: { marginBottom: spacing.md },
-  photoWrap: { position: 'relative', marginBottom: spacing.sm },
-  photoPreview: { width: '100%', height: 190, borderRadius: 12, backgroundColor: colors.inkFaint },
-  photoRemove: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-  },
-  photoActions: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
-  photoAction: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: spacing.md,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.marigoldSoft,
-    backgroundColor: colors.marigoldSoft,
-  },
-  photoActionPressed: { opacity: 0.7 },
-  photoActionDisabled: { opacity: 0.5 },
-  photoActionText: { ...type.small, color: colors.marigoldDeep, fontWeight: '600' },
-  notice: { ...type.caption, color: colors.inkFaint, marginBottom: spacing.sm },
+  photoPickerWrap: { marginBottom: spacing.sm },
 
   flex: { flex: 1 },
   questionCard: { marginBottom: spacing.md },

@@ -5,13 +5,20 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.models.place_question import PlaceQuestion
 from app.db.models.submission import (
     DEFAULT_DATE_SOURCE,
     DEFAULT_LOCATION_SOURCE,
     Submission,
 )
-from app.schemas.submission import SubmissionCreate
+from app.db.models.submission_photo import SubmissionPhoto
+from app.schemas.submission import (
+    SubmissionAudioRead,
+    SubmissionCreate,
+    SubmissionPhotoRead,
+    SubmissionRead,
+)
 from app.services import extractions as extraction_service
 from app.services import rewards as reward_service
 from app.services import submission_review as submission_review_service
@@ -45,15 +52,31 @@ class AudioConflictError(Exception):
 
 
 class PhotoConflictError(Exception):
-    """Photo equivalent of AudioConflictError (Step 16): the submission already
-    has a photo attached under a DIFFERENT client_photo_id. Replacing an
-    already-attached photo is deliberately not supported, matching audio."""
+    """Raised when a client_photo_id that already identifies a photo on a
+    DIFFERENT submission is used again. Photos are no longer limited to one
+    per submission (see SubmissionPhoto), so this is now a genuine id
+    collision rather than a "second photo" rejection -- practically
+    impossible with client-generated UUIDs, but the DB's UNIQUE constraint on
+    client_photo_id is the real guarantee this backs up."""
 
     def __init__(self, existing: Submission):
         self.existing = existing
         super().__init__(
-            f"submission {existing.id} already has a photo attached under a "
-            "different client_photo_id"
+            f"client_photo_id was already used for a photo on a different submission "
+            f"(not {existing.id})"
+        )
+
+
+class TooManyPhotosError(Exception):
+    """Raised when a submission already has settings.max_photos_per_submission
+    photos attached and a genuinely NEW photo (not a retry of one already
+    there) is being added."""
+
+    def __init__(self, existing: Submission, limit: int):
+        self.existing = existing
+        self.limit = limit
+        super().__init__(
+            f"submission {existing.id} already has the maximum of {limit} photos attached"
         )
 
 
@@ -128,6 +151,51 @@ def _maybe_award_media_bonus(db: Session, submission: Submission) -> None:
         return
     if review.status == "approved":
         submission_review_service.award_media_bonus(db, submission, review)
+
+
+def list_submission_photos(db: Session, submission_id: UUID) -> list[SubmissionPhoto]:
+    """Every photo attached to this submission, in attachment order --
+    SubmissionPhoto is a separate table, not an ORM relationship (see its
+    model docstring for why), so this is the one place that reads them back
+    as a list."""
+    stmt = (
+        select(SubmissionPhoto)
+        .where(SubmissionPhoto.submission_id == submission_id)
+        .order_by(SubmissionPhoto.position, SubmissionPhoto.created_at)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def has_any_photo(db: Session, submission_id: UUID) -> bool:
+    stmt = select(SubmissionPhoto.id).where(SubmissionPhoto.submission_id == submission_id).limit(1)
+    return db.execute(stmt).first() is not None
+
+
+def build_submission_read(db: Session, submission: Submission) -> SubmissionRead:
+    """Assembles the full API response for a Submission, joining in its
+    photos (list_submission_photos above) alongside everything else pydantic
+    can already read straight off the ORM instance via from_attributes.
+
+    Use this instead of returning a bare Submission ORM object from a route:
+    SubmissionRead.photos has nothing on the ORM instance itself for
+    FastAPI's implicit from_attributes conversion to find (unlike `audio`,
+    which is still a real property on Submission)."""
+    return SubmissionRead(
+        id=submission.id,
+        guide_id=submission.guide_id,
+        client_submission_id=submission.client_submission_id,
+        submission_type=submission.submission_type,
+        raw_text=submission.raw_text,
+        status=submission.status,
+        submitted_at=submission.submitted_at,
+        created_at=submission.created_at,
+        updated_at=submission.updated_at,
+        audio=SubmissionAudioRead.model_validate(submission.audio) if submission.audio else None,
+        photos=[
+            SubmissionPhotoRead.model_validate(photo)
+            for photo in list_submission_photos(db, submission.id)
+        ],
+    )
 
 
 def get_submission_by_client_id(db: Session, client_submission_id: str) -> Submission | None:
@@ -358,44 +426,82 @@ def attach_photo_to_submission(
     original_filename: str,
     storage: MediaStorage,
 ) -> tuple[Submission, bool]:
-    """Attaches a durably-stored photo to an 'explore' or 'memory' submission
-    (Step 16, extended to 'memory' -- see PHOTO_CAPABLE_SUBMISSION_TYPES).
+    """Attaches a durably-stored photo to an 'explore'/'memory'/'answer'
+    submission (Step 16, extended to 'memory' and 'answer', then generalized
+    to MULTIPLE photos per submission -- see SubmissionPhoto). Call this once
+    per photo: a caller attaching 3 photos to one submission makes 3 calls,
+    each with its own client_photo_id, exactly the way a single photo was
+    always attached -- no new batch endpoint or upload mechanism exists.
 
-    Structurally identical to attach_audio_to_submission above — same
-    idempotency contract on client_photo_id, same SELECT ... FOR UPDATE row
-    lock serializing concurrent attach attempts for the same submission, same
-    documented orphaned-file-on-crash gap. Two deliberate differences:
+    Idempotency, per photo (client_photo_id is now the identity of ONE photo,
+    not a submission-wide flag):
+    - client_photo_id already attached to THIS submission -> idempotent
+      replay (a retried request whose response was lost) -- returns the
+      existing state without saving another file or inserting another row,
+      (submission, False). THIS is what makes a retried sync never create a
+      duplicate image.
+    - client_photo_id already attached to a DIFFERENT submission -> a real id
+      collision; raises PhotoConflictError (see its docstring -- practically
+      impossible with client-generated UUIDs, but the DB's UNIQUE constraint
+      is the actual guarantee).
+    - Neither, and this submission is already at
+      settings.max_photos_per_submission -> raises TooManyPhotosError rather
+      than silently accepting an unbounded number or dropping the photo.
+    - Otherwise -> saves the file, inserts a new SubmissionPhoto row at the
+      next position, (submission, True).
 
-    - No transcription row is created. A photo has no transcript, and inventing
-      a pipeline stage that does nothing would be dishonest state.
-    - No duration is recorded, for the same reason (see
-      SubmissionPhotoMetadata).
+    Race safety: the submission row is locked with SELECT ... FOR UPDATE for
+    the duration of this function -- same pattern as
+    attach_audio_to_submission -- so two concurrent attach attempts for the
+    same submission are fully serialized, and "how many photos does this
+    submission already have" can never race with a concurrent insert for the
+    same submission.
 
-    A photo does NOT by itself make a submission extractable: extraction reads
-    source TEXT (app/services/source_text.py), and this step does not do image
-    understanding. An Explore photo contribution therefore always carries the
-    guide's own text alongside it — that text is what becomes observations,
-    while the photo is durable evidence attached to the same submission. This
-    is stated plainly rather than implying the image is being analysed.
+    Two deliberate differences from attach_audio_to_submission, unchanged
+    from the original single-photo version:
+    - No transcription row is created. A photo has no transcript.
+    - No duration is recorded, for the same reason.
+
+    A photo does NOT by itself make a submission extractable: extraction
+    reads source TEXT (app/services/source_text.py), and this step does not
+    do image understanding -- the guide's own text is what becomes
+    observations, while the photo(s) are durable evidence attached alongside.
+
+    storage.save() can raise MediaStorageError (see app/services/storage/base.py)
+    on a genuine storage-backend failure -- propagated to the caller (the
+    route) rather than swallowed, so it surfaces as a clean, diagnosable
+    error instead of silently losing the photo.
     """
     stmt = select(Submission).where(Submission.id == submission_id).with_for_update()
     submission = db.execute(stmt).scalar_one_or_none()
     if submission is None:
         raise LookupError(f"Submission {submission_id} not found")
 
-    if submission.client_photo_id is not None:
-        if submission.client_photo_id == client_photo_id:
-            db.commit()  # releases the row lock acquired above
+    existing_photo = db.execute(
+        select(SubmissionPhoto).where(SubmissionPhoto.client_photo_id == client_photo_id)
+    ).scalar_one_or_none()
+    if existing_photo is not None:
+        db.commit()  # releases the row lock acquired above
+        if existing_photo.submission_id == submission_id:
             return submission, False
-        db.commit()
         raise PhotoConflictError(submission)
 
+    current_photos = list_submission_photos(db, submission_id)
+    if len(current_photos) >= settings.max_photos_per_submission:
+        db.commit()
+        raise TooManyPhotosError(submission, settings.max_photos_per_submission)
+
     stored = storage.save(photo_bytes, original_filename)
-    submission.client_photo_id = client_photo_id
-    submission.photo_storage_key = stored.storage_key
-    submission.photo_content_type = content_type
-    submission.photo_original_filename = original_filename
-    submission.photo_size_bytes = stored.size_bytes
+    photo = SubmissionPhoto(
+        submission_id=submission_id,
+        client_photo_id=client_photo_id,
+        storage_key=stored.storage_key,
+        content_type=content_type,
+        original_filename=original_filename,
+        size_bytes=stored.size_bytes,
+        position=len(current_photos),
+    )
+    db.add(photo)
     _maybe_award_media_bonus(db, submission)
     db.commit()
     db.refresh(submission)

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -9,11 +9,12 @@ import ApproximateDateField, { type ApproximateDateValue } from '../components/A
 import LocationCaptureField, {
   type CapturedContributionLocation,
 } from '../components/LocationCaptureField';
+import MultiPhotoPicker, { type AttachedPhoto } from '../components/MultiPhotoPicker';
 import PlaceAutocomplete from '../components/PlaceAutocomplete';
 import VoiceNoteComposer from '../components/VoiceNoteComposer';
 import { AppHeader, Badge, Button, Card, Screen } from '../components/ui';
 import { resolvePhotoProvenance } from '../location/photoLocationResolver';
-import { choosePhoto, takePhoto, type PhotoPickResult } from '../photo/photoPickerService';
+import type { PhotoPickResult } from '../photo/photoPickerService';
 import { createMemoryCapture, type CaptureProvenanceInput } from '../repositories/captureRepository';
 import { colors, radii, spacing, type } from '../theme/theme';
 import type { LocalGuide } from '../types/models';
@@ -22,8 +23,6 @@ type Props = {
   guide: LocalGuide;
   onDone: () => void;
 };
-
-type AttachedPhoto = { uri: string; contentType: string };
 
 const EMPTY_PROVENANCE: CaptureProvenanceInput = {
   locationSource: 'unknown',
@@ -86,14 +85,12 @@ function describeLocation(provenance: CaptureProvenanceInput): { label: string; 
 export default function MemoryContributeScreen({ guide, onDone }: Props) {
   const db = useSQLiteContext();
   const [text, setText] = useState('');
-  const [photo, setPhoto] = useState<AttachedPhoto | null>(null);
+  const [photos, setPhotos] = useState<AttachedPhoto[]>([]);
   const [voice, setVoice] = useState<RecordedAudio | null>(null);
   const [provenance, setProvenance] = useState<CaptureProvenanceInput>(EMPTY_PROVENANCE);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [photoNotice, setPhotoNotice] = useState<string | null>(null);
-  const [pickingPhoto, setPickingPhoto] = useState(false);
   const [resolvingLocation, setResolvingLocation] = useState(false);
   // Mirrors what LocationCaptureField shows. `provenance` is the record that
   // actually gets saved; this exists so the control can display the fix it
@@ -102,55 +99,36 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
     null
   );
 
-  async function applyPhotoResult(result: PhotoPickResult) {
-    switch (result.status) {
-      case 'success': {
-        setPhoto({ uri: result.uri, contentType: result.contentType });
-        setPhotoNotice(null);
-        // Quietly figures out where/when from the photo itself — the guide
-        // is never asked to type coordinates. See photoLocationResolver.ts
-        // for the exact decision tree (EXIF GPS -> live GPS for a camera
-        // shot -> honestly unknown for an old library pick).
-        setResolvingLocation(true);
-        try {
-          const resolved = await resolvePhotoProvenance(result);
-          setProvenance((prev) => ({ ...prev, ...resolved }));
-        } finally {
-          setResolvingLocation(false);
-        }
-        break;
-      }
-      case 'cancelled':
-        break;
-      case 'permission-denied':
-        setPhotoNotice(
-          result.canAskAgain
-            ? 'Photo permission is needed for this. Please allow it and try again.'
-            : 'Photo permission was denied. You can enable it for this app in your device settings.'
-        );
-        break;
-      case 'error':
-        setPhotoNotice(result.message);
-        break;
-    }
-  }
-
-  async function handlePickPhoto(useCamera: boolean) {
-    if (pickingPhoto || saving) return;
-    setPickingPhoto(true);
-    setPhotoNotice(null);
+  /** Quietly figures out where/when from the FIRST photo attached -- the
+   * guide is never asked to type coordinates. See photoLocationResolver.ts
+   * for the exact decision tree (EXIF GPS -> live GPS for a camera shot ->
+   * honestly unknown for an old library pick). Only the first photo drives
+   * this: provenance is one value for the whole memory, not per-photo, so a
+   * second/third photo must never silently override what the first one
+   * already established. */
+  async function handlePhotoPicked(
+    result: Extract<PhotoPickResult, { status: 'success' }>,
+    wasFirstPhoto: boolean
+  ) {
+    if (!wasFirstPhoto) return;
+    setResolvingLocation(true);
     try {
-      await applyPhotoResult(useCamera ? await takePhoto() : await choosePhoto());
+      const resolved = await resolvePhotoProvenance(result);
+      setProvenance((prev) => ({ ...prev, ...resolved }));
     } finally {
-      setPickingPhoto(false);
+      setResolvingLocation(false);
     }
   }
 
-  function handleRemovePhoto() {
-    setPhoto(null);
-    // The photo was the only source of the auto-detected location/date —
-    // removing it must not leave a now-unexplained "verified" claim behind.
-    if (provenance.locationSource === 'photo_exif' || provenance.locationSource === 'gps_live') {
+  function handlePhotosChange(next: AttachedPhoto[]) {
+    setPhotos(next);
+    // The photo(s) were the only source of the auto-detected location/date —
+    // removing the last one must not leave a now-unexplained "verified"
+    // claim behind.
+    if (
+      next.length === 0 &&
+      (provenance.locationSource === 'photo_exif' || provenance.locationSource === 'gps_live')
+    ) {
       setProvenance(EMPTY_PROVENANCE);
     }
   }
@@ -215,7 +193,7 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
   async function handleSave() {
     if (saving) return;
     const trimmed = text.trim();
-    if (!trimmed && !voice && !photo) {
+    if (!trimmed && !voice && photos.length === 0) {
       setError('Add a photo, a voice note, or a few words about this memory.');
       return;
     }
@@ -223,8 +201,7 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
     setError(null);
     try {
       await createMemoryCapture(db, guide.id, trimmed || null, {
-        localPhotoUri: photo?.uri ?? null,
-        photoContentType: photo?.contentType ?? null,
+        photos: photos.map((p) => ({ localUri: p.uri, contentType: p.contentType })),
         localAudioUri: voice?.uri ?? null,
         audioDurationMillis: voice?.durationMillis ?? null,
         audioContentType: voice?.contentType ?? null,
@@ -243,7 +220,7 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
     const parts = [
       text.trim() ? 'note' : null,
       voice ? 'voice note' : null,
-      photo ? 'photo' : null,
+      photos.length > 0 ? (photos.length === 1 ? 'photo' : 'photos') : null,
     ].filter(Boolean) as string[];
     const list =
       parts.length === 1
@@ -308,54 +285,13 @@ export default function MemoryContributeScreen({ guide, onDone }: Props) {
           />
         </View>
 
-        <SectionLabel icon="camera-outline" title="Photo" hint="Optional" />
-        {photo ? (
-          <View style={styles.photoWrap}>
-            <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
-            <Pressable
-              onPress={handleRemovePhoto}
-              accessibilityRole="button"
-              accessibilityLabel="Remove photo"
-              hitSlop={8}
-              style={styles.photoRemove}
-              disabled={saving}
-            >
-              <Ionicons name="close" size={17} color={colors.white} />
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.photoActions}>
-            <Pressable
-              onPress={() => handlePickPhoto(true)}
-              accessibilityRole="button"
-              accessibilityLabel="Take photo"
-              disabled={pickingPhoto || saving}
-              style={({ pressed }) => [
-                styles.photoAction,
-                pressed && styles.photoActionPressed,
-                (pickingPhoto || saving) && styles.photoActionDisabled,
-              ]}
-            >
-              <Ionicons name="camera-outline" size={21} color={colors.marigoldDeep} />
-              <Text style={styles.photoActionText}>Take photo</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => handlePickPhoto(false)}
-              accessibilityRole="button"
-              accessibilityLabel="Choose an existing photo"
-              disabled={pickingPhoto || saving}
-              style={({ pressed }) => [
-                styles.photoAction,
-                pressed && styles.photoActionPressed,
-                (pickingPhoto || saving) && styles.photoActionDisabled,
-              ]}
-            >
-              <Ionicons name="images-outline" size={21} color={colors.marigoldDeep} />
-              <Text style={styles.photoActionText}>Choose from library</Text>
-            </Pressable>
-          </View>
-        )}
-        {photoNotice ? <Text style={styles.notice}>{photoNotice}</Text> : null}
+        <SectionLabel icon="camera-outline" title="Photos" hint="Optional" />
+        <MultiPhotoPicker
+          photos={photos}
+          onChange={handlePhotosChange}
+          onPhotoPicked={handlePhotoPicked}
+          disabled={saving}
+        />
 
         <SectionLabel icon="location-outline" title="Where" />
         <View style={styles.locationBlock}>
@@ -439,37 +375,6 @@ const styles = StyleSheet.create({
     minHeight: 110,
     textAlignVertical: 'top',
     marginBottom: spacing.lg,
-  },
-
-  photoActions: { flexDirection: 'row', gap: spacing.sm },
-  photoAction: {
-    flex: 1,
-    minHeight: 84,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    borderStyle: 'dashed',
-    backgroundColor: colors.paperMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-  },
-  photoActionPressed: { opacity: 0.8 },
-  photoActionDisabled: { opacity: 0.5 },
-  photoActionText: { ...type.smallBold, color: colors.marigoldDeep },
-
-  photoWrap: { position: 'relative' },
-  photoPreview: { width: '100%', height: 210, borderRadius: radii.md, backgroundColor: colors.paperMuted },
-  photoRemove: {
-    position: 'absolute',
-    top: spacing.xs,
-    right: spacing.xs,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: 'rgba(33,26,20,0.75)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 
   locationBlock: { marginTop: spacing.xs, marginBottom: spacing.lg, gap: spacing.sm },

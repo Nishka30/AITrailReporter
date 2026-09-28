@@ -14,12 +14,18 @@ import { syncSubmissionReviews } from './submissionReviewSync';
 import {
   listSyncableAnswers,
   markAnswerFailed,
+  markAnswerPhotoFailed,
+  markAnswerPhotoUploaded,
+  markAnswerPhotoUploading,
   markAnswerUploaded,
   markAnswerUploading,
 } from '../repositories/answerRepository';
 import {
   listSyncableCaptures,
   markCaptureFailed,
+  markCapturePhotoFailed,
+  markCapturePhotoUploaded,
+  markCapturePhotoUploading,
   markCaptureUploaded,
   markCaptureUploading,
 } from '../repositories/captureRepository';
@@ -318,12 +324,13 @@ async function syncOneVoiceCapture(serverGuideId: string, capture: LocalCapture)
  * useful on its own.
  */
 async function syncOneExploreLikeCapture(
+  db: SQLiteDatabase,
   serverGuideId: string,
   capture: LocalCapture
 ): Promise<string> {
   const text = (capture.textContent ?? '').trim();
   const hasAudio = Boolean(capture.localAudioUri && capture.clientAudioId);
-  const hasPhoto = Boolean(capture.localPhotoUri && capture.clientPhotoId);
+  const hasPhoto = capture.photos.length > 0;
   if (!text && !hasAudio && !(capture.captureType === 'memory' && hasPhoto)) {
     // Mirrors each repository function's own "must have something" rule
     // (createExploreCapture vs. createMemoryCapture) — should be unreachable
@@ -346,10 +353,14 @@ async function syncOneExploreLikeCapture(
         'cleared by the OS, or the app was reinstalled). Record it again to send this.'
     );
   }
-  if (capture.localPhotoUri && !new File(capture.localPhotoUri).exists) {
+  // Only photos not already confirmed uploaded need to still exist on disk --
+  // one already marked 'uploaded' is done regardless of whether its local
+  // file is later cleared.
+  const pendingPhotos = capture.photos.filter((p) => p.syncStatus !== 'uploaded');
+  const missingPhoto = pendingPhotos.find((p) => !new File(p.localUri).exists);
+  if (missingPhoto) {
     throw new Error(
-      'The photo for this contribution is no longer on your device. Add the photo again to ' +
-        'send this.'
+      'A photo for this contribution is no longer on your device. Add it again to send this.'
     );
   }
 
@@ -379,13 +390,29 @@ async function syncOneExploreLikeCapture(
   // chain safely: submission creation replays to the existing submission, and
   // an already-attached photo/audio replays to the existing attachment rather
   // than duplicating it.
-  if (capture.localPhotoUri && capture.clientPhotoId) {
-    await uploadSubmissionPhoto({
-      submissionId: submission.id,
-      clientPhotoId: capture.clientPhotoId,
-      localUri: capture.localPhotoUri,
-      contentType: capture.photoContentType ?? 'image/jpeg',
-    });
+  //
+  // Multi-image: each photo is its OWN independently idempotent upload and
+  // its OWN local sync_status (see local_capture_photos). A photo already
+  // marked 'uploaded' is skipped entirely -- not re-sent -- so a partial
+  // failure (2 of 3 photos succeeded, the 3rd threw) never re-uploads the
+  // two that already made it, even though the whole capture is retried.
+  for (const photo of capture.photos) {
+    if (photo.syncStatus === 'uploaded') continue;
+    await markCapturePhotoUploading(db, photo.id);
+    try {
+      await uploadSubmissionPhoto({
+        submissionId: submission.id,
+        clientPhotoId: photo.clientPhotoId,
+        localUri: photo.localUri,
+        contentType: photo.contentType ?? 'image/jpeg',
+      });
+      await markCapturePhotoUploaded(db, photo.id);
+    } catch (err) {
+      await markCapturePhotoFailed(db, photo.id, describeError(err));
+      throw err; // marks the whole capture 'failed' -- retried next sync,
+      // and this photo's own 'failed' status means only IT (and anything
+      // after it) is attempted again, not the ones already uploaded above.
+    }
   }
 
   if (capture.localAudioUri && capture.clientAudioId) {
@@ -420,7 +447,7 @@ async function syncOneCapture(
     } else if (capture.captureType === 'voice') {
       serverSubmissionId = await syncOneVoiceCapture(serverGuideId, capture);
     } else if (capture.captureType === 'explore' || capture.captureType === 'memory') {
-      serverSubmissionId = await syncOneExploreLikeCapture(serverGuideId, capture);
+      serverSubmissionId = await syncOneExploreLikeCapture(db, serverGuideId, capture);
     } else {
       // Step 7 only ingests notes and voice — a future capture type reaching
       // here means this build genuinely can't sync it yet, not a transient
@@ -473,19 +500,35 @@ async function syncOneLocation(
  * an incomplete answer, and silently reporting it as sent would strand the
  * media on the device with nothing left pointing at it.
  */
-async function uploadAnswerMedia(answer: LocalAnswer, submissionId: string): Promise<void> {
-  if (answer.localPhotoUri && answer.clientPhotoId) {
-    if (!new File(answer.localPhotoUri).exists) {
+async function uploadAnswerMedia(
+  db: SQLiteDatabase,
+  answer: LocalAnswer,
+  submissionId: string
+): Promise<void> {
+  // Multi-image: each photo is its own independently idempotent upload and
+  // its own local sync_status -- see syncOneExploreLikeCapture's identical
+  // pattern for captures. A photo already 'uploaded' is skipped, so a
+  // partial failure never re-sends ones that already succeeded.
+  for (const photo of answer.photos) {
+    if (photo.syncStatus === 'uploaded') continue;
+    if (!new File(photo.localUri).exists) {
       throw new Error(
-        'The photo for this answer is no longer on your device. Remove it and answer again.'
+        'A photo for this answer is no longer on your device. Remove it and answer again.'
       );
     }
-    await uploadSubmissionPhoto({
-      submissionId,
-      clientPhotoId: answer.clientPhotoId,
-      localUri: answer.localPhotoUri,
-      contentType: answer.photoContentType ?? 'image/jpeg',
-    });
+    await markAnswerPhotoUploading(db, photo.id);
+    try {
+      await uploadSubmissionPhoto({
+        submissionId,
+        clientPhotoId: photo.clientPhotoId,
+        localUri: photo.localUri,
+        contentType: photo.contentType ?? 'image/jpeg',
+      });
+      await markAnswerPhotoUploaded(db, photo.id);
+    } catch (err) {
+      await markAnswerPhotoFailed(db, photo.id, describeError(err));
+      throw err;
+    }
   }
   if (answer.localAudioUri && answer.clientAudioId) {
     if (!new File(answer.localAudioUri).exists) {
@@ -530,7 +573,7 @@ async function syncOneAnswer(
       // A popular question has no QuestionAnswer row of its own — the answer
       // IS the submission (see backend/app/services/place_question_answers.py),
       // so the submission id is the honest server-side identifier to record.
-      await uploadAnswerMedia(answer, result.submissionId);
+      await uploadAnswerMedia(db, answer, result.submissionId);
       await markAnswerUploaded(db, answer.id, result.submissionId, result.submissionId);
       return { answerId: answer.id, status: 'uploaded' };
     }
@@ -551,7 +594,7 @@ async function syncOneAnswer(
     }
     // The answer's own Submission is what media attaches to — the same
     // submission the text became (see question_answers.py).
-    await uploadAnswerMedia(answer, question.answer.submissionId);
+    await uploadAnswerMedia(db, answer, question.answer.submissionId);
     await markAnswerUploaded(db, answer.id, question.answer.id, question.answer.submissionId);
     return { answerId: answer.id, status: 'uploaded' };
   } catch (err) {

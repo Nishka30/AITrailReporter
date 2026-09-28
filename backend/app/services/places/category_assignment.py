@@ -333,6 +333,7 @@ def maybe_assign_categories(db: Session, location: Location) -> None:
     try:
         assign_categories(db, location)
     except Exception as exc:  # noqa: BLE001 -- deliberate best-effort boundary
+        db.rollback()
         logger.warning(
             "Best-effort category assignment failed for %r: %s",
             location.name,

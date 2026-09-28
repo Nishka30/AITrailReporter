@@ -1,6 +1,6 @@
 import { File, UploadType } from 'expo-file-system';
 
-import { API_BASE_URL, ApiError, NetworkError, extractDetailMessage } from './client';
+import { API_BASE_URL, ApiError, NetworkError, createUploadAbortController, extractDetailMessage } from './client';
 import { submissionFromWire, type SubmissionResponse } from './submissions';
 
 export interface UploadSubmissionAudioRequest {
@@ -65,6 +65,7 @@ export async function uploadSubmissionAudio(
     parameters.duration_seconds = String(req.durationSeconds);
   }
 
+  const { controller, clear } = createUploadAbortController();
   let result: { body: string; status: number };
   try {
     result = await file.upload(`${API_BASE_URL}/api/v1/submissions/${req.submissionId}/audio`, {
@@ -73,11 +74,17 @@ export async function uploadSubmissionAudio(
       fieldName: 'file',
       mimeType: req.contentType,
       parameters,
+      signal: controller.signal,
     });
   } catch (err) {
     // A genuine transport failure now — the native uploader only rejects when
-    // it truly could not complete the request.
+    // it truly could not complete the request, INCLUDING the bounded-timeout
+    // abort from createUploadAbortController (see client.ts's
+    // UPLOAD_TIMEOUT_MS docstring: this upload previously had no app-level
+    // timeout at all).
     throw new NetworkError(err);
+  } finally {
+    clear();
   }
 
   let payload: unknown = null;

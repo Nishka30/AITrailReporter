@@ -66,17 +66,6 @@ class SubmissionAudioMetadata:
     duration_seconds: float | None
 
 
-@dataclass
-class SubmissionPhotoMetadata:
-    """Same idea as SubmissionAudioMetadata, for Step 16's Explore photos.
-    Deliberately has no duration field — a photo has none, and fabricating a
-    shared shape across the two media kinds would be dishonest."""
-
-    content_type: str
-    original_filename: str
-    size_bytes: int
-
-
 class Submission(Base):
     """Raw, historical submission from a guide, prior to any structured extraction."""
 
@@ -196,23 +185,13 @@ class Submission(Base):
     audio_original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     audio_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     audio_duration_seconds: Mapped[float | None] = mapped_column(Numeric(10, 3), nullable=True)
-    # Photo metadata (Step 16). Exactly the same lifecycle and idempotency shape
-    # as the audio_* columns above: all nullable, only populated once an Explore
-    # photo has actually been uploaded and durably stored. client_photo_id is a
-    # third distinct stable client id (alongside client_submission_id and
-    # client_audio_id) making the photo attachment step independently
-    # idempotent/retryable.
-    #
-    # A submission carries at most one photo. Audio and photo columns are
-    # independent, so nothing structurally prevents a future submission type
-    # from having both — but no current flow produces that.
-    client_photo_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
-    # Server-generated storage key (never a client-supplied path) resolved through
-    # app/services/storage/ — never exposed to clients directly, see SubmissionRead.
-    photo_storage_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    photo_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    photo_original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    photo_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Photo(s): NOT columns here anymore -- see app/db/models/submission_photo.py
+    # (SubmissionPhoto), a child table supporting multiple photos per
+    # submission. A submission used to carry at most one photo via flat
+    # client_photo_id/photo_storage_key/... columns on this row; that limit is
+    # gone, and the data those columns held was backfilled into
+    # submission_photos by the migration that dropped them (see that
+    # migration's docstring for the exact backfill).
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -241,15 +220,3 @@ class Submission(Base):
             ),
         )
 
-    @property
-    def photo(self) -> SubmissionPhotoMetadata | None:
-        """None until a photo has actually been uploaded (photo_storage_key set)
-        — same honesty rule as `audio` above: an Explore submission whose photo
-        upload hasn't landed yet reports None rather than a hollow object."""
-        if self.photo_storage_key is None:
-            return None
-        return SubmissionPhotoMetadata(
-            content_type=self.photo_content_type,
-            original_filename=self.photo_original_filename,
-            size_bytes=self.photo_size_bytes,
-        )

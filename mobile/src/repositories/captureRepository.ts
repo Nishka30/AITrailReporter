@@ -3,13 +3,24 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { generateClientId } from '../db/uuid';
 import { isValidCoordinatePair } from '../location/coordinateValidation';
 import type {
+  AttachedPhotoRecord,
   CaptureType,
   DatePrecision,
   DateSource,
   LocalCapture,
   LocationSource,
+  PhotoSyncStatus,
   SyncStatus,
 } from '../types/models';
+
+/** One photo to attach at capture-creation time -- every current flow only
+ * ever attaches photos when the capture itself is created (a guide picks
+ * photos before saving; nothing adds one to an already-saved capture), so
+ * there is no separate "add photo to existing capture" mutation. */
+export interface PhotoInput {
+  localUri: string;
+  contentType?: string | null;
+}
 
 /**
  * THE write-boundary guard against (0, 0) ever reaching local_capture --
@@ -74,6 +85,94 @@ interface LocalCaptureRow {
   updated_at: string;
 }
 
+interface LocalCapturePhotoRow {
+  id: number;
+  capture_id: number;
+  local_uri: string;
+  client_photo_id: string;
+  content_type: string | null;
+  position: number;
+  sync_status: string;
+  last_sync_error: string | null;
+  created_at: string;
+}
+
+function mapPhotoRow(row: LocalCapturePhotoRow): AttachedPhotoRecord {
+  return {
+    id: row.id,
+    localUri: row.local_uri,
+    clientPhotoId: row.client_photo_id,
+    contentType: row.content_type,
+    position: row.position,
+    syncStatus: row.sync_status as PhotoSyncStatus,
+    lastSyncError: row.last_sync_error,
+  };
+}
+
+/** Every photo attached to one capture, oldest position first. */
+export async function listCapturePhotos(
+  db: SQLiteDatabase,
+  captureId: number
+): Promise<AttachedPhotoRecord[]> {
+  const rows = await db.getAllAsync<LocalCapturePhotoRow>(
+    'SELECT * FROM local_capture_photos WHERE capture_id = ? ORDER BY position ASC, id ASC',
+    captureId
+  );
+  return rows.map(mapPhotoRow);
+}
+
+/** Batched equivalent of listCapturePhotos for a whole page of captures --
+ * ONE query grouped in JS, not one query per capture (same N+1-avoidance
+ * convention as every other list function in this codebase). */
+async function listPhotosForCaptures(
+  db: SQLiteDatabase,
+  captureIds: number[]
+): Promise<Map<number, AttachedPhotoRecord[]>> {
+  const result = new Map<number, AttachedPhotoRecord[]>();
+  if (captureIds.length === 0) return result;
+  const placeholders = captureIds.map(() => '?').join(', ');
+  const rows = await db.getAllAsync<LocalCapturePhotoRow>(
+    `SELECT * FROM local_capture_photos WHERE capture_id IN (${placeholders})
+     ORDER BY capture_id ASC, position ASC, id ASC`,
+    ...captureIds
+  );
+  for (const row of rows) {
+    const photo = mapPhotoRow(row);
+    const existing = result.get(row.capture_id);
+    if (existing) existing.push(photo);
+    else result.set(row.capture_id, [photo]);
+  }
+  return result;
+}
+
+/** Marks one photo as actively uploading -- independent of the parent
+ * capture's own sync_status, which markCaptureUploading still owns. */
+export async function markCapturePhotoUploading(db: SQLiteDatabase, photoId: number): Promise<void> {
+  await db.runAsync(
+    `UPDATE local_capture_photos SET sync_status = 'uploading' WHERE id = ?`,
+    photoId
+  );
+}
+
+export async function markCapturePhotoUploaded(db: SQLiteDatabase, photoId: number): Promise<void> {
+  await db.runAsync(
+    `UPDATE local_capture_photos SET sync_status = 'uploaded', last_sync_error = NULL WHERE id = ?`,
+    photoId
+  );
+}
+
+export async function markCapturePhotoFailed(
+  db: SQLiteDatabase,
+  photoId: number,
+  errorMessage: string
+): Promise<void> {
+  await db.runAsync(
+    `UPDATE local_capture_photos SET sync_status = 'failed', last_sync_error = ? WHERE id = ?`,
+    errorMessage,
+    photoId
+  );
+}
+
 /** Location/date provenance fields shared by createExploreCapture and
  * createMemoryCapture — see LocalCapture in types/models.ts for what each
  * one means. All optional: a caller supplies whatever
@@ -108,7 +207,7 @@ export interface CaptureProvenanceInput {
 // making — so it's safe, and necessary, to retry it.
 const SYNCABLE_STATUSES: SyncStatus[] = ['pending', 'failed', 'uploading'];
 
-function mapRow(row: LocalCaptureRow): LocalCapture {
+function mapRow(row: LocalCaptureRow, photos: AttachedPhotoRecord[] = []): LocalCapture {
   return {
     id: row.id,
     localGuideId: row.local_guide_id,
@@ -123,6 +222,7 @@ function mapRow(row: LocalCaptureRow): LocalCapture {
     localPhotoUri: row.local_photo_uri,
     clientPhotoId: row.client_photo_id,
     photoContentType: row.photo_content_type,
+    photos,
     explorePromptId: row.explore_prompt_id,
     explorePromptTitle: row.explore_prompt_title,
     placeQuestionId: row.place_question_id,
@@ -269,8 +369,10 @@ export async function createVoiceCapture(
  * used since v4 — no Explore-specific audio columns exist, on purpose.
  */
 interface ExploreLikeOptions extends CaptureProvenanceInput {
-  localPhotoUri?: string | null;
-  photoContentType?: string | null;
+  /** Zero or more photos to attach at creation time (multi-image support) --
+   * every current flow only ever attaches photos when the capture itself is
+   * created, so there is no separate "add photo later" path. */
+  photos?: PhotoInput[];
   localAudioUri?: string | null;
   audioDurationMillis?: number | null;
   audioContentType?: string | null;
@@ -304,67 +406,85 @@ async function insertExploreLikeCapture(
   options: ExploreLikeOptions
 ): Promise<LocalCapture> {
   const trimmedText = textContent?.trim() ? textContent.trim() : null;
-  const localPhotoUri = options.localPhotoUri ?? null;
+  const photoInputs = options.photos ?? [];
   const localAudioUri = options.localAudioUri ?? null;
   const safeOptions = sanitizeProvenanceCoordinates(options);
 
   const now = new Date().toISOString();
   const clientSubmissionId = generateClientId();
-  const clientPhotoId = localPhotoUri ? generateClientId() : null;
   const clientAudioId = localAudioUri ? generateClientId() : null;
 
-  const result = await db.runAsync(
-    `INSERT INTO local_capture
-       (local_guide_id, client_submission_id, capture_type, text_content,
-        local_photo_uri, client_photo_id, photo_content_type,
-        local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
-        explore_prompt_id, explore_prompt_title,
-        place_question_id, reward_points,
-        latitude, longitude, location_source, location_accuracy_meters,
-        location_captured_at, location_label, location_evidence,
-        occurred_at, occurred_at_precision, date_source, external_place_id,
-        sync_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-             'pending', ?, ?)`,
-    localGuideId,
-    clientSubmissionId,
-    captureType,
-    trimmedText,
-    localPhotoUri,
-    clientPhotoId,
-    localPhotoUri ? (options.photoContentType ?? null) : null,
-    localAudioUri,
-    clientAudioId,
-    localAudioUri ? (options.audioDurationMillis ?? null) : null,
-    localAudioUri ? (options.audioContentType ?? null) : null,
-    options.promptId ?? null,
-    options.promptTitle ?? null,
-    options.placeQuestionId ?? null,
-    options.rewardPoints ?? null,
-    safeOptions.latitude ?? null,
-    safeOptions.longitude ?? null,
-    safeOptions.locationSource ?? 'unknown',
-    options.locationAccuracyMeters ?? null,
-    options.locationCapturedAt ?? null,
-    options.locationLabel ?? null,
-    options.locationEvidence ?? null,
-    options.occurredAt ?? null,
-    options.occurredAtPrecision ?? 'unknown',
-    options.dateSource ?? 'unknown',
-    options.externalPlaceId ?? null,
-    now,
-    now
-  );
+  // The capture row and its photo rows are inserted together, atomically:
+  // a crash between them would otherwise leave a saved contribution that
+  // silently lost the photos the guide just picked, with no error shown.
+  let captureId = 0;
+  await db.withTransactionAsync(async () => {
+    const result = await db.runAsync(
+      `INSERT INTO local_capture
+         (local_guide_id, client_submission_id, capture_type, text_content,
+          local_audio_uri, client_audio_id, audio_duration_millis, audio_content_type,
+          explore_prompt_id, explore_prompt_title,
+          place_question_id, reward_points,
+          latitude, longitude, location_source, location_accuracy_meters,
+          location_captured_at, location_label, location_evidence,
+          occurred_at, occurred_at_precision, date_source, external_place_id,
+          sync_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+               'pending', ?, ?)`,
+      localGuideId,
+      clientSubmissionId,
+      captureType,
+      trimmedText,
+      localAudioUri,
+      clientAudioId,
+      localAudioUri ? (options.audioDurationMillis ?? null) : null,
+      localAudioUri ? (options.audioContentType ?? null) : null,
+      options.promptId ?? null,
+      options.promptTitle ?? null,
+      options.placeQuestionId ?? null,
+      options.rewardPoints ?? null,
+      safeOptions.latitude ?? null,
+      safeOptions.longitude ?? null,
+      safeOptions.locationSource ?? 'unknown',
+      options.locationAccuracyMeters ?? null,
+      options.locationCapturedAt ?? null,
+      options.locationLabel ?? null,
+      options.locationEvidence ?? null,
+      options.occurredAt ?? null,
+      options.occurredAtPrecision ?? 'unknown',
+      options.dateSource ?? 'unknown',
+      options.externalPlaceId ?? null,
+      now,
+      now
+    );
+    captureId = result.lastInsertRowId;
+
+    for (let position = 0; position < photoInputs.length; position++) {
+      const photo = photoInputs[position];
+      await db.runAsync(
+        `INSERT INTO local_capture_photos
+           (capture_id, local_uri, client_photo_id, content_type, position, sync_status, created_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+        captureId,
+        photo.localUri,
+        generateClientId(),
+        photo.contentType ?? null,
+        position,
+        now
+      );
+    }
+  });
 
   const row = await db.getFirstAsync<LocalCaptureRow>(
     'SELECT * FROM local_capture WHERE id = ?',
-    result.lastInsertRowId
+    captureId
   );
   if (!row) {
     throw new Error(`Failed to read back the newly created ${captureType} contribution.`);
   }
-  return mapRow(row);
+  const photos = await listCapturePhotos(db, captureId);
+  return mapRow(row, photos);
 }
 
 export async function createExploreCapture(
@@ -404,7 +524,7 @@ export async function createMemoryCapture(
   options: ExploreLikeOptions = {}
 ): Promise<LocalCapture> {
   const trimmedText = textContent?.trim();
-  if (!trimmedText && !options.localAudioUri && !options.localPhotoUri) {
+  if (!trimmedText && !options.localAudioUri && !(options.photos && options.photos.length > 0)) {
     throw new Error('A memory needs a photo, a voice note, or a description.');
   }
   return insertExploreLikeCapture(db, localGuideId, 'memory', textContent, options);
@@ -418,7 +538,8 @@ export async function listCaptures(
     'SELECT * FROM local_capture WHERE local_guide_id = ? ORDER BY created_at DESC',
     localGuideId
   );
-  return rows.map(mapRow);
+  const photosByCapture = await listPhotosForCaptures(db, rows.map((r) => r.id));
+  return rows.map((row) => mapRow(row, photosByCapture.get(row.id) ?? []));
 }
 
 /**
@@ -487,7 +608,8 @@ export async function getCaptureById(
     'SELECT * FROM local_capture WHERE id = ?',
     id
   );
-  return row ? mapRow(row) : null;
+  if (!row) return null;
+  return mapRow(row, await listCapturePhotos(db, row.id));
 }
 
 export async function countPendingCaptures(
@@ -545,7 +667,8 @@ export async function listSyncableCaptures(
     localGuideId,
     ...SYNCABLE_STATUSES
   );
-  return rows.map(mapRow);
+  const photosByCapture = await listPhotosForCaptures(db, rows.map((r) => r.id));
+  return rows.map((row) => mapRow(row, photosByCapture.get(row.id) ?? []));
 }
 
 /** Marks a capture as actively being sent, and counts this as a sync attempt. */

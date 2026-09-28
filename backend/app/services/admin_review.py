@@ -40,6 +40,7 @@ from app.schemas.transcription import TranscriptionRead
 from app.schemas.geographic_context import NearestKnownPlace
 from app.services import geographic_context as geographic_context_service
 from app.services import knowledge_state as knowledge_state_service
+from app.services import submissions as submission_service
 
 # How recently a KnowledgeTypeConfig must have been created (Step 16, Case B:
 # a dynamically-created type) to be flagged "new" for admins -- purely a
@@ -334,7 +335,10 @@ def get_review_detail(db: Session, observation_id: UUID) -> ReviewDetail | None:
         raw_text=submission.raw_text,
         submitted_at=submission.submitted_at,
         audio=SubmissionAudioRead.model_validate(submission.audio) if submission.audio else None,
-        photo=SubmissionPhotoRead.model_validate(submission.photo) if submission.photo else None,
+        photos=[
+            SubmissionPhotoRead.model_validate(photo)
+            for photo in submission_service.list_submission_photos(db, submission.id)
+        ],
         transcript=transcript,
     )
 

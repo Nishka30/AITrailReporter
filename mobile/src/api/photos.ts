@@ -1,6 +1,6 @@
 import { File, UploadType } from 'expo-file-system';
 
-import { API_BASE_URL, ApiError, NetworkError, extractDetailMessage } from './client';
+import { API_BASE_URL, ApiError, NetworkError, createUploadAbortController, extractDetailMessage } from './client';
 import { submissionFromWire, type SubmissionResponse } from './submissions';
 
 export interface UploadSubmissionPhotoRequest {
@@ -49,6 +49,7 @@ export async function uploadSubmissionPhoto(
     );
   }
 
+  const { controller, clear } = createUploadAbortController();
   let result: { body: string; status: number };
   try {
     result = await file.upload(`${API_BASE_URL}/api/v1/submissions/${req.submissionId}/photo`, {
@@ -57,9 +58,16 @@ export async function uploadSubmissionPhoto(
       fieldName: 'file',
       mimeType: req.contentType,
       parameters: { client_photo_id: req.clientPhotoId },
+      signal: controller.signal,
     });
   } catch (err) {
+    // Includes the bounded-timeout abort from createUploadAbortController --
+    // an honest NetworkError after UPLOAD_TIMEOUT_MS instead of an unbounded
+    // hang at the mercy of the native HTTP stack's own default (see
+    // client.ts's UPLOAD_TIMEOUT_MS docstring for why this gap existed).
     throw new NetworkError(err);
+  } finally {
+    clear();
   }
 
   let payload: unknown = null;

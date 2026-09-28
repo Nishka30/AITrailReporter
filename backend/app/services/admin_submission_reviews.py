@@ -5,8 +5,9 @@ app/db/models/submission_review.py for why these are two different reviews of
 two different things, and app/api/routes/admin.py for how the routes stay
 under the same /api/v1/admin/* namespace and require_admin boundary.
 
-Reuses the SAME audio/photo streaming routes admin_review's detail view uses
-(GET /admin/submissions/{id}/audio|photo) -- no new media-serving code.
+Reuses the SAME audio streaming route admin_review's detail view uses
+(GET /admin/submissions/{id}/audio) plus the per-photo route
+(GET /admin/submissions/{id}/photos/{photo_id}) -- no new media-serving code.
 """
 
 from uuid import UUID
@@ -19,6 +20,7 @@ from app.db.models.location import Location
 from app.db.models.place_question import PlaceQuestion
 from app.db.models.question import Question
 from app.db.models.submission import Submission
+from app.db.models.submission_photo import SubmissionPhoto
 from app.db.models.submission_review import SubmissionReview
 from app.db.models.transcription import Transcription
 from app.db.models.reward import RewardRule
@@ -34,6 +36,7 @@ from app.schemas.submission_review import SubmissionReviewRead
 from app.schemas.transcription import TranscriptionRead
 from app.services import geographic_context as geographic_context_service
 from app.services import rewards as reward_service
+from app.services import submissions as submission_service
 
 
 class ContributionQueueFilters:
@@ -138,7 +141,7 @@ def _reward_breakdown(
     """What this contribution is worth right now: the base rule plus any
     eligible media bonus, both resolved live from reward_rules. Mirrors
     submission_review.award_media_bonus's eligibility check EXACTLY (same
-    submission_type/source_place_question_id/client_audio_id/client_photo_id
+    submission_type/source_place_question_id/client_audio_id/has-a-photo
     conditions) so this display can never claim a bonus approve() wouldn't
     actually pay."""
     lines: list[RewardBreakdownLine] = []
@@ -149,10 +152,13 @@ def _reward_breakdown(
         lines.append(RewardBreakdownLine(label=_rule_label(base_rule, "Base contribution"), points=base_rule.points))
         total += base_rule.points
 
+    has_photo = db.execute(
+        select(SubmissionPhoto.id).where(SubmissionPhoto.submission_id == submission.id).limit(1)
+    ).first() is not None
     media_eligible = (
         submission.submission_type in ("explore", "memory")
         and submission.source_place_question_id is None
-        and (submission.client_audio_id is not None or submission.client_photo_id is not None)
+        and (submission.client_audio_id is not None or has_photo)
     )
     if media_eligible:
         bonus_rule = reward_service.get_rule(db, _MEDIA_BONUS_RULE_KEY)
@@ -211,7 +217,7 @@ def _to_item(
         location_distance_meters=location_distance_meters,
         question_text=question_text,
         has_audio=submission.audio is not None,
-        has_photo=submission.photo is not None,
+        has_photo=submission_service.has_any_photo(db, submission.id),
         review=SubmissionReviewRead.model_validate(review),
         current_rule_points=total_points,
         reward_breakdown=breakdown,
@@ -273,7 +279,10 @@ def get_contribution_detail(db: Session, submission_id: UUID) -> ContributionDet
     return ContributionDetail(
         item=item,
         audio=SubmissionAudioRead.model_validate(submission.audio) if submission.audio else None,
-        photo=SubmissionPhotoRead.model_validate(submission.photo) if submission.photo else None,
+        photos=[
+            SubmissionPhotoRead.model_validate(photo)
+            for photo in submission_service.list_submission_photos(db, submission.id)
+        ],
         transcript=transcript,
         guide_phone_number=guide.phone_number,
     )

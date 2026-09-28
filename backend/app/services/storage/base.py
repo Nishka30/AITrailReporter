@@ -3,6 +3,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+class MediaStorageError(Exception):
+    """Raised when save() genuinely fails at the storage backend (a rejected
+    Supabase upload, a filesystem write error, ...). `message` is always safe
+    to log and to turn into an HTTP response -- never raw SDK internals or a
+    credential. Callers (app/services/submissions.py) let this propagate to
+    the route, which turns it into a clean 502 rather than an opaque 500 with
+    no diagnostic content -- see SupabaseMediaStorage.save() for why this
+    previously had NO error handling at all."""
+
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
+
+
 @dataclass
 class StoredFile:
     """What the caller needs after a successful save: the durable reference to

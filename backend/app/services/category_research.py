@@ -124,47 +124,45 @@ def get_existing_targeted_finding(
 
 
 def perform_targeted_category_research(
-    db: Session, location: Location, category_slug: str, category_display_name: str
+    db: Session, claim: PlaceResearchFinding, query: str, topic: str
 ) -> PlaceResearchFinding | None:
-    """Exactly ONE Perplexity call, scoped to this Location + this category
-    (never the whole generic location research plan again). Persists the
-    result either way -- even an unusable one -- so
-    get_existing_targeted_finding sees it next time and this is never
-    re-queried in a hot loop; returns None only when the call itself failed
-    (Perplexity unavailable/erroring), which is the caller's signal to fall
-    back to the deterministic template (Part 1E)."""
-    descriptor = research_plan.describe_place(location.name, location.place_kind, location.locality)
-    query = f"{descriptor} {category_display_name.lower()} relevance"
-    topic = _category_topic(category_slug)
-
+    """Runs the ONE Perplexity call for an already-claimed (location, topic)
+    slot (see get_or_create_category_finding) and fills in the claim row that
+    was committed, lock-free, just before this runs -- slow external work
+    must never hold a database row lock (same shape as
+    place_questions.ensure_researched's claim-then-release). Returns None
+    only when the call itself failed (Perplexity unavailable/erroring), which
+    is the caller's signal to fall back to the deterministic template
+    (Part 1E). On failure the claim row is DELETED rather than left as a
+    cooldown placeholder -- a transient provider outage must not block every
+    later request for this (location, category) for a full
+    place_question_refresh_days window; that cooldown is only earned by a
+    successful call that came back too thin to use (see
+    get_or_create_category_finding's "too recent to retry" branch)."""
     try:
         provider = perplexity_provider.get_provider()
         result = provider.run_query(query, topic=topic)
     except ResearchProviderError as exc:
         logger.info(
-            "Targeted category research unavailable for %r / %s: %s",
-            location.name, category_slug, exc.message,
+            "Targeted category research unavailable for location %s / %s: %s",
+            claim.location_id, topic, exc.message,
         )
+        db.delete(claim)
+        db.commit()
         return None
 
-    row = PlaceResearchFinding(
-        location_id=location.id,
-        research_id=None,
-        topic=topic,
-        query_text=query,
-        provider=result.provider,
-        model=result.model,
-        summary=result.summary,
-        source_urls=result.source_urls or None,
-        source_titles=result.source_titles or None,
-        retrieved_at=result.retrieved_at,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        cost_usd=result.cost_usd,
-    )
-    db.add(row)
+    claim.provider = result.provider
+    claim.model = result.model
+    claim.summary = result.summary
+    claim.source_urls = result.source_urls or None
+    claim.source_titles = result.source_titles or None
+    claim.retrieved_at = result.retrieved_at
+    claim.input_tokens = result.input_tokens
+    claim.output_tokens = result.output_tokens
+    claim.cost_usd = result.cost_usd
+    db.add(claim)
     db.flush()
-    return row
+    return claim
 
 
 def get_or_create_category_finding(
@@ -186,26 +184,66 @@ def get_or_create_category_finding(
     only as a "don't hammer a place with nothing to say" cooldown, never as a
     gate on whether category questions may be generated at all (see the
     module docstring's "two independent clocks" note).
+
+    CONCURRENCY: the "does anything usable already exist" check and the
+    decision to spend on a new targeted query both happen under a
+    SELECT ... FOR UPDATE lock on this Location row, released (via commit)
+    BEFORE the Perplexity call itself -- the same claim-then-release shape
+    place_questions.ensure_researched uses for whole-location research.
+    Without this, two callers landing on the same (location, category) gap in
+    the same window (now plausible since category generation runs as a
+    background task -- see guides.py's popular-questions route) could both
+    read "nothing exists yet" and both pay for a Perplexity call, producing
+    two rows for what the module docstring promises is never repeated.
     """
     now = now or datetime.now(timezone.utc)
 
+    # Claim: lock this Location so a concurrent caller for the same
+    # (location, category) is serialized behind whatever this call commits,
+    # instead of racing it on the same read.
+    db.execute(select(Location.id).where(Location.id == location.id).with_for_update())
+
     relevant = find_relevant_finding(db, location.id, category_slug, category_display_name)
     if relevant is not None:
+        db.commit()
         return relevant
 
     existing_targeted = get_existing_targeted_finding(db, location.id, category_slug)
     if existing_targeted is not None:
         if _row_is_usable(existing_targeted):
+            db.commit()
             return existing_targeted
         age = now - existing_targeted.retrieved_at
         if age < timedelta(days=settings.place_question_refresh_days):
-            # A prior targeted attempt found nothing useful, and it hasn't
-            # been long enough to justify spending on this exact
-            # (location, category) again -- the deterministic template
-            # applies for now (Part 1F: no repeat spend without a reason).
+            # A prior (or concurrently in-flight) targeted attempt found
+            # nothing useful yet, and it hasn't been long enough to justify
+            # spending on this exact (location, category) again -- the
+            # deterministic template applies for now (Part 1F: no repeat
+            # spend without a reason).
+            db.commit()
             return None
 
-    targeted = perform_targeted_category_research(db, location, category_slug, category_display_name)
+    # Still nothing usable -- claim the slot with a placeholder row BEFORE
+    # releasing the lock, so a concurrent caller's get_existing_targeted_finding
+    # check above finds THIS row (an "unusable, too recent to retry" claim)
+    # and backs off instead of also spending.
+    topic = _category_topic(category_slug)
+    descriptor = research_plan.describe_place(location.name, location.place_kind, location.locality)
+    query = f"{descriptor} {category_display_name.lower()} relevance"
+    claim = PlaceResearchFinding(
+        location_id=location.id,
+        research_id=None,
+        topic=topic,
+        query_text=query,
+        provider="perplexity",
+        summary="",
+        retrieved_at=now,
+    )
+    db.add(claim)
+    db.commit()  # releases the Location row lock
+    db.refresh(claim)
+
+    targeted = perform_targeted_category_research(db, claim, query, topic)
     if targeted is None or not _row_is_usable(targeted):
         return None
     return targeted

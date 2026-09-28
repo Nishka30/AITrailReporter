@@ -10,6 +10,7 @@ from app.db.models.location_category import (
     LocationCategory,
     LocationCategoryAssignment,
 )
+from app.db.models.location_research_summary import LocationResearchSummary
 from app.db.models.observation import Observation
 from app.db.models.observation_moderation import ObservationModeration
 from app.db.models.place_question import PlaceQuestion, PlaceQuestionResearch
@@ -20,6 +21,7 @@ from app.db.models.question_answer import QuestionAnswer
 from app.db.models.question_assignment import QuestionAssignment
 from app.db.models.reward import RewardLedger, RewardRule, RewardRuleChange
 from app.db.models.submission import Submission
+from app.db.models.submission_photo import SubmissionPhoto
 from app.db.models.submission_review import SubmissionReview
 from app.db.models.transcription import Transcription
 
@@ -34,6 +36,7 @@ __all__ = [
     "Location",
     "LocationCategory",
     "LocationCategoryAssignment",
+    "LocationResearchSummary",
     "Observation",
     "ObservationModeration",
     "PlaceQuestion",
@@ -47,6 +50,7 @@ __all__ = [
     "RewardRule",
     "RewardRuleChange",
     "Submission",
+    "SubmissionPhoto",
     "SubmissionReview",
     "Transcription",
 ]

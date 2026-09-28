@@ -71,6 +71,43 @@ export function extractDetailMessage(payload: unknown, fallback: string): string
 const REQUEST_TIMEOUT_MS = 45_000;
 
 /**
+ * Same reasoning as REQUEST_TIMEOUT_MS above, but for a multipart file
+ * upload (photo/audio) rather than a plain JSON call. Those uploads go
+ * through expo-file-system's NATIVE uploader (see api/photos.ts / api/audio.ts)
+ * to work around a real React Native fetch()+FormData bug on-device — which
+ * means they bypass apiRequest() entirely and never inherited the 45s
+ * abort-timeout tuned for the production backend's cold start. Until this
+ * was added, a photo/audio upload had NO app-level timeout at all: it was
+ * entirely at the mercy of whichever default the native HTTP stack
+ * (OkHttp/NSURLSession) happens to use, which is not tuned for this app's
+ * documented cold-start reality. A hang there produced no error at all —
+ * not even the honest NetworkError a plain request would get — so a failed
+ * upload could sit silently un-retried (or retry against the same
+ * unbounded hang) instead of failing fast and clearly. Longer than
+ * REQUEST_TIMEOUT_MS on purpose: an upload has to transfer real file bytes
+ * on top of the same cold start a JSON call only has to survive.
+ */
+export const UPLOAD_TIMEOUT_MS = 90_000;
+
+/**
+ * Builds an AbortController that self-aborts after `ms`, for the native
+ * file-upload calls in api/photos.ts / api/audio.ts, which can't route
+ * through apiRequest() but still need the same "never hang forever"
+ * guarantee — expo-file-system's `UploadOptions.signal` accepts exactly
+ * this. The caller MUST clear the returned timeout once the awaited upload
+ * settles (success or failure), exactly like apiRequest() does with its own
+ * AbortController, so a fast upload doesn't leave a dangling timer.
+ */
+export function createUploadAbortController(ms: number = UPLOAD_TIMEOUT_MS): {
+  controller: AbortController;
+  clear: () => void;
+} {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), ms);
+  return { controller, clear: () => clearTimeout(timeoutId) };
+}
+
+/**
  * Minimal fetch wrapper shared by every endpoint module in src/api/. Screens and
  * the sync engine never call fetch() directly — everything goes through this (or
  * the per-resource functions built on it) so error handling and the base URL stay

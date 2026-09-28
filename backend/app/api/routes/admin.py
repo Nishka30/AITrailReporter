@@ -54,6 +54,7 @@ from app.services import observation_moderation as moderation_service
 from app.services import submission_review as submission_review_service
 from app.services import submissions as submission_service
 from app.services.storage import get_audio_storage, get_photo_storage
+from app.services.storage.base import MediaStorageError
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -451,23 +452,37 @@ def get_submission_audio(
         content = get_audio_storage().read_bytes(submission.audio_storage_key)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Audio file is missing on the server")
+    except MediaStorageError as exc:
+        raise HTTPException(status_code=502, detail=exc.message)
     return Response(content=content, media_type=submission.audio.content_type)
 
 
-@router.get("/submissions/{submission_id}/photo")
+@router.get("/submissions/{submission_id}/photos/{photo_id}")
 def get_submission_photo(
     submission_id: UUID,
+    photo_id: UUID,
     admin: AdminPrincipal = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    submission = submission_service.get_submission(db, submission_id)
-    if submission is None or submission.photo is None:
-        raise HTTPException(status_code=404, detail="No photo attached to this submission")
+    """Streams ONE specific photo (multi-image: a submission may have
+    several -- see app/db/models/submission_photo.py). `photo_id` addresses
+    exactly one; `submission_id` is still required in the path (rather than
+    looking the photo up by id alone) so the URL stays scoped to the
+    submission it's rendered under, and so a photo_id/submission_id mismatch
+    404s instead of silently serving a photo from an unrelated submission."""
+    photo = next(
+        (p for p in submission_service.list_submission_photos(db, submission_id) if p.id == photo_id),
+        None,
+    )
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Photo not found")
     try:
-        content = get_photo_storage().read_bytes(submission.photo_storage_key)
+        content = get_photo_storage().read_bytes(photo.storage_key)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Photo file is missing on the server")
-    return Response(content=content, media_type=submission.photo.content_type)
+    except MediaStorageError as exc:
+        raise HTTPException(status_code=502, detail=exc.message)
+    return Response(content=content, media_type=photo.content_type)
 
 
 @router.get("/reward-rules", response_model=list[RewardRuleAdminRead])

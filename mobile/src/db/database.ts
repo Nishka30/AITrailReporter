@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 15;
+const DATABASE_VERSION = 17;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -54,6 +54,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 1;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 1) {
@@ -102,6 +103,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       `);
     });
     currentDbVersion = 2;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 2) {
@@ -139,6 +141,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 3;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 3) {
@@ -162,6 +165,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 4;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 4) {
@@ -203,6 +207,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 5;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 5) {
@@ -240,6 +245,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 6;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 6) {
@@ -280,6 +286,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 7;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 7) {
@@ -317,6 +324,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 8;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 8) {
@@ -350,6 +358,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 9;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 9) {
@@ -396,6 +405,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       COMMIT;
     `);
     currentDbVersion = 10;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 10) {
@@ -408,6 +418,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       ALTER TABLE local_capture ADD COLUMN external_place_id TEXT;
     `);
     currentDbVersion = 11;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 11) {
@@ -430,6 +441,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       ALTER TABLE local_answer ADD COLUMN photo_content_type TEXT;
     `);
     currentDbVersion = 12;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 12) {
@@ -445,6 +457,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       ALTER TABLE local_answer ADD COLUMN server_submission_id TEXT;
     `);
     currentDbVersion = 13;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 13) {
@@ -468,6 +481,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       ALTER TABLE local_answer ADD COLUMN reward_points_awarded INTEGER;
     `);
     currentDbVersion = 14;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 14) {
@@ -494,6 +508,7 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       ALTER TABLE local_answer ADD COLUMN external_place_id TEXT;
     `);
     currentDbVersion = 15;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
   if (currentDbVersion === 15) {
@@ -509,9 +524,94 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       ALTER TABLE local_answer ADD COLUMN location_source TEXT;
     `);
     currentDbVersion = 16;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
-  // Future schema changes: add `if (currentDbVersion === 16) { ...; currentDbVersion = 17; }`
+  if (currentDbVersion === 16) {
+    // v16 -> v17: multi-image support. A capture/answer used to carry at
+    // most one photo via local_photo_uri/client_photo_id/photo_content_type
+    // columns directly on local_capture/local_answer. Those columns are LEFT
+    // IN PLACE (unlike the backend's equivalent migration, which drops its
+    // columns) -- SQLite's ALTER TABLE ... DROP COLUMN support varies across
+    // the SQLite versions bundled with different OS/Expo combinations in the
+    // field, and there is no way to verify every installed device's engine
+    // version before running this. Leaving five nullable, no-longer-written
+    // columns in place is a harmless, disclosed trade-off; a genuine DROP
+    // COLUMN failure on some device would not be.
+    //
+    // New child tables mirror the backend's SubmissionPhoto exactly: a
+    // capture/answer may now carry SEVERAL photos, each with its own
+    // client_photo_id (independent upload idempotency) and its own
+    // sync_status (so one photo failing to upload never forces a re-upload
+    // of photos that already succeeded -- see sync/syncService.ts).
+    //
+    // Backfill: every existing single photo becomes position=0 in the new
+    // table, with sync_status derived from its PARENT's overall sync_status
+    // -- 'uploaded' stays 'uploaded' (never re-uploaded), anything else
+    // becomes 'pending' (picked up on the next sync; harmless even if it was
+    // already sent, since the backend's attach-photo step is idempotent on
+    // client_photo_id).
+    await db.execAsync(`
+      BEGIN TRANSACTION;
 
-  await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
+      CREATE TABLE IF NOT EXISTS local_capture_photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        capture_id INTEGER NOT NULL REFERENCES local_capture(id) ON DELETE CASCADE,
+        local_uri TEXT NOT NULL,
+        client_photo_id TEXT NOT NULL,
+        content_type TEXT,
+        position INTEGER NOT NULL DEFAULT 0,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        last_sync_error TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_local_capture_photos_client_photo_id
+        ON local_capture_photos (client_photo_id);
+      CREATE INDEX IF NOT EXISTS idx_local_capture_photos_capture_id
+        ON local_capture_photos (capture_id);
+
+      CREATE TABLE IF NOT EXISTS local_answer_photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        answer_id INTEGER NOT NULL REFERENCES local_answer(id) ON DELETE CASCADE,
+        local_uri TEXT NOT NULL,
+        client_photo_id TEXT NOT NULL,
+        content_type TEXT,
+        position INTEGER NOT NULL DEFAULT 0,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        last_sync_error TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_local_answer_photos_client_photo_id
+        ON local_answer_photos (client_photo_id);
+      CREATE INDEX IF NOT EXISTS idx_local_answer_photos_answer_id
+        ON local_answer_photos (answer_id);
+
+      INSERT INTO local_capture_photos
+          (capture_id, local_uri, client_photo_id, content_type, position, sync_status, created_at)
+        SELECT id, local_photo_uri, client_photo_id, photo_content_type, 0,
+               CASE WHEN sync_status = 'uploaded' THEN 'uploaded' ELSE 'pending' END,
+               created_at
+        FROM local_capture
+        WHERE local_photo_uri IS NOT NULL AND client_photo_id IS NOT NULL;
+
+      INSERT INTO local_answer_photos
+          (answer_id, local_uri, client_photo_id, content_type, position, sync_status, created_at)
+        SELECT id, local_photo_uri, client_photo_id, photo_content_type, 0,
+               CASE WHEN sync_status = 'uploaded' THEN 'uploaded' ELSE 'pending' END,
+               created_at
+        FROM local_answer
+        WHERE local_photo_uri IS NOT NULL AND client_photo_id IS NOT NULL;
+
+      COMMIT;
+    `);
+    currentDbVersion = 17;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 17) { ...; currentDbVersion = 18; }`
+  // Persist `PRAGMA user_version` INSIDE that new block too, right after its own
+  // DDL/backfill completes -- never only once at the end of this function. A step
+  // that throws must leave the DB honestly at its last COMPLETED version, so a
+  // retry on next launch resumes from there instead of re-running already-applied
+  // (non-idempotent) ALTER TABLE statements against a partially-migrated schema.
 }

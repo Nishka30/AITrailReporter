@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -7,11 +7,11 @@ import type { RecordedAudio } from '../audio/audioRecordingService';
 import LocationCaptureField, {
   type CapturedContributionLocation,
 } from '../components/LocationCaptureField';
+import MultiPhotoPicker, { type AttachedPhoto } from '../components/MultiPhotoPicker';
 import VoiceNoteComposer from '../components/VoiceNoteComposer';
 import { AppHeader, Badge, Button, Card, RewardChip, Screen } from '../components/ui';
 import type { PlaceCandidate } from '../api/placeCandidates';
 import type { ExplorePrompt } from '../explore/explorePrompts';
-import { choosePhoto, takePhoto, type PhotoPickResult } from '../photo/photoPickerService';
 import { createExploreCapture } from '../repositories/captureRepository';
 import { colors, radii, spacing, type } from '../theme/theme';
 import type { LocalGuide } from '../types/models';
@@ -25,8 +25,6 @@ type Props = {
   place: PlaceCandidate | null;
   onDone: () => void;
 };
-
-type AttachedPhoto = { uri: string; contentType: string };
 
 /**
  * A labelled section heading for one contribution channel. Each channel gets
@@ -77,18 +75,16 @@ function SectionLabel({
 export default function ExploreContributeScreen({ guide, prompt, place, onDone }: Props) {
   const db = useSQLiteContext();
   const [text, setText] = useState('');
-  const [photo, setPhoto] = useState<AttachedPhoto | null>(null);
+  const [photos, setPhotos] = useState<AttachedPhoto[]>([]);
   const [voice, setVoice] = useState<RecordedAudio | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   // A fresh fix taken for THIS contribution. Takes precedence over the
   // chosen place's coordinates when present (see handleSave) -- the place
   // was picked from a list built at whatever position the guide was at when
   // they opened the picker, which may no longer be where they are.
   const [location, setLocation] = useState<CapturedContributionLocation | null>(null);
-  const [pickingPhoto, setPickingPhoto] = useState(false);
 
   // This composer serves two arrivals: a generic Explore prompt, and a real
   // backend place question opened from the Questions tab (the only thing that
@@ -99,45 +95,12 @@ export default function ExploreContributeScreen({ guide, prompt, place, onDone }
   const isPlaceAnswer = prompt.placeQuestionId != null;
   const noun = isPlaceAnswer ? 'answer' : 'discovery';
 
-  function applyPhotoResult(result: PhotoPickResult) {
-    switch (result.status) {
-      case 'success':
-        setPhoto({ uri: result.uri, contentType: result.contentType });
-        setPhotoNotice(null);
-        break;
-      case 'cancelled':
-        // Not an error, and not worth a message — the guide chose to back out.
-        break;
-      case 'permission-denied':
-        setPhotoNotice(
-          result.canAskAgain
-            ? 'Photo permission is needed for this. Please allow it and try again.'
-            : 'Photo permission was denied. You can enable it for this app in your device settings.'
-        );
-        break;
-      case 'error':
-        setPhotoNotice(result.message);
-        break;
-    }
-  }
-
-  async function handlePickPhoto(useCamera: boolean) {
-    if (pickingPhoto || saving) return;
-    setPickingPhoto(true);
-    setPhotoNotice(null);
-    try {
-      applyPhotoResult(useCamera ? await takePhoto() : await choosePhoto());
-    } finally {
-      setPickingPhoto(false);
-    }
-  }
-
   async function handleSave() {
     if (saving) return;
     const trimmed = text.trim();
     if (!trimmed && !voice) {
       setError(
-        photo
+        photos.length > 0
           ? 'Add a few words or a voice note about this photo — on its own, a photo cannot become usable knowledge.'
           : `Write something or record a voice note before saving your ${noun}.`
       );
@@ -147,8 +110,7 @@ export default function ExploreContributeScreen({ guide, prompt, place, onDone }
     setError(null);
     try {
       await createExploreCapture(db, guide.id, trimmed || null, {
-        localPhotoUri: photo?.uri ?? null,
-        photoContentType: photo?.contentType ?? null,
+        photos: photos.map((p) => ({ localUri: p.uri, contentType: p.contentType })),
         localAudioUri: voice?.uri ?? null,
         audioDurationMillis: voice?.durationMillis ?? null,
         audioContentType: voice?.contentType ?? null,
@@ -211,7 +173,7 @@ export default function ExploreContributeScreen({ guide, prompt, place, onDone }
     const parts = [
       text.trim() ? 'note' : null,
       voice ? 'voice note' : null,
-      photo ? 'photo' : null,
+      photos.length > 0 ? (photos.length === 1 ? 'photo' : 'photos') : null,
     ].filter(Boolean) as string[];
     const list =
       parts.length === 1
@@ -309,55 +271,10 @@ export default function ExploreContributeScreen({ guide, prompt, place, onDone }
 
         <SectionLabel
           icon="camera-outline"
-          title="Photo"
+          title="Photos"
           hint={prompt.wantsPhoto ? 'This prompt is asking for one' : 'Optional'}
         />
-        {photo ? (
-          <View style={styles.photoWrap}>
-            <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
-            <Pressable
-              onPress={() => setPhoto(null)}
-              accessibilityRole="button"
-              accessibilityLabel="Remove photo"
-              hitSlop={8}
-              style={styles.photoRemove}
-              disabled={saving}
-            >
-              <Ionicons name="close" size={17} color={colors.white} />
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.photoActions}>
-            <Pressable
-              onPress={() => handlePickPhoto(true)}
-              accessibilityRole="button"
-              accessibilityLabel="Take photo"
-              disabled={pickingPhoto || saving}
-              style={({ pressed }) => [
-                styles.photoAction,
-                pressed && styles.photoActionPressed,
-                (pickingPhoto || saving) && styles.photoActionDisabled,
-              ]}
-            >
-              <Ionicons name="camera-outline" size={21} color={colors.marigoldDeep} />
-              <Text style={styles.photoActionText}>Take photo</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => handlePickPhoto(false)}
-              accessibilityRole="button"
-              accessibilityLabel="Choose photo"
-              disabled={pickingPhoto || saving}
-              style={({ pressed }) => [
-                styles.photoAction,
-                pressed && styles.photoActionPressed,
-                (pickingPhoto || saving) && styles.photoActionDisabled,
-              ]}
-            >
-              <Ionicons name="images-outline" size={21} color={colors.marigoldDeep} />
-              <Text style={styles.photoActionText}>Choose photo</Text>
-            </Pressable>
-          </View>
-        )}
+        <MultiPhotoPicker photos={photos} onChange={setPhotos} disabled={saving} />
 
         <SectionLabel
           icon="location-outline"
@@ -386,7 +303,6 @@ export default function ExploreContributeScreen({ guide, prompt, place, onDone }
           </View>
         )}
 
-        {photoNotice ? <Text style={styles.notice}>{photoNotice}</Text> : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={styles.saveButton}>
@@ -453,42 +369,6 @@ const styles = StyleSheet.create({
     minHeight: 130,
     textAlignVertical: 'top',
     marginBottom: spacing.lg,
-  },
-
-  photoActions: { flexDirection: 'row', gap: spacing.sm },
-  photoAction: {
-    flex: 1,
-    minHeight: 84,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    borderStyle: 'dashed',
-    backgroundColor: colors.paperMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-  },
-  photoActionPressed: { opacity: 0.8 },
-  photoActionDisabled: { opacity: 0.5 },
-  photoActionText: { ...type.smallBold, color: colors.marigoldDeep },
-
-  photoWrap: { position: 'relative' },
-  photoPreview: {
-    width: '100%',
-    height: 210,
-    borderRadius: radii.md,
-    backgroundColor: colors.paperMuted,
-  },
-  photoRemove: {
-    position: 'absolute',
-    top: spacing.xs,
-    right: spacing.xs,
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: 'rgba(33,26,20,0.75)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 
   notice: { ...type.small, color: colors.inkSoft, marginTop: spacing.sm },

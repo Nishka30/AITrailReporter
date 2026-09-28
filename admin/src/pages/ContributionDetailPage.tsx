@@ -89,7 +89,7 @@ export default function ContributionDetailPage() {
     return <ErrorState message="Could not load this contribution." onRetry={() => refetch()} />;
   }
 
-  const { item, audio, photo, transcript, guide_phone_number } = detail;
+  const { item, audio, photos, transcript, guide_phone_number } = detail;
 
   return (
     <div className="max-w-3xl">
@@ -146,9 +146,13 @@ export default function ContributionDetailPage() {
               <AudioPlayer submissionId={item.submission_id} />
             </div>
           ) : null}
-          {photo ? (
-            <div className="mt-3 max-w-sm">
-              <ImageViewer submissionId={item.submission_id} />
+          {photos.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-3">
+              {photos.map((photo) => (
+                <div key={photo.id} className="w-full max-w-sm">
+                  <ImageViewer submissionId={item.submission_id} photoId={photo.id} />
+                </div>
+              ))}
             </div>
           ) : null}
         </section>

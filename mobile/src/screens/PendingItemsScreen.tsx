@@ -217,7 +217,7 @@ function ExploreItem({
   const uploaded = item.syncStatus === 'uploaded';
   const hasVoice = Boolean(item.localAudioUri);
   const hasText = Boolean(item.textContent?.trim());
-  const hasPhoto = Boolean(item.localPhotoUri);
+  const hasPhoto = item.photos.length > 0;
 
   return (
     <Card style={styles.item}>
@@ -260,9 +260,13 @@ function ExploreItem({
             icon="mic-outline"
           />
         ) : null}
-        {item.localPhotoUri ? (
+        {hasPhoto ? (
           <Badge
-            label={uploaded ? 'Photo sent' : 'Photo attached'}
+            label={
+              uploaded
+                ? item.photos.length === 1 ? 'Photo sent' : `${item.photos.length} photos sent`
+                : item.photos.length === 1 ? 'Photo attached' : `${item.photos.length} photos attached`
+            }
             tone={uploaded ? 'success' : 'info'}
             icon="image-outline"
           />
@@ -542,7 +546,7 @@ function AnswerItem({ item }: { item: LocalAnswer }) {
   const badge = syncBadge(item.syncStatus);
   const uploaded = item.syncStatus === 'uploaded';
   const hasVoice = Boolean(item.localAudioUri);
-  const hasPhoto = Boolean(item.localPhotoUri);
+  const hasPhoto = item.photos.length > 0;
 
   return (
     <Card style={styles.item}>
@@ -571,7 +575,11 @@ function AnswerItem({ item }: { item: LocalAnswer }) {
         ) : null}
         {hasPhoto ? (
           <Badge
-            label={uploaded ? 'Photo sent' : 'Photo attached'}
+            label={
+              uploaded
+                ? item.photos.length === 1 ? 'Photo sent' : `${item.photos.length} photos sent`
+                : item.photos.length === 1 ? 'Photo attached' : `${item.photos.length} photos attached`
+            }
             tone={uploaded ? 'success' : 'info'}
             icon="image-outline"
           />

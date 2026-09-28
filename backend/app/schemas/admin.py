@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from app.schemas.knowledge_state import KnowledgeStateResult
 from app.schemas.observation_moderation import ObservationModerationRead
+from app.schemas.place_summary import PlaceResearchSummaryRead
 from app.schemas.submission import SubmissionAudioRead, SubmissionPhotoRead
 from app.schemas.submission_review import SubmissionReviewRead
 from app.schemas.transcription import TranscriptionRead
@@ -133,7 +134,10 @@ class ReviewSourceSubmission(BaseModel):
     raw_text: str | None
     submitted_at: datetime
     audio: SubmissionAudioRead | None
-    photo: SubmissionPhotoRead | None
+    # Every photo attached to this submission (multi-image support) --
+    # empty, never null, when none has been uploaded. See
+    # app/db/models/submission_photo.py.
+    photos: list[SubmissionPhotoRead] = []
     transcript: TranscriptionRead | None = None
 
 
@@ -222,7 +226,7 @@ class ContributionDetail(BaseModel):
 
     item: ContributionQueueItem
     audio: SubmissionAudioRead | None
-    photo: SubmissionPhotoRead | None
+    photos: list[SubmissionPhotoRead] = []
     transcript: TranscriptionRead | None
     guide_phone_number: str | None
 
@@ -300,6 +304,12 @@ class PlaceDetail(BaseModel):
     # knows and trusts, per category, distinct from `categories` above (which
     # only says what this place IS). See services/category_knowledge.py.
     knowledge_coverage: list["PlaceKnowledgeCoverageDetail"] = []
+    # WEB-RESEARCHED, UNVERIFIED content for the future Travelers website --
+    # explicitly NOT the same thing as knowledge_coverage above (which is
+    # TrailMind-verified) or the live conditions a guide app shows. None when
+    # this Location has never had a summary attempt. See
+    # app/db/models/location_research_summary.py.
+    research_summary: PlaceResearchSummaryRead | None = None
 
 
 class PlaceCategoryDetail(BaseModel):

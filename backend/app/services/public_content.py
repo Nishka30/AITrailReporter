@@ -30,6 +30,7 @@ from app.db.models.location import Location
 from app.db.models.observation import Observation
 from app.db.models.observation_moderation import ObservationModeration
 from app.db.models.submission import Submission
+from app.db.models.submission_photo import SubmissionPhoto
 from app.db.models.transcription import Transcription
 from app.schemas.public import (
     PublicConditionState,
@@ -43,6 +44,8 @@ from app.schemas.public import (
 from app.services import geographic_context as geographic_context_service
 from app.services import knowledge_state as knowledge_state_service
 from app.services import knowledge_types as knowledge_type_service
+from app.services import place_summary_service
+from app.services import submissions as submission_service
 
 _SEARCH_LIMIT = 20
 
@@ -157,6 +160,7 @@ def _to_public_observation(
         if context.nearest_known_place is not None:
             nearest_place_id = context.nearest_known_place.id
             nearest_place_name = context.nearest_known_place.name
+    photos = submission_service.list_submission_photos(db, submission.id)
     return PublicObservation(
         observation_id=observation.id,
         knowledge_type=knowledge_type.knowledge_type,
@@ -171,9 +175,9 @@ def _to_public_observation(
         longitude=longitude,
         location_label=submission.location_label,
         external_place_id=submission.external_place_id,
-        has_photo=submission.photo is not None,
+        has_photo=bool(photos),
         has_audio=submission.audio is not None,
-        photo_url=f"/api/v1/public/media/{submission.id}/photo" if submission.photo is not None else None,
+        photo_urls=[f"/api/v1/public/media/{submission.id}/photos/{photo.id}" for photo in photos],
         audio_url=f"/api/v1/public/media/{submission.id}/audio" if submission.audio is not None else None,
         transcript=transcript,
         nearest_place_id=nearest_place_id,
@@ -205,7 +209,9 @@ def list_public_observations(
     if knowledge_type is not None:
         stmt = stmt.where(KnowledgeTypeConfig.knowledge_type == knowledge_type)
     if has_photo:
-        stmt = stmt.where(Submission.photo_storage_key.isnot(None))
+        stmt = stmt.where(
+            Submission.id.in_(select(SubmissionPhoto.submission_id))
+        )
     if has_audio:
         stmt = stmt.where(Submission.audio_storage_key.isnot(None))
 
@@ -309,6 +315,9 @@ def get_public_location_detail(
         recent_observations=observations.items,
         photo_count=photo_count,
         voice_story_count=voice_story_count,
+        research_summary=place_summary_service.to_read(
+            place_summary_service.get_summary(db, location.id)
+        ),
     )
 
 
