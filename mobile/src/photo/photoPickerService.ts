@@ -73,6 +73,31 @@ export type PhotoPickResult =
        * device GPS, while a library photo with no EXIF GPS must NOT — it
        * could be from anywhere, any time. */
       source: 'camera' | 'library';
+      /** The OS media library's stable id for this asset, when the picker
+       * could provide one (library picks only -- always null for a camera
+       * capture, which isn't saved to the library). Used purely for
+       * client-side duplicate detection when the same photo is selected
+       * again in a later gallery pick (see MultiPhotoPicker) -- never sent
+       * to the backend or persisted beyond the current composition. Can
+       * legitimately be null/undefined even for a library pick (limited
+       * permission, or an Android file-system browse) -- callers must treat
+       * a missing id as "cannot verify, assume not a duplicate", never as an
+       * error. */
+      assetId?: string | null;
+    }
+  | { status: 'cancelled' }
+  | { status: 'permission-denied'; canAskAgain: boolean }
+  | { status: 'error'; message: string };
+
+export type PhotoPickMultiResult =
+  | {
+      status: 'success';
+      photos: Array<{
+        uri: string;
+        contentType: string;
+        exif: Record<string, unknown> | null;
+        assetId?: string | null;
+      }>;
     }
   | { status: 'cancelled' }
   | { status: 'permission-denied'; canAskAgain: boolean }
@@ -150,10 +175,69 @@ async function pick(useCamera: boolean, kind: PhotoKind): Promise<PhotoPickResul
       contentType: PHOTO_CONTENT_TYPE,
       exif: (asset.exif as Record<string, unknown> | undefined) ?? null,
       source: useCamera ? 'camera' : 'library',
+      assetId: useCamera ? null : asset.assetId ?? null,
     };
   } catch (err) {
     console.error('[photoPickerService] Failed to pick photo:', err);
     return { status: 'error', message: 'Could not open the photo. Please try again.' };
+  }
+}
+
+/**
+ * Opens the photo library with native MULTI-SELECT enabled, capped at
+ * `selectionLimit` assets (the caller passes however many slots are actually
+ * left -- see MultiPhotoPicker). Requests library permission first, only
+ * from this action, same convention as choosePhoto(). Every selected asset
+ * is copied into this app's own document directory exactly like a single
+ * pick (see persistPickedImage), so nothing downstream (compression
+ * quality, validation, upload, sync) differs from picking the same photos
+ * one at a time.
+ *
+ * A failure copying ANY one selected asset fails the whole batch (caught
+ * below) rather than silently returning a partial set -- consistent with
+ * the single-pick path, which has never partially succeeded either.
+ */
+export async function choosePhotos(
+  kind: PhotoKind = 'explore',
+  selectionLimit: number
+): Promise<PhotoPickMultiResult> {
+  try {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      return { status: 'permission-denied', canAskAgain: permission.canAskAgain !== false };
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      selectionLimit: Math.max(1, selectionLimit),
+      quality: IMAGE_QUALITY,
+      exif: true,
+    });
+
+    if (result.canceled) {
+      return { status: 'cancelled' };
+    }
+
+    const assets = result.assets ?? [];
+    if (assets.length === 0) {
+      // Defensive: a non-cancelled result should always carry at least one
+      // asset. Never guessed around -- reported as the genuine anomaly it
+      // would be, same as the single-pick path.
+      return { status: 'error', message: 'The photos could not be read. Please try again.' };
+    }
+
+    const photos = assets.map((asset) => ({
+      uri: persistPickedImage(asset.uri, kind),
+      contentType: PHOTO_CONTENT_TYPE,
+      exif: (asset.exif as Record<string, unknown> | undefined) ?? null,
+      assetId: asset.assetId ?? null,
+    }));
+
+    return { status: 'success', photos };
+  } catch (err) {
+    console.error('[photoPickerService] Failed to pick photos:', err);
+    return { status: 'error', message: 'Could not open the photo library. Please try again.' };
   }
 }
 

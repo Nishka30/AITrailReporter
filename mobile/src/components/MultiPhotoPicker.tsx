@@ -2,10 +2,24 @@ import { useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { choosePhoto, takePhoto, type PhotoPickResult } from '../photo/photoPickerService';
+import {
+  choosePhotos,
+  takePhoto,
+  type PhotoPickMultiResult,
+  type PhotoPickResult,
+} from '../photo/photoPickerService';
 import { colors, radii, spacing, type } from '../theme/theme';
 
-export type AttachedPhoto = { uri: string; contentType: string };
+export type AttachedPhoto = {
+  uri: string;
+  contentType: string;
+  /** The OS media library's id for this photo, when the picker provided one
+   * -- carried along purely so a LATER gallery pick can detect "you already
+   * added this one" (see applyMultiResult below). Never read by anything
+   * downstream of this component (repositories only ever read uri/contentType
+   * -- see e.g. MemoryContributeScreen's save handler). */
+  assetId?: string | null;
+};
 
 /** Mirrors the backend's settings.max_photos_per_submission (see
  * backend/app/core/config.py) -- a soft, disclosed cap on how many photos ONE
@@ -55,7 +69,10 @@ export default function MultiPhotoPicker({
     switch (result.status) {
       case 'success': {
         const wasFirstPhoto = photos.length === 0;
-        onChange([...photos, { uri: result.uri, contentType: result.contentType }]);
+        onChange([
+          ...photos,
+          { uri: result.uri, contentType: result.contentType, assetId: result.assetId ?? null },
+        ]);
         onPhotoPicked?.(result, wasFirstPhoto);
         setNotice(null);
         break;
@@ -76,12 +93,95 @@ export default function MultiPhotoPicker({
     }
   }
 
-  async function handlePick(useCamera: boolean) {
+  /** Handles a native MULTI-SELECT gallery result: dedupes against photos
+   * already attached (and against duplicates within the same selection) by
+   * the OS media library's asset id, then keeps only as many of the
+   * remainder as there is room for. A photo whose id isn't available (see
+   * PhotoPickResult.assetId's doc comment) is always treated as new, since
+   * there is no reliable way to tell otherwise. */
+  function applyMultiResult(result: PhotoPickMultiResult) {
+    switch (result.status) {
+      case 'success': {
+        const wasEmpty = photos.length === 0;
+        const alreadyAttached = new Set(
+          photos.map((p) => p.assetId).filter((id): id is string => !!id)
+        );
+        const remaining = maxPhotos - photos.length;
+        const seenInThisBatch = new Set<string>();
+        const accepted: typeof result.photos = [];
+        for (const picked of result.photos) {
+          if (accepted.length >= remaining) break;
+          if (picked.assetId) {
+            if (alreadyAttached.has(picked.assetId) || seenInThisBatch.has(picked.assetId)) {
+              continue;
+            }
+            seenInThisBatch.add(picked.assetId);
+          }
+          accepted.push(picked);
+        }
+
+        if (accepted.length > 0) {
+          onChange([
+            ...photos,
+            ...accepted.map((p) => ({
+              uri: p.uri,
+              contentType: p.contentType,
+              assetId: p.assetId ?? null,
+            })),
+          ]);
+          if (wasEmpty) {
+            // Same "auto-detect from the first photo" hook single-pick fires
+            // -- fired once, for the first newly-added photo, exactly like a
+            // single camera/library pick into an empty list.
+            const first = accepted[0];
+            onPhotoPicked?.(
+              {
+                status: 'success',
+                uri: first.uri,
+                contentType: first.contentType,
+                exif: first.exif,
+                source: 'library',
+                assetId: first.assetId ?? null,
+              },
+              true
+            );
+          }
+        }
+        setNotice(null);
+        break;
+      }
+      case 'cancelled':
+        break;
+      case 'permission-denied':
+        setNotice(
+          result.canAskAgain
+            ? 'Photo permission is needed for this. Please allow it and try again.'
+            : 'Photo permission was denied. You can enable it for this app in your device settings.'
+        );
+        break;
+      case 'error':
+        setNotice(result.message);
+        break;
+    }
+  }
+
+  async function handleTakePhoto() {
     if (picking || disabled || atCap) return;
     setPicking(true);
     setNotice(null);
     try {
-      applyResult(useCamera ? await takePhoto() : await choosePhoto());
+      applyResult(await takePhoto());
+    } finally {
+      setPicking(false);
+    }
+  }
+
+  async function handlePickFromLibrary() {
+    if (picking || disabled || atCap) return;
+    setPicking(true);
+    setNotice(null);
+    try {
+      applyMultiResult(await choosePhotos('explore', maxPhotos - photos.length));
     } finally {
       setPicking(false);
     }
@@ -118,7 +218,7 @@ export default function MultiPhotoPicker({
       ) : (
         <View style={styles.photoActions}>
           <Pressable
-            onPress={() => handlePick(true)}
+            onPress={handleTakePhoto}
             accessibilityRole="button"
             accessibilityLabel="Take photo"
             disabled={picking || disabled}
@@ -134,7 +234,7 @@ export default function MultiPhotoPicker({
             </Text>
           </Pressable>
           <Pressable
-            onPress={() => handlePick(false)}
+            onPress={handlePickFromLibrary}
             accessibilityRole="button"
             accessibilityLabel="Choose from library"
             disabled={picking || disabled}
@@ -172,9 +272,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  // flexBasis: 0 (rather than the 'auto' that a bare `flex: 1` leaves as the
+  // starting point) is what actually guarantees the two actions divide the
+  // row exactly in half regardless of their label length -- "Add another"
+  // and "Add from library" are different lengths, and without an explicit
+  // basis their intrinsic content size can nudge the split off-center.
   photoActions: { flexDirection: 'row', gap: spacing.sm },
   photoAction: {
     flex: 1,
+    flexBasis: 0,
     minHeight: 72,
     borderRadius: radii.md,
     borderWidth: 1,
@@ -187,7 +293,11 @@ const styles = StyleSheet.create({
   },
   photoActionPressed: { opacity: 0.8 },
   photoActionDisabled: { opacity: 0.5 },
-  photoActionText: { ...type.smallBold, color: colors.marigoldDeep },
+  // centered explicitly: without it, a label that wraps to a second line
+  // (e.g. "Add from" / "library") left-aligns its shorter second line rather
+  // than centering under the first, which is what read as the button's text
+  // -- and by extension the button itself -- looking shifted left.
+  photoActionText: { ...type.smallBold, color: colors.marigoldDeep, textAlign: 'center' },
 
   notice: { ...type.small, color: colors.inkSoft, marginTop: spacing.sm },
 });
