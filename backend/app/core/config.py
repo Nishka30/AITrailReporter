@@ -324,6 +324,33 @@ class Settings(BaseSettings):
     # infrastructure itself is untouched either way.
     dynamic_knowledge_type_creation_enabled: bool = False
 
+    # --- Public content / route strip (app/services/public_content.py) -----
+    # A single, LOCATION-level freshness bucket for a route stop's status
+    # badge -- "has anyone reported anything here recently at all" -- distinct
+    # from evaluate_public_knowledge_state's per-KNOWLEDGE-TYPE freshness
+    # windows (KnowledgeTypeConfig.freshness_window_hours/aging_threshold_hours)
+    # and from CategoryKnowledge's per-fact freshness_duration_hours, which
+    # both answer the narrower "is THIS SPECIFIC fact still current". Reuses
+    # the KnowledgeState vocabulary (fresh/aging/stale/missing) so the
+    # frontend's existing freshnessLabel/freshnessTone/timeAgoLabel helpers
+    # apply unchanged -- see _bucket_route_stop_freshness.
+    #
+    # A trekking route stop is checked far less often than an urban place, so
+    # this window is deliberately wider than any single knowledge type's.
+    route_stop_freshness_window_hours: float = 72.0
+    # ADDITIONAL hours past route_stop_freshness_window_hours before 'stale'
+    # -- same "extra hours past freshness" convention as
+    # KnowledgeTypeConfig.aging_threshold_hours.
+    route_stop_aging_threshold_hours: float = 96.0
+    # "Nearby places" on a public Location page: other Locations within this
+    # distance of the place's own point, nearest first. Wider than
+    # geographic_context_radius_meters on purpose -- that radius answers "is
+    # this observation AT this place", this one answers "what else is around
+    # here worth looking at" (a trekking village's neighbours are often
+    # several km apart).
+    public_nearby_radius_meters: float = 20000.0
+    public_nearby_limit: int = 12
+
     # Step 18: reward points -> money. `100` means 100 points = 1.00 of
     # reward_currency_code. Configured here rather than in the mobile app so
     # the rate can change without an app release -- the app only ever DISPLAYS

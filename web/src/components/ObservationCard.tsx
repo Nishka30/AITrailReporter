@@ -15,10 +15,10 @@ export function ObservationCard({ observation }: { observation: PublicObservatio
       href={`/observations/${observation.observation_id}`}
       className="group relative block w-full overflow-hidden rounded-[28px] border border-border/70 bg-paper-elevated shadow-warm transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-1.5 hover:border-transparent hover:shadow-warm-lg"
     >
-      {observation.has_photo && observation.photo_url ? (
+      {observation.has_photo && observation.photo_urls[0] ? (
         <div className="relative aspect-[4/3] w-full overflow-hidden bg-paper-muted">
           <Image
-            src={observation.photo_url}
+            src={observation.photo_urls[0]}
             alt=""
             fill
             sizes="320px"

@@ -6,5 +6,5 @@ import { content } from "./index";
  * used only for a handful of cards on the home/explore pages. */
 export async function coverPhotoFor(locationId: string): Promise<string | null> {
   const result = await content.listObservations({ locationId, hasPhoto: true, limit: 1 });
-  return result.items[0]?.photo_url ?? null;
+  return result.items[0]?.photo_urls[0] ?? null;
 }

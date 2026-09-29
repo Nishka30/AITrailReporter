@@ -42,12 +42,12 @@ async function getJsonOrNull<T>(path: string): Promise<T | null> {
 /** The backend returns media URLs as root-relative paths
  * (/api/v1/public/media/...) since it doesn't know its own public origin.
  * Resolved to absolute URLs here, once, so every component downstream can
- * treat photo_url/audio_url as directly fetchable -- mirrors how mock.ts's
+ * treat photo_urls/audio_url as directly fetchable -- mirrors how mock.ts's
  * URLs are already absolute. */
 function absolutize(observation: PublicObservation): PublicObservation {
   return {
     ...observation,
-    photo_url: observation.photo_url ? `${BASE_URL}${observation.photo_url}` : null,
+    photo_urls: observation.photo_urls.map((url) => `${BASE_URL}${url}`),
     audio_url: observation.audio_url ? `${BASE_URL}${observation.audio_url}` : null,
   };
 }
@@ -60,7 +60,16 @@ export const apiContentSource: ContentSource = {
   async getLocation(locationId: string) {
     const detail = await getJsonOrNull<PublicLocationDetail>(`/api/v1/public/locations/${locationId}`);
     if (!detail) return null;
-    return { ...detail, recent_observations: detail.recent_observations.map(absolutize) };
+    return {
+      ...detail,
+      recent_observations: detail.recent_observations.map(absolutize),
+      // Defaulted so a backend deployed before these fields existed still
+      // renders (the sections simply self-hide).
+      popular_questions: detail.popular_questions ?? [],
+      route: detail.route ?? null,
+      categories: detail.categories ?? [],
+      nearby: detail.nearby ?? [],
+    };
   },
 
   async listObservations(params: ListObservationsParams = {}) {

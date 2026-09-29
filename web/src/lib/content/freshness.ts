@@ -6,7 +6,64 @@
  * public_content.evaluate_public_knowledge_state), this file only chooses
  * words for it.
  */
-import type { KnowledgeState } from "./types";
+import type { CategoryState, KnowledgeState } from "./types";
+
+export type Tone = "good" | "warn" | "bad" | "neutral";
+
+/** Short "local check" wording for one report's freshness -- the same
+ * backend state as freshnessLabel, phrased as a guide check (Location page
+ * live rows / route stops). */
+export function checkLabel(state: KnowledgeState): string {
+  switch (state) {
+    case "fresh":
+      return "Recently checked";
+    case "aging":
+      return "Worth re-checking";
+    case "stale":
+      return "Due for a check";
+    case "missing":
+      return "Not checked yet";
+  }
+}
+
+/** A category's derived coverage state (backend compute_category_state). */
+export function categoryStateLabel(state: CategoryState): string {
+  switch (state) {
+    case "fresh":
+      return "Recently verified";
+    case "partially_stale":
+      return "Partly due for a re-check";
+    case "stale":
+      return "Due for a re-check";
+    case "missing":
+      return "Not verified yet";
+  }
+}
+
+export function categoryStateTone(state: CategoryState): Tone {
+  switch (state) {
+    case "fresh":
+      return "good";
+    case "partially_stale":
+      return "warn";
+    case "stale":
+      return "bad";
+    case "missing":
+      return "neutral";
+  }
+}
+
+/** "26 Sep 2026" -- an absolute date alongside relative "3 days ago", so an
+ * old report can never read as current. */
+export function formatDate(iso: string | null): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+export function formatDistance(meters: number | null | undefined): string | null {
+  if (meters == null) return null;
+  return meters < 1000 ? `${Math.round(meters / 10) * 10} m` : `${(meters / 1000).toFixed(meters < 10_000 ? 1 : 0)} km`;
+}
 
 export function freshnessLabel(state: KnowledgeState): string {
   switch (state) {
@@ -21,7 +78,7 @@ export function freshnessLabel(state: KnowledgeState): string {
   }
 }
 
-export function freshnessTone(state: KnowledgeState): "good" | "warn" | "bad" | "neutral" {
+export function freshnessTone(state: KnowledgeState): Tone {
   switch (state) {
     case "fresh":
       return "good";

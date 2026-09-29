@@ -12,6 +12,10 @@ export function LocationCard({
   coverPhotoUrl?: string | null;
   size?: "md" | "lg";
 }) {
+  // Straight from location_category_assignments (via the summary): what
+  // the place is, then up to three themes it's about.
+  const placeType = location.categories?.find((c) => c.kind === "place_type")?.display_name ?? null;
+  const themes = (location.categories ?? []).filter((c) => c.kind === "theme").slice(0, 3);
   return (
     <Link
       href={`/places/${location.location_id}`}
@@ -40,9 +44,21 @@ export function LocationCard({
         </div>
       </div>
       <div className="p-5">
+        {placeType && (
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.12em] text-ink-faint">{placeType}</p>
+        )}
         <h3 className="font-heading text-lg font-bold text-ink transition-colors group-hover:text-marigold-deep">{location.name}</h3>
         {location.description && (
           <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-ink-soft">{location.description}</p>
+        )}
+        {themes.length > 0 && (
+          <ul className="mt-3 flex flex-wrap gap-1.5" aria-label="Categories">
+            {themes.map((c) => (
+              <li key={c.slug} className="rounded-full bg-paper-muted px-2.5 py-0.5 text-[11px] font-medium text-ink-soft">
+                {c.display_name}
+              </li>
+            ))}
+          </ul>
         )}
         <div className="mt-4 flex items-center gap-2 text-xs text-ink-faint">
           <span className="h-1.5 w-1.5 rounded-full bg-ok" />

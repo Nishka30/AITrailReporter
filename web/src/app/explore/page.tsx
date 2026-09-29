@@ -69,31 +69,47 @@ export default async function ExplorePage({
         </p>
       </Reveal>
 
-      {/* Filter chips */}
-      <div className="mt-8 flex flex-wrap gap-2">
-        <FilterChip href={buildHref(sp, { has_photos: sp.has_photos === "true" ? undefined : "true" })} active={sp.has_photos === "true"}>
-          Has photos
-        </FilterChip>
-        <FilterChip href={buildHref(sp, { has_voice: sp.has_voice === "true" ? undefined : "true" })} active={sp.has_voice === "true"}>
-          Voice stories
-        </FilterChip>
-        <FilterChip href={buildHref(sp, { safety: sp.safety === "true" ? undefined : "true" })} active={sp.safety === "true"}>
-          Safety-critical
-        </FilterChip>
-        <span className="mx-1 my-auto h-4 w-px bg-border" />
-        {knowledgeTypes.map((kt) => (
-          <FilterChip
-            key={kt.knowledge_type}
-            href={buildHref(sp, { knowledge_type: sp.knowledge_type === kt.knowledge_type ? undefined : kt.knowledge_type })}
-            active={sp.knowledge_type === kt.knowledge_type}
-          >
-            {kt.display_name}
+      {/* Filters */}
+      <div className="mt-10 space-y-5">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold uppercase tracking-[0.15em] text-ink-faint">Filters</p>
+          {hasActiveFilter && (
+            <Link
+              href="/explore"
+              className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-ink-soft transition hover:border-ink-faint hover:text-ink"
+            >
+              Clear filters
+            </Link>
+          )}
+        </div>
+
+        <div className="rail -mx-5 flex gap-2 overflow-x-auto px-5 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
+          <FilterChip href={buildHref(sp, { has_photos: sp.has_photos === "true" ? undefined : "true" })} active={sp.has_photos === "true"}>
+            <CameraIcon /> Has photos
           </FilterChip>
-        ))}
-        {hasActiveFilter && (
-          <Link href="/explore" className="ml-1 my-auto text-xs font-semibold text-ink-faint underline-offset-2 hover:underline">
-            Clear filters
-          </Link>
+          <FilterChip href={buildHref(sp, { has_voice: sp.has_voice === "true" ? undefined : "true" })} active={sp.has_voice === "true"}>
+            <MicIcon /> Voice stories
+          </FilterChip>
+          <FilterChip href={buildHref(sp, { safety: sp.safety === "true" ? undefined : "true" })} active={sp.safety === "true"}>
+            <WarningIcon /> Safety-critical
+          </FilterChip>
+        </div>
+
+        {knowledgeTypes.length > 0 && (
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-ink-faint">Category</p>
+            <div className="rail -mx-5 flex gap-2 overflow-x-auto px-5 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
+              {knowledgeTypes.map((kt) => (
+                <FilterChip
+                  key={kt.knowledge_type}
+                  href={buildHref(sp, { knowledge_type: sp.knowledge_type === kt.knowledge_type ? undefined : kt.knowledge_type })}
+                  active={sp.knowledge_type === kt.knowledge_type}
+                >
+                  {kt.display_name}
+                </FilterChip>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
@@ -166,7 +182,7 @@ function FilterChip({ href, active, children }: { href: string; active: boolean;
     <Link
       href={href}
       className={clsx(
-        "rounded-full border px-3.5 py-1.5 text-sm font-medium transition-all duration-200",
+        "flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-all duration-200",
         active
           ? "border-ink bg-ink text-paper shadow-warm"
           : "border-border text-ink-soft hover:-translate-y-0.5 hover:border-ink-faint hover:text-ink",
@@ -174,5 +190,31 @@ function FilterChip({ href, active, children }: { href: string; active: boolean;
     >
       {children}
     </Link>
+  );
+}
+
+function CameraIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-70">
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2Z" />
+      <circle cx="12" cy="13" r="4" />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-70">
+      <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
+      <path d="M19 11a7 7 0 0 1-14 0M12 18v3" />
+    </svg>
+  );
+}
+
+function WarningIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-70">
+      <path d="M12 9v4M12 17h.01M10.3 3.9 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+    </svg>
   );
 }

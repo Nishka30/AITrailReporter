@@ -20,6 +20,7 @@ from app.db.models.question import Question
 from app.db.models.question_answer import QuestionAnswer
 from app.db.models.question_assignment import QuestionAssignment
 from app.db.models.reward import RewardLedger, RewardRule, RewardRuleChange
+from app.db.models.route import Route, RouteStop
 from app.db.models.submission import Submission
 from app.db.models.submission_photo import SubmissionPhoto
 from app.db.models.submission_review import SubmissionReview
@@ -49,6 +50,8 @@ __all__ = [
     "RewardLedger",
     "RewardRule",
     "RewardRuleChange",
+    "Route",
+    "RouteStop",
     "Submission",
     "SubmissionPhoto",
     "SubmissionReview",

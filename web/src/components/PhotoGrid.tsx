@@ -5,8 +5,17 @@ import { useState } from "react";
 import type { PublicObservation } from "@/lib/content";
 import { timeAgoLabel } from "@/lib/content/freshness";
 
+interface Photo {
+  url: string;
+  observation: PublicObservation;
+}
+
 export function PhotoGrid({ observations }: { observations: PublicObservation[] }) {
-  const photos = observations.filter((o) => o.has_photo && o.photo_url);
+  // One tile per PHOTO, not per observation -- a single observation can now
+  // carry several photos (multi-photo submissions).
+  const photos: Photo[] = observations
+    .filter((o) => o.has_photo)
+    .flatMap((o) => o.photo_urls.map((url) => ({ url, observation: o })));
   const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   if (photos.length === 0) return null;
@@ -17,13 +26,13 @@ export function PhotoGrid({ observations }: { observations: PublicObservation[] 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
         {photos.map((p, i) => (
           <button
-            key={p.observation_id}
+            key={p.url}
             type="button"
             onClick={() => setOpenIndex(i)}
             className="group relative aspect-square overflow-hidden rounded-2xl bg-paper-muted"
           >
             <Image
-              src={p.photo_url!}
+              src={p.url}
               alt=""
               fill
               sizes="(min-width: 768px) 25vw, 50vw"
@@ -53,12 +62,14 @@ export function PhotoGrid({ observations }: { observations: PublicObservation[] 
             onClick={(e) => e.stopPropagation()}
           >
             <div className="relative aspect-[4/3] w-full max-h-[70vh]">
-              <Image src={active.photo_url!} alt="" fill sizes="90vw" className="object-contain" />
+              <Image src={active.url} alt="" fill sizes="90vw" className="object-contain" />
             </div>
             <div className="bg-paper-elevated p-5">
-              {active.evidence && <p className="text-[15px] leading-relaxed text-ink">{active.evidence}</p>}
+              {active.observation.evidence && (
+                <p className="text-[15px] leading-relaxed text-ink">{active.observation.evidence}</p>
+              )}
               <p className="mt-2 text-xs text-ink-faint">
-                Captured by {active.guide_name} · {timeAgoLabel(active.observed_at)}
+                Captured by {active.observation.guide_name} · {timeAgoLabel(active.observation.observed_at)}
               </p>
             </div>
           </div>

@@ -33,9 +33,9 @@ export default async function ObservationPage({
 
   return (
     <div>
-      {observation.has_photo && observation.photo_url && (
+      {observation.has_photo && observation.photo_urls[0] && (
         <section className="relative flex min-h-[60vh] items-end overflow-hidden bg-ink">
-          <Image src={observation.photo_url} alt="" fill priority sizes="100vw" className="object-cover opacity-90" />
+          <Image src={observation.photo_urls[0]} alt="" fill priority sizes="100vw" className="object-cover opacity-90" />
           <div className="absolute inset-0 bg-gradient-to-t from-ink via-ink/20 to-transparent" />
         </section>
       )}

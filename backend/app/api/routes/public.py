@@ -27,6 +27,7 @@ from app.schemas.public import (
     PublicLocationSummary,
     PublicObservation,
     PublicObservationList,
+    PublicPlaceQuestion,
     PublicSearchResult,
 )
 
@@ -52,6 +53,19 @@ def get_location(
     if detail is None:
         raise HTTPException(status_code=404, detail="Place not found")
     return detail
+
+
+@router.get("/locations/{location_id}/questions", response_model=list[PublicPlaceQuestion])
+def list_location_questions(
+    location_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """Active PlaceQuestions for this Location with >= 1 approved answer --
+    also embedded on PublicLocationDetail.popular_questions; this standalone
+    endpoint exists for a caller that wants only the questions (e.g. a
+    "load more questions" affordance) without refetching the whole detail
+    payload."""
+    return public_service.list_public_place_questions(db, location_id)
 
 
 @router.get("/observations", response_model=PublicObservationList)
