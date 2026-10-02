@@ -28,6 +28,8 @@ from app.schemas.public import (
     PublicObservation,
     PublicObservationList,
     PublicPlaceQuestion,
+    PublicRoute,
+    PublicRouteSummary,
     PublicSearchResult,
 )
 
@@ -40,6 +42,13 @@ def list_locations(
     db: Session = Depends(get_db),
 ):
     return public_service.list_public_locations(db, limit=limit)
+
+
+@router.get("/hubs", response_model=list[PublicLocationSummary])
+def list_hubs(db: Session = Depends(get_db)):
+    """The curated hubs -- areas such as Lukla and Thamel -- the site's
+    top-level destinations."""
+    return public_service.list_public_hubs(db)
 
 
 @router.get("/locations/{location_id}", response_model=PublicLocationDetail)
@@ -66,6 +75,25 @@ def list_location_questions(
     "load more questions" affordance) without refetching the whole detail
     payload."""
     return public_service.list_public_place_questions(db, location_id)
+
+
+@router.get("/routes", response_model=list[PublicRouteSummary])
+def list_routes(db: Session = Depends(get_db)):
+    """Every seeded Route (a trek, a driving loop) -- the entry point for a
+    standalone "Explore this trek" page, independent of any one Location."""
+    routes = public_service.list_public_routes(db)
+    return [
+        PublicRouteSummary(route_id=r.id, slug=r.slug, name=r.name, description=r.description)
+        for r in routes
+    ]
+
+
+@router.get("/routes/{slug}", response_model=PublicRoute)
+def get_route(slug: str, db: Session = Depends(get_db)):
+    route = public_service.get_public_route_by_slug(db, slug, datetime.now(timezone.utc))
+    if route is None:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return route
 
 
 @router.get("/observations", response_model=PublicObservationList)

@@ -54,7 +54,7 @@ export function GeolocationNear({ locations }: { locations: PublicLocationSummar
           type="button"
           onClick={request}
           disabled={status === "loading"}
-          className="shrink-0 rounded-full bg-ink px-5 py-3 text-sm font-semibold text-paper transition-all duration-200 hover:-translate-y-0.5 hover:bg-marigold-deep hover:shadow-warm active:translate-y-0 disabled:opacity-60"
+          className="shrink-0 rounded-full bg-ink px-5 py-3 text-sm font-semibold text-paper transition-all duration-200 hover:-translate-y-0.5 hover:bg-accent-deep hover:shadow-warm active:translate-y-0 disabled:opacity-60"
         >
           {status === "loading" ? "Locating…" : "Use my location"}
         </button>

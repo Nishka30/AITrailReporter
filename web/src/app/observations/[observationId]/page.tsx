@@ -41,7 +41,7 @@ export default async function ObservationPage({
       )}
 
       <div className="mx-auto max-w-2xl px-5 py-14 sm:px-8">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-marigold-deep">{observation.display_name}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-accent-deep">{observation.display_name}</p>
 
         {observation.has_audio ? (
           <>
@@ -75,7 +75,7 @@ export default async function ObservationPage({
         {observation.nearest_place_id && (
           <Link
             href={`/places/${observation.nearest_place_id}`}
-            className="mt-10 flex items-center justify-between rounded-2xl border border-border bg-paper-muted/60 px-5 py-4 text-sm font-semibold text-ink transition hover:border-marigold-deep hover:text-marigold-deep"
+            className="mt-10 flex items-center justify-between rounded-2xl border border-border bg-paper-muted/60 px-5 py-4 text-sm font-semibold text-ink transition hover:border-accent-deep hover:text-accent-deep"
           >
             See what else travellers noticed near {observation.nearest_place_name} →
           </Link>

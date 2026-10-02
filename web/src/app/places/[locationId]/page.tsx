@@ -1,294 +1,382 @@
-import Link from "next/link";
-import clsx from "clsx";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { content } from "@/lib/content";
-import { SafetyBanner } from "@/components/SafetyBanner";
-import { PhotoGrid } from "@/components/PhotoGrid";
-import { VoicePlayer } from "@/components/VoicePlayer";
+import type { PublicLocationSummary } from "@/lib/content";
 import { AskAboutPlace } from "@/components/AskAboutPlace";
-import { ResearchSummarySection, hasReferenceContent, type LedeField } from "@/components/ResearchSummarySection";
-import { PopularQuestionsSection } from "@/components/PopularQuestionsSection";
-import { RouteStrip, hasRouteStrip } from "@/components/RouteStrip";
-import { OnThisPage, PlaceIntro } from "@/components/place/PlaceHeader";
-import { VerifiedKnowledge } from "@/components/place/CurrentChecks";
-import { SourcesAndContributors } from "@/components/place/AreaSections";
-import { CategoryTabs } from "@/components/place/CategoryTabs";
-import { PlaceCard, ReportCard } from "@/components/place/Cards";
-import { PlaceSectionHeading } from "@/components/place/TrustTag";
-import { formatDate } from "@/lib/content/freshness";
-import {
-  buildLocalChecks,
-  placeTabs,
-  primaryPlaceType,
-  reportTabKeys,
-  reportTabs,
-  themeCategories,
-  themeKeysOf,
-  unreportedConditionNames,
-  verifiedCategories,
-} from "@/lib/content/locationPage";
+import { SafetyBanner } from "@/components/SafetyBanner";
+import { buildLocalChecks, primaryPlaceType, reportTabKeys, reportTabs, themeCategories, verifiedCategories } from "@/lib/content/locationPage";
+import { cleanDescription, dateTime, formatMeters, groupPlaces, nowMs, placeTypeOf, routeNeighbours } from "@/lib/content/guide";
+import { PageHero, LatestCheck, type HeroVisual } from "@/components/guide/PageHero";
+import { SectionNav } from "@/components/guide/SectionNav";
+import { SectionHeader, Note, TextLink } from "@/components/guide/primitives";
+import { FilterGrid } from "@/components/guide/FilterGrid";
+import { ReportCard } from "@/components/guide/ReportCard";
+import { QuestionsSection } from "@/components/guide/Questions";
+import { GroupedExplorer } from "@/components/guide/GroupedExplorer";
+import { PlaceCard, PlaceFeature } from "@/components/guide/PlaceCards";
+import { Band, FindingAccordions, JourneySteps, PlanningHeader, ResearchEssay } from "@/components/guide/Planning";
+import { ExploreCards, GuideVoices, OrientationPanel, PhotoStrip, SourcesSection, VerifiedTable, type ExploreCard, type Orientation } from "@/components/guide/Blocks";
+import { RouteFeature } from "@/components/guide/RouteFeature";
+import { Icon } from "@/components/guide/Icons";
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ locationId: string }>;
-}): Promise<Metadata> {
+export async function generateMetadata({ params }: { params: Promise<{ locationId: string }> }): Promise<Metadata> {
   const { locationId } = await params;
   const place = await content.getLocation(locationId);
   if (!place) return {};
   return {
-    title: place.name,
-    description:
-      place.description ?? place.research_summary?.known_for ?? `Recent guide reports and background for ${place.name}.`,
+    title: place.is_area_hub ? `${place.name} area guide` : place.name,
+    description: cleanDescription(place.description) ?? place.research_summary?.known_for ?? `Local guide reports, questions and background for ${place.name}.`,
   };
 }
 
-function Section({
-  id,
-  band = false,
-  children,
-}: {
-  id: string;
-  band?: boolean;
-  children: React.ReactNode;
-}) {
+function Section({ id, children, className = "" }: { id?: string; children: React.ReactNode; className?: string }) {
   return (
-    <section id={id} className={clsx("scroll-mt-20 py-14", band && "border-y border-border bg-paper-muted/50")}>
-      <div className="mx-auto max-w-6xl px-5 sm:px-8">{children}</div>
+    <section id={id} className={`page scroll-mt-[76px] py-14 sm:py-16 ${className}`}>
+      {children}
     </section>
   );
 }
 
+function themeList(place: PublicLocationSummary, n = 3): string {
+  return (place.categories ?? [])
+    .filter((c) => c.kind === "theme")
+    .slice(0, n)
+    .map((c) => c.display_name)
+    .join(" · ");
+}
+
 /**
- * Location page as a field guide (structure taken from the reference
- * Everest guide pages, colours/typography our own):
- *   intro (identity, categories, latest check) -> section bar ->
- *   place reference (web research) -> field notebook (dated guide reports,
- *   tabbed by category) -> verified key facts -> answers -> route ->
- *   get your bearings (nearby places, tabbed by their categories) ->
- *   guides' photos/voice -> sources.
- * Every section renders only with real data; each names its trust layer.
+ * A complete place guide, in the reference guide's order and rhythm:
+ * identity -> the local field notebook -> orientation -> the questions people
+ * ask -> verified facts -> exploring the area -> a closer look -> the
+ * planning foundations (route + research) -> journeys -> where next -> ask ->
+ * sources. Every block renders only from real data and names what it is.
  */
-export default async function PlacePage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ locationId: string }>;
-  searchParams: Promise<{ category?: string }>;
-}) {
-  const [{ locationId }, sp] = await Promise.all([params, searchParams]);
+export default async function PlacePage({ params }: { params: Promise<{ locationId: string }> }) {
+  const { locationId } = await params;
   const place = await content.getLocation(locationId);
   if (!place) notFound();
 
+  const now = nowMs();
   const research = place.research_summary?.status === "completed" ? place.research_summary : null;
   const themes = themeCategories(place.categories);
   const verified = verifiedCategories(place.categories);
-  const verifiedFactCount = verified.reduce((n, c) => n + c.verified_knowledge.length, 0);
   const checks = buildLocalChecks(place.recent_observations, place.conditions, place.categories);
-  const unreported = unreportedConditionNames(place.conditions);
-  const guideNames = [...new Set(place.recent_observations.map((o) => o.guide_name))];
+  const hub = place.is_area_hub ? place : (place.nearby.find((n) => n.is_area_hub) ?? null);
+  const route = place.route && place.route.stops.length > 0 ? place.route : null;
+  const position = route ? routeNeighbours(route, place.location_id) : null;
+  const placeType = primaryPlaceType(place.categories);
+  const description = cleanDescription(place.description);
+  const guideNames = [
+    ...new Set([...place.recent_observations.map((o) => o.guide_name), ...place.popular_questions.flatMap((q) => q.answers.map((a) => a.guide_name))]),
+  ];
+  const questionCount = place.popular_questions.length + place.open_questions.length;
+  const photoObs = place.recent_observations.filter((o) => o.photo_urls[0]);
+  const voiceObs = place.recent_observations.filter((o) => o.transcript);
+  const groups = groupPlaces(place.nearby);
+  const reportTabsList = reportTabs(checks, themes).filter((t) => t.count > 0);
+  const askHref = "#ask";
 
-  // One short lede in the intro; the reference section then skips that field.
-  const [lede, ledeField]: [string | null, LedeField] = place.description
-    ? [place.description, null]
-    : research?.description
-      ? [research.description, "description"]
-      : research?.known_for
-        ? [research.known_for, "known_for"]
-        : [null, null];
+  const lede =
+    description ??
+    research?.description ??
+    research?.known_for ??
+    (place.nearby.length > 0
+      ? `${place.is_area_hub ? "An area" : "A place"} with ${place.nearby.length} places within walking distance${questionCount ? ` and ${questionCount} questions travellers ask` : ""}. Local guide reports, open questions and background research, each clearly marked.`
+      : null);
+  const ledeFromResearch = !description && research ? (research.description ? "description" : research.known_for ? "known_for" : null) : null;
 
-  const photoObservation = place.recent_observations.find((o) => o.photo_urls[0]);
-  const introPhoto = photoObservation
-    ? {
-        url: photoObservation.photo_urls[0]!,
-        caption: `${photoObservation.location_label ?? place.name} · ${formatDate(photoObservation.observed_at)}`,
-      }
-    : null;
-  const voiceStory = place.recent_observations.find((o) => o.has_audio) ?? null;
-  const bearingTabs = placeTabs(place.nearby);
+  const visual: HeroVisual = photoObs[0]
+    ? { kind: "photo", url: photoObs[0].photo_urls[0]!, caption: photoObs[0].location_label ?? place.name, tag: `Guide photo · ${dateTime(photoObs[0].observed_at)}` }
+    : {
+        kind: "map",
+        center: { latitude: place.latitude, longitude: place.longitude, label: place.name },
+        pins: place.nearby.slice(0, 12).map((n) => ({ latitude: n.latitude, longitude: n.longitude, label: n.name })),
+        caption: place.name,
+        zoom: place.is_area_hub ? 15 : 16,
+      };
+
+  const breadcrumb = [
+    { label: "Explore", href: "/explore" },
+    ...(route ? [{ label: route.name, href: `/routes/${route.slug}` }] : []),
+    ...(hub && hub.location_id !== place.location_id ? [{ label: hub.name, href: `/places/${hub.location_id}` }] : []),
+    { label: place.name },
+  ];
 
   const show = {
-    reference: hasReferenceContent(research, ledeField),
-    notebook: checks.length > 0,
+    latest: true,
+    answers: questionCount > 0,
     verified: verified.length > 0,
-    answers: place.popular_questions.length > 0,
-    route: hasRouteStrip(place.route),
-    bearings: place.nearby.length > 0,
-    media: place.photo_count > 0 || voiceStory !== null,
-    sources: guideNames.length > 0 || (research?.source_urls.length ?? 0) > 0,
+    explore: place.nearby.length > 0,
+    photos: photoObs.length > 0,
+    voices: voiceObs.length > 0,
+    plan: Boolean(position?.current || research || place.research_findings.length),
   };
-
-  const toc = [
-    show.reference && { id: "about", label: "About" },
-    show.notebook && { id: "notebook", label: "Latest checks" },
-    show.verified && { id: "verified", label: "Verified facts" },
+  const nav = [
+    { id: "latest", label: "Latest checks" },
     show.answers && { id: "answers", label: "Current answers" },
-    show.route && { id: "route", label: "Route" },
-    show.bearings && { id: "bearings", label: "Explore nearby" },
-    show.media && { id: "photos", label: "Photos" },
-    show.sources && { id: "sources", label: "Sources" },
+    show.verified && { id: "verified", label: "Verified facts" },
+    show.explore && { id: "explore", label: `Explore ${place.name}` },
+    show.photos && { id: "photos", label: "Photos" },
+    show.plan && { id: "plan", label: "Plan your visit" },
+    { id: "sources", label: "Sources" },
   ].filter(Boolean) as { id: string; label: string }[];
 
-  const emptyCategoryMessages = Object.fromEntries(
-    themes.map((t) => [
-      t.slug,
-      t.verified_knowledge.length > 0
-        ? `No recent guide report about ${t.display_name.toLowerCase()} here — see the verified facts below.`
-        : `Not checked yet: no guide has reported on ${t.display_name.toLowerCase()} here.`,
-    ]),
-  );
+  const orientation: Orientation[] = [
+    questionCount > 0 && {
+      icon: "chat",
+      title: "What do travellers ask here?",
+      text: `${questionCount} question${questionCount === 1 ? "" : "s"} about ${place.name}${place.popular_questions.length ? `, ${place.popular_questions.length} answered by a local guide` : ""}.`,
+      link: { href: "#answers", label: "Read the questions" },
+    },
+    place.nearby.length > 0 && {
+      icon: "compass",
+      title: `A little time around ${place.name}?`,
+      text: `${place.nearby.length} places within walking distance${groups[0] ? ` — ${groups.slice(0, 3).map((g) => g.label.toLowerCase()).join(", ")}` : ""}.`,
+      link: { href: "#explore", label: `Explore ${place.name}` },
+    },
+    position?.next
+      ? {
+          icon: "boots",
+          title: "Ready to start walking?",
+          text: `${place.name} is stop ${position.index + 1} of ${position.stops.length} on the ${route!.name}. Next: ${position.next.name}.`,
+          link: { href: `/places/${position.next.location_id}`, label: `Continue to ${position.next.name}` },
+        }
+      : route
+        ? { icon: "route", title: `On the ${route.name}`, text: `See every stop and when a guide last checked it.`, link: { href: `/routes/${route.slug}`, label: "Follow the route" } }
+        : null,
+  ].filter(Boolean) as Orientation[];
+
+  const exploreCards: ExploreCard[] = [
+    route && {
+      eyebrow: "Follow the route",
+      title: route.name,
+      text: `${route.stops.length} stops, ${position?.current ? `from stop ${position.index + 1}` : "stop by stop"}.`,
+      href: `/routes/${route.slug}`,
+      map: { latitude: route.stops[Math.floor(route.stops.length / 2)].latitude, longitude: route.stops[Math.floor(route.stops.length / 2)].longitude },
+      zoom: 11,
+    },
+    position?.next && {
+      eyebrow: "Walk onward",
+      title: position.next.name,
+      text: position.next.elevation_meters ? `The next stop, at ${position.next.elevation_meters.toLocaleString()} m.` : "The next stop on the route.",
+      href: `/places/${position.next.location_id}`,
+      map: { latitude: position.next.latitude, longitude: position.next.longitude },
+      zoom: 14,
+    },
+    hub && hub.location_id !== place.location_id && {
+      eyebrow: "Zoom out",
+      title: `The ${hub.name} area`,
+      text: "Every place, question and report around it.",
+      href: `/places/${hub.location_id}`,
+      map: { latitude: hub.latitude, longitude: hub.longitude },
+      zoom: 14,
+    },
+    {
+      eyebrow: "Keep exploring",
+      title: "Every place we cover",
+      text: "Compare areas, routes and the latest reports.",
+      href: "/explore",
+      map: { latitude: place.latitude, longitude: place.longitude },
+      zoom: 9,
+    },
+  ]
+    .filter(Boolean)
+    .slice(0, 3) as ExploreCard[];
 
   return (
     <div>
-      <PlaceIntro
-        place={place}
-        placeType={primaryPlaceType(place.categories)}
+      <PageHero
+        breadcrumb={breadcrumb}
+        eyebrow={place.is_area_hub ? "An area guide" : `${placeType ?? "Place"}${hub && hub.location_id !== place.location_id ? ` · ${hub.name}` : ""}`}
+        title={place.name}
+        subtitle={position?.current ? `Stop ${position.index + 1} of ${position.stops.length} on the ${route!.name}` : themeList(place) || null}
         lede={lede}
-        themes={themes}
-        notebookAnchor={show.notebook}
-        photo={introPhoto}
-        nearby={place.nearby}
-        route={show.route ? place.route : null}
-        contributingGuides={guideNames.length}
-        verifiedCount={verifiedFactCount}
+        status={
+          <LatestCheck
+            at={place.last_activity_at ? dateTime(place.last_activity_at) : null}
+            detail={
+              guideNames.length > 0
+                ? `${guideNames.length} contributing guide${guideNames.length === 1 ? "" : "s"} · ${place.approved_observation_count} local report${place.approved_observation_count === 1 ? "" : "s"}`
+                : questionCount > 0
+                  ? `${questionCount} questions waiting for a local check`
+                  : null
+            }
+          />
+        }
+        visual={visual}
       />
-      <OnThisPage items={toc} />
 
-      <div className="mx-auto max-w-6xl px-5 sm:px-8">
+      <SectionNav items={nav} label={place.is_area_hub ? "In this area" : "On this page"} action={{ href: askHref, label: "Ask a guide" }} />
+
+      <div className="page">
         <SafetyBanner conditions={place.conditions} observations={place.recent_observations} />
       </div>
 
-      {show.reference && research && (
-        <Section id="about" band>
-          <PlaceSectionHeading
-            kind="research"
-            eyebrow="Place reference · background research"
-            title={`About ${place.name}`}
-            intro="Planning background gathered from public sources. It describes the place in general — for how things are right now, see the guide checks."
-          />
-          <ResearchSummarySection summary={research} lede={ledeField} />
-        </Section>
-      )}
-
-      {show.notebook && (
-        <Section id="notebook">
-          <PlaceSectionHeading
-            kind="live"
-            eyebrow="The local field notebook"
-            title={`The latest around ${place.name}`}
-            intro="Dated reports from local guides' visits, newest first. Filter by category."
-            aside={
-              place.recent_observations.length > 6 && (
-                <Link href={`/places/${place.location_id}/stories`} className="text-sm font-semibold text-marigold-deep hover:underline">
-                  All {place.approved_observation_count} reports →
-                </Link>
-              )
-            }
-          />
-          <CategoryTabs
-            key={sp.category ?? "all"}
-            tabs={reportTabs(checks, themes)}
+      <Section id="latest">
+        <SectionHeader
+          eyebrow="The local field notebook"
+          title={`The latest around ${place.name}`}
+          intro={checks.length > 0 ? "Dated reports from local guides' recent visits, newest first." : undefined}
+          aside={<TextLink href="/#trust" icon="info" className="!font-normal !text-ink-soft">How we report</TextLink>}
+        />
+        {checks.length > 0 ? (
+          <FilterGrid
+            tabs={reportTabsList.map((t) => ({ key: t.key, label: t.label }))}
             allLabel="All local updates"
-            initialKey={sp.category ?? null}
-            items={checks.slice(0, 12).map((check) => ({
+            trailing="Observed, dated, attributed."
+            items={checks.map((check) => ({
               id: check.observation.observation_id,
               keys: reportTabKeys(check.observation),
-              node: <ReportCard check={check} />,
+              node: <ReportCard check={check} showPlace={place.name} />,
             }))}
-            emptyMessages={emptyCategoryMessages}
-            defaultEmptyMessage="Nothing reported here yet."
+            initialVisible={3}
+            footnote="local reports · dates describe visits, not today's guarantees"
+            emptyMessage="Nothing reported in this category yet."
           />
-          <div className="mt-5 space-y-1 text-xs text-ink-faint">
-            <p>Dates describe visits, not today&rsquo;s guarantees.</p>
-            {unreported.length > 0 && <p>No recent reports on: {unreported.join(", ")}.</p>}
+        ) : (
+          <div className="flex flex-wrap items-center gap-5 rounded-[8px] border border-dashed border-border-strong px-7 py-7">
+            <Icon name="clock" size={26} strokeWidth={1.5} className="text-ink-faint" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[17px] font-bold text-ink">No guide has reported from {place.name} yet.</p>
+              <p className="mt-1 text-[15px] text-ink-soft">
+                When a local guide visits, their dated report appears here first. Until then, everything below is background, open questions or nearby places.
+              </p>
+            </div>
+            <TextLink href={askHref} icon="chat">Ask for a local check</TextLink>
           </div>
-          <div className="mt-10">
-            <AskAboutPlace placeName={place.name} conditions={place.conditions} observations={place.recent_observations} />
+        )}
+        {orientation.length > 0 && (
+          <div className="mt-12">
+            <OrientationPanel items={orientation} />
           </div>
+        )}
+      </Section>
+
+      {show.answers && (
+        <Section id="answers" className="!pt-4">
+          <SectionHeader
+            eyebrow="The questions people ask here"
+            title="Current answers, with local context"
+            intro="Who checked, when they visited — and which questions are still waiting for a local check."
+          />
+          <QuestionsSection placeName={place.name} answered={place.popular_questions} open={place.open_questions} guideNames={guideNames} askHref={askHref} nowMs={now} />
+          <Note className="mt-6">
+            Answers describe one guide&rsquo;s visit on the date shown. An unanswered question means nobody has checked it yet — not that there is no answer.
+          </Note>
         </Section>
       )}
 
       {show.verified && (
-        <Section id="verified">
-          <PlaceSectionHeading
-            kind="verified"
-            eyebrow="Verified by TrailMind guides"
-            title="Key facts, confirmed on the ground"
-            intro="Each fact was confirmed by a guide's reviewed report, and shows when — facts expire and get re-checked."
+        <Section id="verified" className="!pt-4">
+          <SectionHeader
+            eyebrow="What local guides have confirmed"
+            title={`Key facts about ${place.name}`}
+            intro="Each fact was confirmed by a reviewed guide report, and shows when — facts expire and get re-checked."
           />
-          <VerifiedKnowledge categories={verified} />
+          <VerifiedTable categories={verified} />
         </Section>
       )}
 
-      {show.answers && (
-        <Section id="answers">
-          <PlaceSectionHeading
-            kind="live"
-            eyebrow="The questions people ask here"
-            title="Current answers, with local context"
-            intro="Who answered, and when they visited."
-          />
-          <PopularQuestionsSection questions={place.popular_questions} />
-        </Section>
-      )}
-
-      {show.route && place.route && (
-        <Section id="route">
-          <PlaceSectionHeading
-            eyebrow="The route strip"
-            title={place.route.name}
-            intro={place.route.description ?? "Every stop on this route, and when a guide last reported there."}
-          />
-          <RouteStrip route={place.route} currentLocationId={place.location_id} />
-        </Section>
-      )}
-
-      {show.bearings && (
-        <Section id="bearings" band>
-          <PlaceSectionHeading
+      {show.explore && (
+        <Section id="explore" className="!pt-4">
+          <SectionHeader
             eyebrow="Get your bearings"
             title={`Explore ${place.name} and nearby`}
-            intro="The places closest to here, grouped by what they are. Open one for its own reports."
+            intro="Start with what you need, then open a place for its own reports and questions."
           />
-          <CategoryTabs
-            tabs={bearingTabs}
+          <GroupedExplorer
             allLabel="All places"
-            items={place.nearby.map((p) => ({ id: p.location_id, keys: themeKeysOf(p), node: <PlaceCard place={p} /> }))}
-            defaultEmptyMessage="No nearby places in this category."
+            groups={groups.map((g) => ({
+              key: g.key,
+              label: g.label,
+              count: g.places.length,
+              content:
+                g.places.length === 1 ? (
+                  <PlaceFeature place={g.places[0]} eyebrow={`${placeTypeOf(g.places[0]) ?? "Place"} · ${formatMeters(g.places[0].distance_meters) ?? ""} away`} />
+                ) : (
+                  <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                    {g.places.map((p) => (
+                      <div key={p.location_id} className="flex">
+                        <PlaceCard place={p} origin={place.name} />
+                      </div>
+                    ))}
+                  </div>
+                ),
+            }))}
           />
         </Section>
       )}
 
-      {show.media && (
-        <Section id="photos">
-          <PlaceSectionHeading
-            kind="live"
-            eyebrow="A closer look"
-            title="From guides' visits"
-            aside={
-              place.photo_count > 4 && (
-                <Link href={`/places/${place.location_id}/photos`} className="text-sm font-semibold text-marigold-deep hover:underline">
-                  See all {place.photo_count} photos →
-                </Link>
-              )
-            }
-          />
-          <div className="space-y-8">
-            {place.photo_count > 0 && <PhotoGrid observations={place.recent_observations.slice(0, 8)} />}
-            {voiceStory && (
-              <VoicePlayer audioUrl={voiceStory.audio_url} transcript={voiceStory.transcript} guideName={voiceStory.guide_name} />
+      {show.voices && (
+        <Section className="!pt-4">
+          <SectionHeader eyebrow="Experience that stays useful" title="A little advice from the people who walk here" />
+          <GuideVoices observations={voiceObs} />
+        </Section>
+      )}
+
+      {show.photos && (
+        <Section id="photos" className="!pt-4">
+          <SectionHeader eyebrow="A closer look" title={`From guides' visits to ${place.name}`} intro="Photos attached to dated guide reports." />
+          <PhotoStrip observations={photoObs} />
+        </Section>
+      )}
+
+      {show.plan && (
+        <Band id="plan">
+          <PlanningHeader name={place.name} />
+          <div className="space-y-12">
+            {route && <JourneySteps route={route} locationId={place.location_id} />}
+            {research && <ResearchEssay summary={research} skip={ledeFromResearch} />}
+            {place.research_findings.length > 0 && (
+              <div>
+                <p className="mb-2 flex items-center gap-2 text-[13px] text-ink-meta">
+                  <Icon name="book" size={15} /> Background research from public web sources — what sources claim, not a guide&rsquo;s check.
+                </p>
+                <FindingAccordions findings={place.research_findings} />
+              </div>
             )}
           </div>
+        </Band>
+      )}
+
+      {route && (
+        <Section className="!pb-4">
+          <SectionHeader eyebrow="Journeys that pass through here" title={`${place.name} is part of the ${route.name}`} />
+          <RouteFeature route={route} highlightId={place.location_id} />
         </Section>
       )}
 
-      {show.sources && (
-        <Section id="sources">
-          <PlaceSectionHeading eyebrow="Sources & contributors" title="Where this page comes from" />
-          <SourcesAndContributors summary={research} guideNames={guideNames} />
-        </Section>
-      )}
+      <Section>
+        <SectionHeader eyebrow="Keep exploring" title="Where will you go from here?" />
+        <ExploreCards cards={exploreCards} />
+      </Section>
+
+      <section id="ask" className="page scroll-mt-[76px] pb-14">
+        <div className="grid gap-8 rounded-[8px] bg-deep px-7 py-10 text-white sm:px-11 lg:grid-cols-[1fr_1.1fr] lg:items-center">
+          <div>
+            <p className="text-[11.5px] font-bold uppercase tracking-[0.14em] text-[#9fd3e2]">Start with a local question</p>
+            <h2 className="mt-3 text-[28px] font-bold leading-[1.22] tracking-[-0.025em] sm:text-[31px]">
+              What would make your time
+              <br className="hidden sm:block" /> in {place.name} easier?
+            </h2>
+            <p className="mt-3 text-[16.5px] leading-[1.7] text-white/85">
+              Ask about what guides have reported here. Answers come only from dated reports — never a guess.
+            </p>
+          </div>
+          <AskAboutPlace placeName={place.name} conditions={place.conditions} observations={place.recent_observations} />
+        </div>
+      </section>
+
+      <Section id="sources" className="!pt-2">
+        <SourcesSection
+          guideNames={guideNames}
+          findings={place.research_findings}
+          researchSources={(research?.source_urls ?? []).map((url, i) => ({ url, title: research?.source_titles[i] ?? null }))}
+          questionCount={questionCount}
+          hubName={hub?.name ?? null}
+        />
+      </Section>
     </div>
   );
 }

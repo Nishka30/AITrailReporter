@@ -1,50 +1,90 @@
 @import "tailwindcss";
 
-/* Brand tokens carried over from the mobile/admin apps (mobile/src/theme/theme.ts,
-   admin/src/theme/tokens.ts) for continuity -- exact same hex values. The
-   *layout language* built on top of them is original to this web product,
-   not a reskin of either app. */
+/* Editorial field-guide system, taken from the reference guide's computed
+   styles: navy headings / slate body, one blue-teal accent, yellow reserved
+   for primary buttons, hairline borders, 8px radii and no drop shadows.
+   Status colours are small, quiet chips -- never loud fills. */
 :root {
-  --color-ink: #211a14;
-  --color-ink-soft: #4a4038;
-  --color-ink-faint: #8a7d70;
+  --color-ink: #25384a;
+  --color-ink-soft: #596875;
+  --color-ink-meta: #637782;
+  --color-ink-faint: #73808b;
 
-  --color-paper: #faf4e9;
+  --color-paper: #ffffff;
   --color-paper-elevated: #ffffff;
-  --color-paper-muted: #f1e8d8;
+  --color-paper-muted: #f4f7f7;
+  --color-band: #f5f5f1;
+  --color-mint: #eef5f4;
 
-  --color-border: #e7dcc7;
-  --color-border-strong: #d8c9ab;
+  --color-border: #dce4e8;
+  --color-border-soft: #e7ecee;
+  --color-border-strong: #c5d0d6;
 
-  --color-marigold: #e8a13c;
-  --color-marigold-deep: #c9821f;
-  --color-marigold-soft: #fbe7c5;
+  --color-accent: #007fa9;
+  --color-accent-deep: #0a789b;
+  --color-accent-soft: #e3f1f5;
 
-  --color-ok: #1f6f4a;
-  --color-ok-soft: #dcefe3;
-  --color-fix: #b8391f;
-  --color-fix-soft: #f7dfd7;
-  --color-info: #2f5f8a;
-  --color-info-soft: #dce8f2;
+  --color-cta: #feeb00;
+  --color-cta-deep: #f0dc00;
+  --color-cta-ink: #233343;
 
-  --font-heading: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
-  --font-body: var(--font-atkinson), ui-sans-serif, system-ui, sans-serif;
+  --color-header: #303e49;
+  --color-header-deep: #25323c;
+  --color-footer: #263943;
+  --color-deep: #24495b;
+  --color-pill: #263e4c;
+
+  /* Status chips: recently checked / due for a check / older. */
+  --color-ok: #356551;
+  --color-ok-dot: #3c9a6e;
+  --color-ok-soft: #edf5ef;
+  --color-marigold: #c9a23b;
+  --color-marigold-deep: #886820;
+  --color-marigold-soft: #faf3df;
+  --color-old: #6a7a80;
+  --color-old-soft: #eef1f2;
+
+  --color-fix: #b8483f;
+  --color-fix-soft: #fbeceb;
+  --color-info: #3b6a92;
+  --color-info-soft: #e8f0f6;
+
+  --font-heading: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-open-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 @theme inline {
   --color-ink: var(--color-ink);
   --color-ink-soft: var(--color-ink-soft);
+  --color-ink-meta: var(--color-ink-meta);
   --color-ink-faint: var(--color-ink-faint);
   --color-paper: var(--color-paper);
   --color-paper-elevated: var(--color-paper-elevated);
   --color-paper-muted: var(--color-paper-muted);
+  --color-band: var(--color-band);
+  --color-mint: var(--color-mint);
   --color-border: var(--color-border);
+  --color-border-soft: var(--color-border-soft);
   --color-border-strong: var(--color-border-strong);
+  --color-accent: var(--color-accent);
+  --color-accent-deep: var(--color-accent-deep);
+  --color-accent-soft: var(--color-accent-soft);
+  --color-cta: var(--color-cta);
+  --color-cta-deep: var(--color-cta-deep);
+  --color-cta-ink: var(--color-cta-ink);
+  --color-header: var(--color-header);
+  --color-header-deep: var(--color-header-deep);
+  --color-footer: var(--color-footer);
+  --color-deep: var(--color-deep);
+  --color-pill: var(--color-pill);
+  --color-ok: var(--color-ok);
+  --color-ok-dot: var(--color-ok-dot);
+  --color-ok-soft: var(--color-ok-soft);
   --color-marigold: var(--color-marigold);
   --color-marigold-deep: var(--color-marigold-deep);
   --color-marigold-soft: var(--color-marigold-soft);
-  --color-ok: var(--color-ok);
-  --color-ok-soft: var(--color-ok-soft);
+  --color-old: var(--color-old);
+  --color-old-soft: var(--color-old-soft);
   --color-fix: var(--color-fix);
   --color-fix-soft: var(--color-fix-soft);
   --color-info: var(--color-info);
@@ -54,34 +94,67 @@
   --font-body: var(--font-body);
 }
 
+@utility page {
+  width: 100%;
+  max-width: 1240px;
+  margin-inline: auto;
+  padding-inline: 20px;
+  @media (width >= 48rem) {
+    padding-inline: 32px;
+  }
+  @media (width >= 80rem) {
+    padding-inline: 20px;
+  }
+}
+
+@utility eyebrow {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-soft);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   background: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+h1,
+h2,
+h3,
+h4,
+.font-heading {
+  font-family: var(--font-heading);
 }
 
 ::selection {
-  background: var(--color-marigold-soft);
+  background: var(--color-accent-soft);
   color: var(--color-ink);
 }
 
-.font-heading {
-  font-family: var(--font-heading);
-  letter-spacing: -0.02em;
+/* The reference uses flat hairline surfaces; these legacy helpers stay as
+   class names (some untouched pages use them) but no longer cast shadows. */
+.shadow-warm,
+.shadow-warm-lg {
+  box-shadow: none;
 }
 
-/* Thin, warm scrollbar for horizontally-scrolling photo/story rails. */
+.rail {
+  scrollbar-width: none;
+}
 .rail::-webkit-scrollbar {
-  height: 6px;
-}
-.rail::-webkit-scrollbar-thumb {
-  background: var(--color-border-strong);
-  border-radius: 999px;
+  display: none;
 }
 
-/* Same treatment, vertical -- for anything that can grow scrollable
-   (the "Ask anything" textarea) so it never shows a default grey OS
-   scrollbar sitting inside a rounded, branded input. */
 .thin-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--color-border-strong) transparent;
@@ -89,17 +162,11 @@ body {
 .thin-scroll::-webkit-scrollbar {
   width: 6px;
 }
-.thin-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
 .thin-scroll::-webkit-scrollbar-thumb {
   background: var(--color-border-strong);
   border-radius: 999px;
 }
 
-/* Fine film-grain texture, layered over dark hero surfaces for tactility
-   instead of leaving them as flat color/gradient fills. Pure CSS (an inline
-   SVG turbulence filter as a data: URI) -- no image asset. */
 .grain::after {
   content: "";
   position: absolute;
@@ -110,28 +177,18 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-/* Tinted, soft depth used in place of flat black box-shadows throughout --
-   warmer and closer to how light actually falls on paper-colored surfaces. */
-.shadow-warm {
-  box-shadow:
-    0 1px 2px rgba(33, 26, 20, 0.04),
-    0 8px 24px -8px rgba(33, 26, 20, 0.12);
-}
-.shadow-warm-lg {
-  box-shadow:
-    0 2px 4px rgba(33, 26, 20, 0.05),
-    0 24px 48px -12px rgba(33, 26, 20, 0.22);
-}
-
-/* Consistent keyboard-focus ring across custom interactive elements. */
 :focus-visible {
-  outline: 2px solid var(--color-marigold-deep);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
-/* Seamless infinite scroll for the live-activity ticker (LiveTicker.tsx) --
-   content is rendered twice back-to-back and this shifts exactly half the
-   track width, so the loop point is invisible. Pure CSS, no JS needed. */
+details > summary {
+  list-style: none;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
 @keyframes marquee {
   from {
     transform: translateX(0);
@@ -144,6 +201,9 @@ body {
   animation: marquee 38s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
   .marquee-track {
     animation: none;
   }

@@ -47,7 +47,7 @@ export function LocationCard({
         {placeType && (
           <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.12em] text-ink-faint">{placeType}</p>
         )}
-        <h3 className="font-heading text-lg font-bold text-ink transition-colors group-hover:text-marigold-deep">{location.name}</h3>
+        <h3 className="font-heading text-lg font-bold text-ink transition-colors group-hover:text-accent-deep">{location.name}</h3>
         {location.description && (
           <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-ink-soft">{location.description}</p>
         )}
@@ -65,7 +65,7 @@ export function LocationCard({
           <span>{timeAgoLabel(location.last_activity_at)}</span>
         </div>
       </div>
-      <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/0 transition group-hover:ring-marigold/25" />
+      <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/0 transition group-hover:ring-accent/25" />
     </Link>
   );
 }

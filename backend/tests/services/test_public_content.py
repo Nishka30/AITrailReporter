@@ -105,6 +105,7 @@ class _FakePlaceQuestion:
     question_text: str
     context_note: str | None = None
     display_order: int = 0
+    source: str = "seed"
 
 
 @dataclass
@@ -172,7 +173,7 @@ def test_questions_with_zero_approved_answers_are_omitted(monkeypatch):
     answered = _FakePlaceQuestion(id=uuid4(), question_text="Is the lodge open?")
     unanswered = _FakePlaceQuestion(id=uuid4(), question_text="Is Wi-Fi free?")
     monkeypatch.setattr(
-        pc.place_questions_service, "list_place_questions", lambda db, location_id: [answered, unanswered]
+        pc, "_active_place_questions", lambda db, location_id: [answered, unanswered]
     )
     guide = _FakeGuide(id=uuid4(), name="Pemba Sherpa")
     submission = _FakeSubmission(
@@ -191,7 +192,7 @@ def test_questions_with_zero_approved_answers_are_omitted(monkeypatch):
 def test_questions_answers_capped_and_most_recent_first(monkeypatch):
     question = _FakePlaceQuestion(id=uuid4(), question_text="Is the lodge open?")
     monkeypatch.setattr(
-        pc.place_questions_service, "list_place_questions", lambda db, location_id: [question]
+        pc, "_active_place_questions", lambda db, location_id: [question]
     )
     guide = _FakeGuide(id=uuid4(), name="Mingma Sherpa")
     # Already ordered most-recent-first, as the real query does.
@@ -212,10 +213,82 @@ def test_questions_answers_capped_and_most_recent_first(monkeypatch):
 
 
 def test_questions_returns_empty_when_location_has_none(monkeypatch):
-    monkeypatch.setattr(pc.place_questions_service, "list_place_questions", lambda db, location_id: [])
+    monkeypatch.setattr(pc, "_active_place_questions", lambda db, location_id: [])
     db = FakeSession(execute_queue=[])
 
     assert pc.list_public_place_questions(db, uuid4()) == []
+
+
+def test_split_keeps_only_unanswered_seed_questions_open():
+    answered = _FakePlaceQuestion(id=uuid4(), question_text="Is the lodge open?")
+    open_seed = _FakePlaceQuestion(id=uuid4(), question_text="Where can I change cash?")
+    open_ai = _FakePlaceQuestion(
+        id=uuid4(), question_text="Standing here, how does it look today?", source="ai_research"
+    )
+    answer = pc.PublicPlaceQuestionAnswer(
+        submission_id=uuid4(), answer_text="Yes.", guide_name="Pemba Sherpa",
+        answered_at=datetime(2026, 9, 27, tzinfo=timezone.utc),
+    )
+
+    popular, open_ = pc._split_place_questions([answered, open_seed, open_ai], {answered.id: [answer]})
+
+    assert [q.place_question_id for q in popular] == [answered.id]
+    assert [q.place_question_id for q in open_] == [open_seed.id]
+
+
+# ---------------------------------------------------------------------------
+# list_public_research_findings
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeFinding:
+    id: object
+    location_id: object
+    topic: str
+    summary: str
+    retrieved_at: datetime
+    source_urls: list | None = None
+    source_titles: list | None = None
+
+
+def test_findings_keep_latest_per_topic_in_topic_order():
+    place = _FakeLocation(id=uuid4(), name="Lukla Airport")
+    older_interest = _FakeFinding(uuid4(), place.id, "interest", "old", datetime(2026, 8, 1, tzinfo=timezone.utc))
+    newer_interest = _FakeFinding(uuid4(), place.id, "interest", "new", datetime(2026, 9, 1, tzinfo=timezone.utc))
+    current = _FakeFinding(
+        uuid4(), place.id, "current", "open daily", datetime(2026, 9, 2, tzinfo=timezone.utc),
+        source_urls=["https://a.example", "https://b.example"], source_titles=["A"],
+    )
+    # Real query orders by retrieved_at desc.
+    rows = [(f, place.name) for f in (current, newer_interest, older_interest)]
+
+    findings = pc.list_public_research_findings(FakeSession(execute_queue=[rows]), place)
+
+    assert [(f.topic, f.summary) for f in findings] == [("interest", "new"), ("current", "open daily")]
+    assert [(s.url, s.title) for s in findings[1].sources] == [("https://a.example", "A"), ("https://b.example", None)]
+    assert findings[0].location_name == "Lukla Airport"
+
+
+def test_area_findings_put_the_hub_first_then_places_by_name():
+    hub = _FakeLocation(id=uuid4(), name="Lukla")
+    airport_id, gompa_id = uuid4(), uuid4()
+    when = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    rows = [
+        (_FakeFinding(uuid4(), gompa_id, "interest", "g", when), "Lukla Gompa"),
+        (_FakeFinding(uuid4(), airport_id, "current", "a-current", when), "Airport"),
+        (_FakeFinding(uuid4(), hub.id, "interest", "h", when), "Lukla"),
+        (_FakeFinding(uuid4(), airport_id, "interest", "a-interest", when), "Airport"),
+    ]
+
+    findings = pc.list_public_research_findings(FakeSession(execute_queue=[rows]), hub, 2000.0)
+
+    assert [f.summary for f in findings] == ["h", "a-interest", "a-current", "g"]
+
+
+def test_findings_empty_when_never_researched():
+    place = _FakeLocation(id=uuid4(), name="Phakding")
+    assert pc.list_public_research_findings(FakeSession(execute_queue=[[]]), place) == []
 
 
 # ---------------------------------------------------------------------------

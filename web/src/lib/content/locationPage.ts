@@ -61,6 +61,19 @@ function categoryStateToKnowledgeState(state: CategoryState): KnowledgeState {
   }
 }
 
+// Mirrors backend settings.route_stop_freshness_window_hours /
+// route_stop_aging_threshold_hours -- the backend's own location-level
+// freshness windows (keep in sync by hand, as mock.ts does).
+const LOCATION_FRESH_HOURS = 72;
+const LOCATION_AGING_HOURS = 96;
+
+export function stateByAge(observedAt: string): KnowledgeState {
+  const hours = (Date.now() - new Date(observedAt).getTime()) / 3_600_000;
+  if (hours <= LOCATION_FRESH_HOURS) return "fresh";
+  if (hours <= LOCATION_FRESH_HOURS + LOCATION_AGING_HOURS) return "aging";
+  return "stale";
+}
+
 /**
  * Each recent report with an honest freshness state:
  *  - the latest report of a hazard knowledge type takes that type's live
@@ -95,7 +108,14 @@ export function buildLocalChecks(
     if (isLatestOfGroup) {
       if (isCategoryReport) {
         const category = categoryBySlug.get(observation.category_slug!);
-        state = category ? categoryStateToKnowledgeState(category.state) : "stale";
+        // This place has the category but no knowledge in it: the report
+        // verifies a NEARBY place's category, so judge it by its own age.
+        // A category absent here entirely may be retired -- never current.
+        state = !category
+          ? "stale"
+          : category.state === "missing"
+            ? stateByAge(observation.observed_at)
+            : categoryStateToKnowledgeState(category.state);
       } else {
         state = conditionByLatestId.get(observation.observation_id)?.state ?? "superseded";
       }

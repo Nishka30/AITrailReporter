@@ -118,6 +118,10 @@ function run() {
   const orphan = buildLocalChecks([obs("x", "", 1, ["gone", "Gone"])], [], []);
   check("category report with no active category is never shown as fresh", orphan[0].state === "stale");
 
+  const unverifiedHere = cats.find((c) => c.verified_knowledge.length === 0)!;
+  const nearby = buildLocalChecks([obs("n", "", 1, [unverifiedHere.slug, unverifiedHere.display_name])], [], [{ ...unverifiedHere, state: "missing" }]);
+  check("a nearby place's category report is judged by its own age", nearby[0].state === "fresh");
+
   check("unreported hazard names", unreportedConditionNames(conditions).join() === "weather");
 
   const tabs = reportTabs(checks, themeCategories(cats));

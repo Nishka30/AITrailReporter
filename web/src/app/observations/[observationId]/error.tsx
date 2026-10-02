@@ -8,7 +8,7 @@ export default function Error({ retry }: { error: Error & { digest?: string }; r
       <button
         type="button"
         onClick={() => retry()}
-        className="mt-6 rounded-full bg-ink px-5 py-2.5 text-sm font-semibold text-paper transition hover:bg-marigold-deep"
+        className="mt-6 rounded-full bg-ink px-5 py-2.5 text-sm font-semibold text-paper transition hover:bg-accent-deep"
       >
         Try again
       </button>

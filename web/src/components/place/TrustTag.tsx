@@ -23,7 +23,7 @@ const STYLES: Record<TrustKind, { label: string; className: string; icon: React.
   },
   live: {
     label: "Local checks · guide reports",
-    className: "bg-marigold-soft text-marigold-deep",
+    className: "bg-accent-soft text-accent-deep",
     icon: (
       <>
         <circle cx="12" cy="12" r="3" />
@@ -54,7 +54,7 @@ export function TrustTag({ kind, className }: { kind: TrustKind; className?: str
 const EYEBROW_TONE: Record<TrustKind | "neutral", string> = {
   research: "text-info",
   verified: "text-ok",
-  live: "text-marigold-deep",
+  live: "text-accent-deep",
   neutral: "text-ink-faint",
 };
 

@@ -23,7 +23,7 @@ export function CursorGlow() {
   return (
     <div ref={ref} onMouseMove={onMouseMove} className="absolute inset-0 hidden sm:block">
       <motion.div
-        className="pointer-events-none absolute h-[420px] w-[420px] rounded-full bg-marigold/25 blur-[100px]"
+        className="pointer-events-none absolute h-[420px] w-[420px] rounded-full bg-accent/25 blur-[100px]"
         style={{ left: springX, top: springY, translateX: "-50%", translateY: "-50%" }}
       />
     </div>

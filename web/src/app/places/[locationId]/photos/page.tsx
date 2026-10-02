@@ -28,7 +28,7 @@ export default async function PlacePhotosPage({
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-14 sm:px-8">
-      <Link href={`/places/${place.location_id}`} className="text-sm font-semibold text-marigold-deep hover:underline">
+      <Link href={`/places/${place.location_id}`} className="text-sm font-semibold text-accent-deep hover:underline">
         ← Back to {place.name}
       </Link>
       <h1 className="mt-4 font-heading text-3xl font-extrabold text-ink sm:text-4xl">Photos from {place.name}</h1>

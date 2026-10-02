@@ -41,7 +41,7 @@ export function SourcesAndContributors({
                   href={url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-ink-soft underline decoration-dotted underline-offset-2 hover:text-marigold-deep"
+                  className="text-ink-soft underline decoration-dotted underline-offset-2 hover:text-accent-deep"
                 >
                   {summary?.source_titles[i] || hostnameOf(url)}
                 </a>

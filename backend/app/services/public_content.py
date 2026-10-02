@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.geo import make_point
 from app.db.models.category_knowledge import CategoryKnowledge
+from app.db.models.curated_hub import CuratedHub
 from app.db.models.guide import Guide
 from app.db.models.knowledge_type_config import KnowledgeTypeConfig
 from app.db.models.location import Location
@@ -32,6 +33,7 @@ from app.db.models.location_category import LocationCategory, LocationCategoryAs
 from app.db.models.observation import Observation
 from app.db.models.observation_moderation import ObservationModeration
 from app.db.models.place_question import PlaceQuestion
+from app.db.models.place_research_finding import PLACE_RESEARCH_TOPICS, PlaceResearchFinding
 from app.db.models.route import Route, RouteStop
 from app.db.models.submission import Submission
 from app.db.models.submission_photo import SubmissionPhoto
@@ -47,8 +49,11 @@ from app.schemas.public import (
     PublicLocationSummary,
     PublicObservation,
     PublicObservationList,
+    PublicOpenQuestion,
     PublicPlaceQuestion,
     PublicPlaceQuestionAnswer,
+    PublicResearchFinding,
+    PublicResearchSource,
     PublicRoute,
     PublicRouteStop,
     PublicSearchResult,
@@ -58,7 +63,6 @@ from app.services import category_knowledge as category_knowledge_service
 from app.services import geographic_context as geographic_context_service
 from app.services import knowledge_state as knowledge_state_service
 from app.services import knowledge_types as knowledge_type_service
-from app.services import place_questions as place_questions_service
 from app.services import place_summary_service
 from app.services import submissions as submission_service
 
@@ -298,6 +302,7 @@ def list_public_locations(
     *,
     near: Location | None = None,
     near_radius_meters: float | None = None,
+    only_ids: set[UUID] | None = None,
 ) -> list[PublicLocationSummary]:
     """One row per Location with its nearby APPROVED observation count and
     last activity time, computed in a single grouped query (same technique
@@ -341,6 +346,8 @@ def list_public_locations(
         .group_by(Location.id, Location.name, Location.description, Location.latitude, Location.longitude)
         .limit(limit)
     )
+    if only_ids is not None:
+        stmt = stmt.where(Location.id.in_(only_ids))
     if near is None:
         stmt = stmt.order_by(func.max(approved_activity).desc().nulls_last(), Location.name)
     else:
@@ -359,7 +366,10 @@ def list_public_locations(
             .order_by(distance, Location.name)
         )
     rows = db.execute(stmt).all()
-    labels_by_location = _category_labels_by_location(db, [row.id for row in rows])
+    row_ids = [row.id for row in rows]
+    labels_by_location = _category_labels_by_location(db, row_ids)
+    open_counts = _open_question_counts(db, row_ids)
+    hub_ids = _hub_location_ids(db, row_ids)
     return [
         PublicLocationSummary(
             location_id=row.id,
@@ -371,6 +381,8 @@ def list_public_locations(
             last_activity_at=row.last_activity_at,
             distance_meters=float(row.distance_meters) if near is not None else None,
             categories=labels_by_location.get(row.id, []),
+            open_question_count=open_counts.get(row.id, 0),
+            is_area_hub=row.id in hub_ids,
         )
         for row in rows
     ]
@@ -433,10 +445,9 @@ def _to_public_place_question(
 
 def list_public_place_questions(db: Session, location_id: UUID) -> list[PublicPlaceQuestion]:
     """Active PlaceQuestions for this Location that have >= 1 APPROVED
-    answer -- a question nobody has usefully answered yet is a guide-facing
-    invitation, not public content, so it is omitted entirely. Reuses
-    place_questions_service.list_place_questions for the active/ordering
-    logic, never reimplements it.
+    answer. Unanswered CURATED questions are exposed separately, as open
+    questions (see get_public_location_detail); unanswered AI-research
+    invitations are guide-facing and never public.
 
     Answering a PlaceQuestion creates an ordinary Submission
     (submission_type='answer', source_place_question_id set) rather than a
@@ -450,9 +461,144 @@ def list_public_place_questions(db: Session, location_id: UUID) -> list[PublicPl
     One batched query for every candidate question's answers -- never one
     query per question.
     """
-    questions = place_questions_service.list_place_questions(db, location_id)
-    if not questions:
+    return _split_place_questions(*_questions_with_approved_answers(db, location_id))[0]
+
+
+def _open_question_counts(db: Session, location_ids: list[UUID]) -> dict[UUID, int]:
+    if not location_ids:
+        return {}
+    answered = (
+        select(Submission.id)
+        .join(SubmissionReview, SubmissionReview.submission_id == Submission.id)
+        .where(
+            Submission.source_place_question_id == PlaceQuestion.id,
+            SubmissionReview.status == "approved",
+        )
+        .exists()
+    )
+    rows = db.execute(
+        select(PlaceQuestion.location_id, func.count(PlaceQuestion.id))
+        .where(
+            PlaceQuestion.location_id.in_(location_ids),
+            PlaceQuestion.active.is_(True),
+            PlaceQuestion.source == "seed",
+            ~answered,
+        )
+        .group_by(PlaceQuestion.location_id)
+    ).all()
+    return {location_id: count for location_id, count in rows}
+
+
+def _hub_location_ids(db: Session, location_ids: list[UUID]) -> set[UUID]:
+    if not location_ids:
+        return set()
+    return set(
+        db.execute(select(CuratedHub.location_id).where(CuratedHub.location_id.in_(location_ids)))
+        .scalars()
+        .all()
+    )
+
+
+def list_public_hubs(db: Session) -> list[PublicLocationSummary]:
+    """The curated hubs (areas such as Lukla and Thamel), as ordinary
+    location summaries -- the site's top-level destinations."""
+    hub_ids = set(db.execute(select(CuratedHub.location_id)).scalars().all())
+    if not hub_ids:
         return []
+    return list_public_locations(db, limit=len(hub_ids), only_ids=hub_ids)
+
+
+_AREA_FINDING_PLACES_LIMIT = 6
+
+
+def list_public_research_findings(
+    db: Session, location: Location, area_radius_meters: float | None = None
+) -> list[PublicResearchFinding]:
+    """The most recent finding per research topic for this Location -- or,
+    with `area_radius_meters` (an area hub), for every place inside that
+    radius: the hub's own first, then the others by name, capped."""
+    stmt = select(PlaceResearchFinding, Location.name).join(
+        Location, Location.id == PlaceResearchFinding.location_id
+    )
+    if area_radius_meters is None:
+        stmt = stmt.where(PlaceResearchFinding.location_id == location.id)
+    else:
+        anchor = make_point(float(location.latitude), float(location.longitude))
+        stmt = stmt.where(func.ST_DWithin(Location.geog, anchor, area_radius_meters))
+    rows = db.execute(stmt.order_by(PlaceResearchFinding.retrieved_at.desc())).all()
+
+    latest: dict[tuple[UUID, str], PlaceResearchFinding] = {}
+    names: dict[UUID, str] = {}
+    for finding, name in rows:
+        latest.setdefault((finding.location_id, finding.topic), finding)
+        names[finding.location_id] = name
+
+    place_ids = sorted(names, key=lambda loc_id: (loc_id != location.id, names[loc_id]))
+    place_rank = {loc_id: i for i, loc_id in enumerate(place_ids[:_AREA_FINDING_PLACES_LIMIT])}
+    topic_order = {topic: i for i, topic in enumerate(PLACE_RESEARCH_TOPICS)}
+    kept = sorted(
+        (f for f in latest.values() if f.location_id in place_rank),
+        key=lambda f: (place_rank[f.location_id], topic_order.get(f.topic, len(topic_order))),
+    )
+    return [_to_public_finding(f, names[f.location_id]) for f in kept]
+
+
+def _to_public_finding(finding: PlaceResearchFinding, location_name: str) -> PublicResearchFinding:
+    titles = finding.source_titles or []
+    return PublicResearchFinding(
+        finding_id=finding.id,
+        location_id=finding.location_id,
+        location_name=location_name,
+        topic=finding.topic,
+        summary=finding.summary,
+        sources=[
+            PublicResearchSource(url=url, title=titles[i] if i < len(titles) else None)
+            for i, url in enumerate(finding.source_urls or [])
+        ],
+        retrieved_at=finding.retrieved_at,
+    )
+
+
+def _split_place_questions(
+    questions: list[PlaceQuestion], answers_by_question: dict[UUID, list[PublicPlaceQuestionAnswer]]
+) -> tuple[list[PublicPlaceQuestion], list[PublicOpenQuestion]]:
+    """(answered, open). Curated (seed) questions are written in a
+    traveller's voice and read correctly as "what people ask here" even
+    unanswered. AI-research invitations are phrased to a guide standing at
+    the place, so unanswered ones stay guide-only; their grounding reaches
+    travellers via research findings instead."""
+    answered = [
+        _to_public_place_question(q, answers_by_question[q.id]) for q in questions if q.id in answers_by_question
+    ]
+    open_ = [
+        PublicOpenQuestion(place_question_id=q.id, question_text=q.question_text, context_note=q.context_note)
+        for q in questions
+        if q.source == "seed" and q.id not in answers_by_question
+    ]
+    return answered, open_
+
+
+def _active_place_questions(db: Session, location_id: UUID) -> list[PlaceQuestion]:
+    """Same active/ordering rules as place_questions_service.list_place_questions,
+    without its guide-app cap (place_question_max_count): a public page shows
+    every curated question, not the handful a guide is offered at once."""
+    return list(
+        db.execute(
+            select(PlaceQuestion)
+            .where(PlaceQuestion.location_id == location_id, PlaceQuestion.active.is_(True))
+            .order_by(PlaceQuestion.display_order, PlaceQuestion.created_at)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _questions_with_approved_answers(
+    db: Session, location_id: UUID
+) -> tuple[list[PlaceQuestion], dict[UUID, list[PublicPlaceQuestionAnswer]]]:
+    questions = _active_place_questions(db, location_id)
+    if not questions:
+        return [], {}
 
     question_ids = [q.id for q in questions]
     stmt = (
@@ -480,12 +626,7 @@ def list_public_place_questions(db: Session, location_id: UUID) -> list[PublicPl
                 answered_at=submission.submitted_at,
             )
         )
-
-    return [
-        _to_public_place_question(question, answers_by_question[question.id])
-        for question in questions
-        if question.id in answers_by_question
-    ]
+    return questions, answers_by_question
 
 
 def _bucket_route_stop_freshness(
@@ -555,9 +696,7 @@ def get_public_route_for_location(
 ) -> PublicRoute | None:
     """None when this Location is not a stop on any seeded Route (the
     overwhelming majority of Locations). Otherwise the WHOLE route (every
-    stop, not just this Location's own), ordered by sequence_order, each
-    stop's status from a single batched freshness lookup -- never one query
-    per stop."""
+    stop, not just this Location's own) -- see _build_public_route."""
     route_id = db.execute(
         select(RouteStop.route_id).where(RouteStop.location_id == location_id)
     ).scalars().first()
@@ -568,10 +707,38 @@ def get_public_route_for_location(
     if route is None:
         return None
 
+    return _build_public_route(db, route, evaluation_time)
+
+
+def get_public_route_by_slug(
+    db: Session, slug: str, evaluation_time: datetime
+) -> PublicRoute | None:
+    """The standalone "Route Strip" page's entry point -- a Route looked up
+    directly by slug, not reached via one of its stops. Same assembly as
+    get_public_route_for_location, factored out as _build_public_route so
+    the two never drift (one batched freshness lookup either way, never one
+    query per stop)."""
+    route = db.execute(select(Route).where(Route.slug == slug)).scalar_one_or_none()
+    if route is None:
+        return None
+    return _build_public_route(db, route, evaluation_time)
+
+
+def list_public_routes(db: Session) -> list[Route]:
+    """Every seeded Route, for a routes index page -- just identity fields,
+    not the full stop assembly (a list view doesn't need per-stop
+    freshness)."""
+    return list(db.execute(select(Route).order_by(Route.name)).scalars())
+
+
+def _build_public_route(db: Session, route: Route, evaluation_time: datetime) -> PublicRoute | None:
+    """Shared assembly for both lookup paths: every stop, ordered by
+    sequence_order, each stop's status from a single batched freshness
+    lookup -- never one query per stop."""
     rows = db.execute(
         select(RouteStop, Location)
         .join(Location, Location.id == RouteStop.location_id)
-        .where(RouteStop.route_id == route_id)
+        .where(RouteStop.route_id == route.id)
         .order_by(RouteStop.sequence_order)
     ).all()
     if not rows:
@@ -669,8 +836,11 @@ def get_public_location_detail(
     )
     photo_count = sum(1 for o in observations.items if o.has_photo)
     voice_story_count = sum(1 for o in observations.items if o.has_audio)
-    popular_questions = list_public_place_questions(db, location_id)
+    popular_questions, open_questions = _split_place_questions(
+        *_questions_with_approved_answers(db, location_id)
+    )
     route = get_public_route_for_location(db, location_id, evaluation_time)
+    hub = db.execute(select(CuratedHub).where(CuratedHub.location_id == location_id)).scalars().first()
     categories = list_public_location_categories(db, location_id, evaluation_time)
     nearby = list_public_locations(db, limit=settings.public_nearby_limit, near=location)
 
@@ -690,9 +860,15 @@ def get_public_location_detail(
             place_summary_service.get_summary(db, location.id)
         ),
         popular_questions=popular_questions,
+        open_questions=open_questions,
+        research_findings=list_public_research_findings(
+            db, location, float(hub.radius_meters) if hub is not None else None
+        ),
         route=route,
         categories=categories,
         nearby=nearby,
+        open_question_count=len(open_questions),
+        is_area_hub=hub is not None,
     )
 
 

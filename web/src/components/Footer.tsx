@@ -1,51 +1,83 @@
 import Link from "next/link";
+import { Logo } from "./Nav";
+import { Icon } from "./guide/Icons";
+
+const COLUMNS: { title: string; links: { label: string; href: string }[] }[] = [
+  {
+    title: "Explore",
+    links: [
+      { label: "All places", href: "/explore" },
+      { label: "Routes", href: "/routes" },
+      { label: "Latest reports", href: "/explore#reports" },
+      { label: "Search", href: "/search" },
+    ],
+  },
+  {
+    title: "Before you go",
+    links: [
+      { label: "The guides' notebook", href: "/#right-now" },
+      { label: "Questions travellers ask", href: "/#answers" },
+      { label: "Ask a local guide", href: "/#ask" },
+    ],
+  },
+  {
+    title: "Firsthand",
+    links: [
+      { label: "How we report", href: "/#trust" },
+      { label: "Sources & evidence", href: "/#trust" },
+    ],
+  },
+];
 
 export function Footer() {
   return (
-    <footer className="mt-24 border-t border-border bg-paper-muted">
-      <div className="mx-auto max-w-7xl px-5 py-16 sm:px-8">
-        <div className="grid gap-10 sm:grid-cols-[1.3fr_1fr_1fr]">
+    <footer>
+      <section className="border-t border-border-soft bg-[#eef3f4]">
+        <div className="page flex flex-wrap items-center justify-between gap-6 py-12">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-ink font-heading text-xs font-extrabold text-marigold-soft">
-                F
-              </span>
-              <p className="font-heading text-lg font-bold text-ink">Firsthand</p>
-            </div>
-            <p className="mt-3 max-w-sm text-sm leading-relaxed text-ink-soft">
-              What a place is like right now, from people who were actually there. Every
-              report on this site passed a human review before it went live.
-            </p>
+            <p className="eyebrow">Your journey starts with a question</p>
+            <h2 className="mt-2 text-[29px] font-bold tracking-[-0.025em] text-ink">Let&rsquo;s find your trail.</h2>
+            <p className="mt-1.5 text-[15px] text-ink-soft">Ask a local guide what you need to know before you go.</p>
           </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Explore</p>
-            <ul className="mt-3 space-y-2 text-sm text-ink-soft">
-              <li>
-                <Link href="/explore" className="transition hover:text-ink">
-                  All places
-                </Link>
-              </li>
-              <li>
-                <Link href="/explore?has_photos=true" className="transition hover:text-ink">
-                  Photos
-                </Link>
-              </li>
-              <li>
-                <Link href="/explore?has_voice=true" className="transition hover:text-ink">
-                  Voice stories
-                </Link>
-              </li>
-            </ul>
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-ink-faint">About this data</p>
-            <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-              Reports come from local guides in the field and are checked by a moderation
-              team before publishing. Nothing here is generated or estimated.
-            </p>
-          </div>
+          <Link
+            href="/#ask"
+            className="inline-flex min-h-[48px] items-center gap-2.5 rounded-[5px] bg-cta px-6 text-[16px] font-bold text-cta-ink hover:bg-cta-deep"
+          >
+            Ask a local guide
+            <Icon name="arrowUpRight" size={17} strokeWidth={2} />
+          </Link>
         </div>
-        <p className="mt-12 text-xs text-ink-faint">© {new Date().getFullYear()} Firsthand. Built on real, moderated field reports.</p>
+      </section>
+
+      <div className="bg-footer text-white">
+        <div className="page grid gap-10 py-14 md:grid-cols-[1.6fr_1fr_1fr_1fr]">
+          <div>
+            <Logo />
+            <p className="mt-5 text-[14px] leading-[1.7] text-white/75">
+              Place guides built from dated local reports,
+              <br />
+              the questions travellers ask, and labelled research.
+            </p>
+          </div>
+          {COLUMNS.map((col) => (
+            <div key={col.title}>
+              <p className="text-[14px] font-bold">{col.title}</p>
+              <ul className="mt-4 space-y-3 text-[13.5px] text-white/75">
+                {col.links.map((l) => (
+                  <li key={l.label}>
+                    <Link href={l.href} className="hover:text-white">
+                      {l.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <div className="page flex flex-wrap justify-between gap-3 border-t border-white/10 py-6 text-[12px] text-white/60">
+          <p>© {new Date().getFullYear()} Firsthand. Every guide report is reviewed before it appears.</p>
+          <p>Background research is labelled as research — never as a guide&rsquo;s report.</p>
+        </div>
       </div>
     </footer>
   );

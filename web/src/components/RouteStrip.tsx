@@ -29,7 +29,7 @@ function Stop({ stop, isCurrent, isLast }: { stop: PublicRouteStop; isCurrent: b
           : "border-border bg-paper-elevated hover:-translate-y-0.5 hover:border-border-strong hover:shadow-warm",
       )}
     >
-      <p className={clsx("font-heading text-xs font-extrabold", isCurrent ? "text-marigold-soft" : "text-marigold-deep")}>
+      <p className={clsx("font-heading text-xs font-extrabold", isCurrent ? "text-accent-soft" : "text-accent-deep")}>
         {String(stop.sequence_order).padStart(2, "0")}
       </p>
       <p className={clsx("mt-1 text-[15px] font-semibold leading-snug", isCurrent ? "text-paper" : "text-ink")}>

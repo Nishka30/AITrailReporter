@@ -42,10 +42,9 @@ export function AskAboutPlace({
   const suggestions = conditions.slice(0, 4).map((c) => c.display_name);
 
   return (
-    <div className="relative overflow-hidden rounded-[28px] border border-border/70 bg-paper-elevated p-6 shadow-warm-lg sm:p-8">
-      <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-marigold-soft/50 blur-3xl" />
+    <div className="relative rounded-[8px] bg-white p-6 text-ink sm:p-7">
       <div className="relative flex items-center gap-2.5">
-        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-ink text-marigold-soft">
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-soft text-accent-deep">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M9.5 9a2.5 2.5 0 1 1 4 2c-.6.5-1.5 1-1.5 2.5M12 17.5h.01" />
             <circle cx="12" cy="12" r="9.5" />
@@ -63,7 +62,7 @@ export function AskAboutPlace({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="e.g. “Is it icy right now?” or “Any parking?”"
-          className="w-full rounded-2xl border border-border-strong bg-paper py-3.5 pl-5 pr-5 text-[15px] text-ink placeholder:text-ink-faint outline-none transition focus:border-marigold-deep focus:ring-4 focus:ring-marigold-soft/70"
+          className="w-full rounded-[5px] border border-border-strong bg-white py-3.5 pl-5 pr-5 text-[15px] text-ink placeholder:text-ink-faint outline-none transition focus:border-accent-deep focus:ring-2 focus:ring-accent-soft"
         />
       </div>
 
@@ -74,7 +73,7 @@ export function AskAboutPlace({
               key={s}
               type="button"
               onClick={() => setQuery(`${s}?`)}
-              className="rounded-full border border-border px-3 py-1.5 text-xs font-medium text-ink-soft transition hover:-translate-y-0.5 hover:border-ink-faint hover:text-ink active:translate-y-0"
+              className="rounded-[22px] border border-border-soft px-3.5 py-1.5 text-[13px] text-ink-meta transition hover:border-border-strong hover:text-ink"
             >
               {s}?
             </button>

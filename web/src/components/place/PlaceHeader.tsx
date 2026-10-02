@@ -64,7 +64,7 @@ export function PlaceIntro({
           <h1 className="mt-3 font-heading text-4xl font-extrabold tracking-tight text-ink sm:text-5xl">
             {place.name}
             {stop && route && (
-              <span className="mt-2 block text-lg font-semibold tracking-normal text-marigold-deep sm:text-xl">
+              <span className="mt-2 block text-lg font-semibold tracking-normal text-accent-deep sm:text-xl">
                 Stop {stop.sequence_order} of {route.stops.length} on {route.name}
               </span>
             )}
@@ -108,7 +108,7 @@ export function PlaceIntro({
             </ul>
           )}
 
-          <div className="mt-6 border-l-2 border-marigold pl-3 text-xs leading-relaxed text-ink-faint">
+          <div className="mt-6 border-l-2 border-accent pl-3 text-xs leading-relaxed text-ink-faint">
             {place.last_activity_at ? (
               <p>
                 <span className="font-semibold text-ink-soft">Latest check:</span>{" "}
@@ -159,22 +159,33 @@ export function PlaceIntro({
   );
 }
 
-/** Section bar -- links only to sections that actually rendered. */
-export function OnThisPage({ items }: { items: { id: string; label: string }[] }) {
+/**
+ * Section bar -- links only to sections that actually rendered. Styled as
+ * the reference guide's underlined tab row: the first (topmost, currently
+ * in view on load) tab reads as active with a teal underline; the rest are
+ * plain until clicked/scrolled to. A right-aligned "Ask a guide" action
+ * mirrors the reference's own tab-row CTA.
+ */
+export function OnThisPage({ items, action }: { items: { id: string; label: string }[]; action?: React.ReactNode }) {
   if (items.length < 2) return null;
   return (
-    <nav aria-label="On this page" className="border-y border-border bg-paper-elevated/80">
-      <div className="rail mx-auto flex min-h-[52px] max-w-6xl items-stretch gap-6 overflow-x-auto px-5 sm:px-8">
-        <span className="flex shrink-0 items-center text-[10px] font-bold uppercase tracking-[0.16em] text-ink-faint">On this page</span>
-        {items.map((item) => (
+    <nav aria-label="On this page" className="border-b border-border bg-paper-elevated">
+      <div className="rail mx-auto flex min-h-[54px] max-w-6xl items-stretch gap-7 overflow-x-auto px-5 sm:px-8">
+        {items.map((item, i) => (
           <a
             key={item.id}
             href={`#${item.id}`}
-            className="flex shrink-0 items-center border-b-2 border-transparent text-[13px] font-bold text-ink-soft transition hover:border-marigold hover:text-ink"
+            className={clsx(
+              "flex shrink-0 items-center border-b-2 text-[15px] font-semibold transition",
+              i === 0
+                ? "border-accent text-accent-deep"
+                : "border-transparent text-ink-soft hover:border-border-strong hover:text-ink",
+            )}
           >
             {item.label}
           </a>
         ))}
+        {action && <span className="ml-auto flex shrink-0 items-center">{action}</span>}
       </div>
     </nav>
   );

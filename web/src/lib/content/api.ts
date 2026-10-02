@@ -12,6 +12,8 @@ import type {
   PublicLocationSummary,
   PublicObservation,
   PublicObservationList,
+  PublicRoute,
+  PublicRouteSummary,
   PublicSearchResult,
 } from "./types";
 
@@ -66,6 +68,8 @@ export const apiContentSource: ContentSource = {
       // Defaulted so a backend deployed before these fields existed still
       // renders (the sections simply self-hide).
       popular_questions: detail.popular_questions ?? [],
+      open_questions: detail.open_questions ?? [],
+      research_findings: detail.research_findings ?? [],
       route: detail.route ?? null,
       categories: detail.categories ?? [],
       nearby: detail.nearby ?? [],
@@ -96,5 +100,28 @@ export const apiContentSource: ContentSource = {
   async search(query: string) {
     const result = await getJson<PublicSearchResult>(`/api/v1/public/search?q=${encodeURIComponent(query)}`);
     return { ...result, observations: result.observations.map(absolutize) };
+  },
+
+  async listRoutes() {
+    // Tolerant of a backend deployed before this endpoint existed (same
+    // reasoning as getLocation's defaults below): the routes section simply
+    // self-hides rather than failing the whole page.
+    try {
+      return await getJson<PublicRouteSummary[]>("/api/v1/public/routes");
+    } catch {
+      return [];
+    }
+  },
+
+  async getRoute(slug: string) {
+    return getJsonOrNull<PublicRoute>(`/api/v1/public/routes/${slug}`);
+  },
+
+  async listHubs() {
+    try {
+      return await getJson<PublicLocationSummary[]>("/api/v1/public/hubs");
+    } catch {
+      return [];
+    }
   },
 };

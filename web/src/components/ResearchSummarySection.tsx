@@ -89,7 +89,7 @@ export function ResearchSummarySection({ summary, lede }: { summary: PlaceResear
           <ol className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {summary.things_to_do.map((item, i) => (
               <li key={item} className="flex gap-3 rounded-xl border border-border bg-paper-elevated p-4 text-sm leading-relaxed text-ink">
-                <span className="font-heading text-sm font-extrabold text-marigold-deep">{String(i + 1).padStart(2, "0")}</span>
+                <span className="font-heading text-sm font-extrabold text-accent-deep">{String(i + 1).padStart(2, "0")}</span>
                 {item}
               </li>
             ))}

@@ -146,6 +146,10 @@ class PublicLocationSummary(BaseModel):
     # Active categories (same relevance floor as the detail page): the
     # primary place_type first, then themes most relevant first.
     categories: list[PublicCategoryLabel] = []
+    # Unanswered curated traveller questions here (see PublicOpenQuestion).
+    open_question_count: int = 0
+    # True when this Location is a curated hub -- an area such as Lukla.
+    is_area_hub: bool = False
 
 
 class PublicVerifiedKnowledge(BaseModel):
@@ -206,6 +210,42 @@ class PublicPlaceQuestion(BaseModel):
     answers: list[PublicPlaceQuestionAnswer]
 
 
+class PublicOpenQuestion(BaseModel):
+    """A curated (source='seed') PlaceQuestion that no guide has usefully
+    answered yet. Seed questions are written in a traveller's voice ("Where
+    can tourists exchange cash in Lukla?"), so -- unlike AI-research
+    invitations, which are phrased to a guide standing at the place -- they
+    read correctly as "what people ask here", shown as awaiting a local
+    check. Never carries an answer: see PublicPlaceQuestion for those."""
+
+    place_question_id: UUID
+    question_text: str
+    context_note: str | None
+
+
+class PublicResearchSource(BaseModel):
+    url: str
+    title: str | None
+
+
+class PublicResearchFinding(BaseModel):
+    """The latest web-research finding for one topic about one Location
+    ('interest' = what visitors notice; 'current' = what sources say is
+    currently true). UNTRUSTED, condensed web text -- evidence about what is
+    worth checking, never a fact TrailMind asserts. See
+    app/db/models/place_research_finding.py."""
+
+    finding_id: UUID
+    # The place this finding is about -- for an area hub, findings cover
+    # every place inside the hub radius, so each names its own place.
+    location_id: UUID
+    location_name: str
+    topic: str
+    summary: str
+    sources: list[PublicResearchSource]
+    retrieved_at: datetime
+
+
 class PublicRouteStop(BaseModel):
     """One stop on a Route, joined to its Location and a location-level
     freshness bucket. `status` reuses the KnowledgeState vocabulary so the
@@ -234,6 +274,16 @@ class PublicRoute(BaseModel):
     stops: list[PublicRouteStop]
 
 
+class PublicRouteSummary(BaseModel):
+    """A Route's identity only, for a routes index page -- no per-stop
+    freshness assembly (see PublicRoute for the full detail)."""
+
+    route_id: UUID
+    slug: str
+    name: str
+    description: str | None
+
+
 class PublicLocationDetail(PublicLocationSummary):
     conditions: list[PublicConditionState]
     recent_observations: list[PublicObservation]
@@ -248,6 +298,11 @@ class PublicLocationDetail(PublicLocationSummary):
     # Active PlaceQuestions with at least one approved answer. Empty when
     # this Location has none (yet).
     popular_questions: list[PublicPlaceQuestion] = []
+    # Curated traveller questions with no approved answer yet.
+    open_questions: list[PublicOpenQuestion] = []
+    # Latest web-research finding per topic -- web research, not TrailMind
+    # knowledge; a separate trust layer from everything else here.
+    research_findings: list[PublicResearchFinding] = []
     # None for the overwhelming majority of Locations -- only set when this
     # Location is a stop on a seeded Route. See get_public_route_for_location.
     route: PublicRoute | None = None

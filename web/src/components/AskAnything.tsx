@@ -63,18 +63,17 @@ export function AskAnything({ locations }: { locations: PublicLocationSummary[] 
   });
 
   return (
-    <div className="relative overflow-hidden rounded-[32px] border border-white/15 bg-white/95 p-6 shadow-warm-lg backdrop-blur-xl sm:p-8">
-      <div className="pointer-events-none absolute -left-20 -top-20 h-56 w-56 rounded-full bg-marigold/20 blur-3xl" />
+    <div className="relative rounded-[8px] bg-white p-6 text-ink sm:p-7">
 
       <form onSubmit={onSubmit} className="relative">
         <label htmlFor="ask-anything" className="flex items-center gap-2 text-sm font-semibold text-ink-soft">
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-ink text-marigold-soft">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent-soft text-accent-deep">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9.5 9a2.5 2.5 0 1 1 4 2c-.6.5-1.5 1-1.5 2.5M12 17.5h.01" />
             </svg>
           </span>
           Ask anything about a place
-          {pending && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-marigold-soft border-t-marigold-deep" />}
+          {pending && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent-soft border-t-accent-deep" />}
         </label>
         <div className="relative mt-3">
           <textarea
@@ -85,7 +84,7 @@ export function AskAnything({ locations }: { locations: PublicLocationSummary[] 
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="e.g. “Is it icy at Khardung La right now?” or “Any parking near Pangong Tso?”"
-            className="thin-scroll w-full resize-none rounded-2xl border border-border-strong bg-paper py-4 pl-5 pr-5 text-[16px] leading-relaxed text-ink placeholder:text-ink-faint outline-none transition focus:border-marigold-deep focus:ring-4 focus:ring-marigold-soft/70"
+            className="thin-scroll w-full resize-none rounded-[5px] border border-border-strong bg-white py-4 pl-5 pr-5 text-[16px] leading-relaxed text-ink placeholder:text-ink-faint outline-none transition focus:border-accent-deep focus:ring-2 focus:ring-accent-soft"
           />
           {/* Visually hidden -- Enter submits (see onKeyDown); kept for
              a11y tools and password-manager-style form heuristics that
@@ -107,7 +106,7 @@ export function AskAnything({ locations }: { locations: PublicLocationSummary[] 
                 setQuestion(s);
                 run(s);
               }}
-              className="rounded-full border border-border px-3 py-1.5 text-left text-xs font-medium text-ink-soft transition hover:-translate-y-0.5 hover:border-ink-faint hover:text-ink"
+              className="rounded-[22px] border border-border-soft px-3.5 py-1.5 text-left text-[13px] text-ink-meta transition hover:border-border-strong hover:text-ink"
             >
               {s}
             </button>
@@ -185,7 +184,7 @@ export function AskAnything({ locations }: { locations: PublicLocationSummary[] 
               <p className="text-sm text-ink-soft">
                 We don&rsquo;t have a report that answers that yet — nothing here is guessed or generated, so we&rsquo;d
                 rather say that than make something up. Try{" "}
-                <Link href="/explore" className="font-semibold text-marigold-deep hover:underline">
+                <Link href="/explore" className="font-semibold text-accent-deep hover:underline">
                   exploring what we do know
                 </Link>
                 .

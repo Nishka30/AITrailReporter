@@ -67,7 +67,7 @@ export function ReportCard({ check }: { check: LocalCheck }) {
 
         <div className="mt-auto pt-5">
           <div className="flex items-center gap-2.5 border-t border-border pt-4">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink text-[10px] font-bold text-marigold-soft">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink text-[10px] font-bold text-accent-soft">
               {initials(o.guide_name)}
             </span>
             <div className="min-w-0 flex-1 text-xs leading-tight">
@@ -78,7 +78,7 @@ export function ReportCard({ check }: { check: LocalCheck }) {
                 </time>
               </p>
             </div>
-            <Link href={`/observations/${o.observation_id}`} className="shrink-0 text-xs font-semibold text-marigold-deep hover:underline">
+            <Link href={`/observations/${o.observation_id}`} className="shrink-0 text-xs font-semibold text-accent-deep hover:underline">
               View report →
             </Link>
           </div>
@@ -106,7 +106,7 @@ export function PlaceCard({ place }: { place: PublicLocationSummary }) {
         <span>{placeType ?? "Place"}</span>
         {distance && <span className="normal-case tracking-normal">{distance} away</span>}
       </div>
-      <h3 className="mt-2 font-heading text-[17px] font-bold leading-snug text-ink group-hover:text-marigold-deep">{place.name}</h3>
+      <h3 className="mt-2 font-heading text-[17px] font-bold leading-snug text-ink group-hover:text-accent-deep">{place.name}</h3>
       {place.description && <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-ink-soft">{place.description}</p>}
       {themes.length > 0 && (
         <ul className="mt-3 flex flex-wrap gap-1.5">
@@ -122,7 +122,7 @@ export function PlaceCard({ place }: { place: PublicLocationSummary }) {
           <span className={place.last_activity_at ? "h-1.5 w-1.5 rounded-full bg-ok" : "h-1.5 w-1.5 rounded-full bg-ink-faint/50"} />
           {place.last_activity_at ? `Last report ${formatDate(place.last_activity_at)}` : "Not checked by a guide yet"}
         </span>
-        <span className="font-semibold text-marigold-deep">Explore →</span>
+        <span className="font-semibold text-accent-deep">Explore →</span>
       </div>
     </Link>
   );

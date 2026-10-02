@@ -26,7 +26,7 @@ export function ObservationCard({ observation }: { observation: PublicObservatio
           />
           <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/35 to-transparent" />
           {observation.has_audio && (
-            <span className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-ink shadow-warm backdrop-blur-sm transition group-hover:bg-marigold">
+            <span className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-ink shadow-warm backdrop-blur-sm transition group-hover:bg-accent">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M8 5v14l11-7z" />
               </svg>
@@ -34,9 +34,9 @@ export function ObservationCard({ observation }: { observation: PublicObservatio
           )}
         </div>
       ) : (
-        <div className="flex aspect-[4/3] w-full items-center justify-center bg-gradient-to-br from-marigold-soft/70 to-marigold-soft/20 p-6">
+        <div className="flex aspect-[4/3] w-full items-center justify-center bg-gradient-to-br from-accent-soft/70 to-accent-soft/20 p-6">
           {observation.has_audio ? (
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="text-marigold-deep">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="text-accent-deep">
               <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
               <path d="M19 11a7 7 0 0 1-14 0M12 18v3" />
             </svg>
@@ -46,7 +46,7 @@ export function ObservationCard({ observation }: { observation: PublicObservatio
         </div>
       )}
       <div className="p-5">
-        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-marigold-deep">
+        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-accent-deep">
           <KindTag observation={observation} />
           <span className="text-ink-faint">·</span>
           <span className="text-ink-faint normal-case">{observation.display_name}</span>
@@ -62,7 +62,7 @@ export function ObservationCard({ observation }: { observation: PublicObservatio
           {timeAgoLabel(observation.observed_at)}
         </p>
       </div>
-      <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/0 transition group-hover:ring-marigold/25" />
+      <div className="pointer-events-none absolute inset-0 rounded-[28px] ring-1 ring-inset ring-white/0 transition group-hover:ring-accent/25" />
     </Link>
   );
 }

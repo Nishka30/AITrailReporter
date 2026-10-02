@@ -531,6 +531,8 @@ export const mockContentSource: ContentSource = {
       voice_story_count: observations.filter((o) => o.has_audio).length,
       research_summary: loc.research ?? null,
       popular_questions: loc.questions ?? [],
+      open_questions: [],
+      research_findings: [],
       route: MOCK_ROUTE.stops.some((s) => s.location_id === loc.location_id) ? MOCK_ROUTE : null,
       categories: loc.categories ?? [],
       nearby: nearbyOf(loc),
@@ -570,6 +572,25 @@ export const mockContentSource: ContentSource = {
       (o) => (o.evidence ?? "").toLowerCase().includes(q) || o.display_name.toLowerCase().includes(q),
     );
     return { query, locations, observations };
+  },
+
+  async listRoutes() {
+    return [
+      {
+        route_id: MOCK_ROUTE.route_id,
+        slug: MOCK_ROUTE.slug,
+        name: MOCK_ROUTE.name,
+        description: MOCK_ROUTE.description,
+      },
+    ];
+  },
+
+  async getRoute(slug: string) {
+    return slug === MOCK_ROUTE.slug ? MOCK_ROUTE : null;
+  },
+
+  async listHubs() {
+    return LOCATIONS.filter((l) => l.location_id === "leh").map((l) => ({ ...summaryOf(l), is_area_hub: true }));
   },
 };
 

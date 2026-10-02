@@ -1,12 +1,12 @@
 import Link from "next/link";
 import clsx from "clsx";
 import { content } from "@/lib/content";
-import { LocationCard } from "@/components/LocationCard";
-import { ObservationCard } from "@/components/ObservationCard";
 import { EmptyState } from "@/components/EmptyState";
 import { DynamicMap } from "@/components/DynamicMap";
-import { coverPhotoFor } from "@/lib/content/coverPhoto";
-import { Reveal, RevealGroup, RevealItem } from "@/components/motion/Reveal";
+import { PlaceCard } from "@/components/guide/PlaceCards";
+import { ReportCard } from "@/components/guide/ReportCard";
+import { Breadcrumb } from "@/components/guide/primitives";
+import { stateByAge } from "@/lib/content/locationPage";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = { title: "Explore" };
@@ -52,22 +52,20 @@ export default async function ExplorePage({
     ? observations.items.filter((o) => o.safety_critical)
     : observations.items;
 
-  const locationsWithPhotos =
-    view === "list"
-      ? await Promise.all(locations.slice(0, 24).map(async (l) => ({ location: l, photo: await coverPhotoFor(l.location_id) })))
-      : [];
+  const hubsFirst = [...locations].sort((a, b) => Number(Boolean(b.is_area_hub)) - Number(Boolean(a.is_area_hub)));
 
   const hasActiveFilter = Boolean(sp.knowledge_type || sp.has_photos || sp.has_voice || sp.safety);
 
   return (
-    <div className="mx-auto max-w-7xl px-5 py-16 sm:px-8">
-      <Reveal className="max-w-2xl">
-        <h1 className="font-heading text-4xl font-extrabold tracking-tight text-ink sm:text-5xl">Explore</h1>
-        <p className="mt-4 text-lg text-ink-soft">
-          Every place currently being reported on, and what people have noticed lately. Start
-          broad, or filter down to what you actually need to know.
+    <div className="page pb-20 pt-7">
+      <Breadcrumb items={[{ label: "Home", href: "/" }, { label: "Explore" }]} />
+      <div className="mt-3 max-w-[720px]">
+        <p className="eyebrow">Every place we cover</p>
+        <h1 className="mt-3 text-[40px] font-bold leading-[1.08] tracking-[-0.035em] text-ink sm:text-[50px]">Explore</h1>
+        <p className="mt-4 text-[18px] leading-[1.75] text-ink-soft">
+          Every place guides report on, and what they have noticed lately. Start broad, or filter down to what you need to know.
         </p>
-      </Reveal>
+      </div>
 
       {/* Filters */}
       <div className="mt-10 space-y-5">
@@ -116,17 +114,17 @@ export default async function ExplorePage({
       {/* Places: list / map toggle */}
       <section className="mt-16">
         <div className="mb-6 flex items-center justify-between">
-          <h2 className="font-heading text-2xl font-bold tracking-tight text-ink">Places</h2>
-          <div className="flex overflow-hidden rounded-full border border-border bg-paper-elevated p-0.5 text-sm font-medium shadow-warm">
+          <h2 className="text-[27px] font-bold tracking-[-0.025em] text-ink">Places</h2>
+          <div className="flex overflow-hidden rounded-[22px] border border-border-soft bg-white p-0.5 text-sm">
             <Link
               href={buildHref(sp, { view: undefined })}
-              className={clsx("rounded-full px-4 py-1.5 transition", view === "list" ? "bg-ink text-paper" : "text-ink-soft hover:text-ink")}
+              className={clsx("rounded-full px-4 py-1.5 transition", view === "list" ? "bg-pill text-white" : "text-ink-soft hover:text-ink")}
             >
               List
             </Link>
             <Link
               href={buildHref(sp, { view: "map" })}
-              className={clsx("rounded-full px-4 py-1.5 transition", view === "map" ? "bg-ink text-paper" : "text-ink-soft hover:text-ink")}
+              className={clsx("rounded-full px-4 py-1.5 transition", view === "map" ? "bg-pill text-white" : "text-ink-soft hover:text-ink")}
             >
               Map
             </Link>
@@ -141,19 +139,19 @@ export default async function ExplorePage({
             height={480}
           />
         ) : (
-          <RevealGroup className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {locationsWithPhotos.map(({ location, photo }) => (
-              <RevealItem key={location.location_id}>
-                <LocationCard location={location} coverPhotoUrl={photo} />
-              </RevealItem>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {hubsFirst.slice(0, 24).map((location) => (
+              <div key={location.location_id} className="flex">
+                <PlaceCard place={location} />
+              </div>
             ))}
-          </RevealGroup>
+          </div>
         )}
       </section>
 
       {/* Matching observations */}
-      <section className="mt-16">
-        <h2 className="font-heading text-2xl font-bold tracking-tight text-ink">
+      <section id="reports" className="mt-16 scroll-mt-6">
+        <h2 className="text-[27px] font-bold tracking-[-0.025em] text-ink">
           {hasActiveFilter ? "Matching reports" : "Latest reports"}
         </h2>
         {filteredObservations.length === 0 ? (
@@ -164,13 +162,13 @@ export default async function ExplorePage({
             />
           </div>
         ) : (
-          <RevealGroup className="mt-6 grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="mt-6 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {filteredObservations.map((o) => (
-              <RevealItem key={o.observation_id}>
-                <ObservationCard observation={o} />
-              </RevealItem>
+              <div key={o.observation_id} className="flex">
+                <ReportCard check={{ observation: o, label: o.category_display_name ?? o.display_name, state: stateByAge(o.observed_at) }} />
+              </div>
             ))}
-          </RevealGroup>
+          </div>
         )}
       </section>
     </div>
@@ -182,10 +180,8 @@ function FilterChip({ href, active, children }: { href: string; active: boolean;
     <Link
       href={href}
       className={clsx(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-all duration-200",
-        active
-          ? "border-ink bg-ink text-paper shadow-warm"
-          : "border-border text-ink-soft hover:-translate-y-0.5 hover:border-ink-faint hover:text-ink",
+        "flex h-[40px] shrink-0 items-center gap-1.5 rounded-[22px] border px-4 text-[14px] transition",
+        active ? "border-pill bg-pill text-white" : "border-border-soft bg-white text-ink-meta hover:border-border-strong hover:text-ink",
       )}
     >
       {children}

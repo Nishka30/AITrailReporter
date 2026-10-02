@@ -33,7 +33,7 @@ export function VoicePlayer({
           onClick={toggle}
           disabled={!audioUrl}
           aria-label={playing ? "Pause" : "Play"}
-          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-transform duration-200 hover:scale-105 hover:bg-marigold-deep active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-transform duration-200 hover:scale-105 hover:bg-accent-deep active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {playing ? (
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -54,7 +54,7 @@ export function VoicePlayer({
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="ml-auto shrink-0 text-xs font-semibold text-marigold-deep underline-offset-2 hover:underline"
+            className="ml-auto shrink-0 text-xs font-semibold text-accent-deep underline-offset-2 hover:underline"
           >
             {expanded ? "Hide transcript" : "Read transcript"}
           </button>

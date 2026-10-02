@@ -69,6 +69,10 @@ export interface PublicLocationSummary {
   distance_meters?: number | null;
   /** Active categories: primary place_type first, then themes by relevance. */
   categories?: PublicCategoryLabel[];
+  /** Unanswered curated traveller questions here. */
+  open_question_count?: number;
+  /** A curated hub -- an area such as Lukla or Thamel. */
+  is_area_hub?: boolean;
 }
 
 export interface PublicCategoryLabel {
@@ -140,6 +144,33 @@ export interface PublicPlaceQuestion {
   answers: PublicPlaceQuestionAnswer[];
 }
 
+/** A curated (seed) traveller question no guide has answered yet -- shown
+ * as awaiting a local check, never with an invented answer. */
+export interface PublicOpenQuestion {
+  place_question_id: string;
+  question_text: string;
+  context_note: string | null;
+}
+
+export interface PublicResearchSource {
+  url: string;
+  title: string | null;
+}
+
+/** Latest web-research finding per topic ('interest' = what visitors
+ * notice, 'current' = what sources say is currently true). Web research,
+ * never a TrailMind-verified fact. For an area hub, covers every place in
+ * the hub radius, each naming its own place. */
+export interface PublicResearchFinding {
+  finding_id: string;
+  location_id: string;
+  location_name: string;
+  topic: string;
+  summary: string;
+  sources: PublicResearchSource[];
+  retrieved_at: string;
+}
+
 /** One stop on a Route. `status` reuses KnowledgeState so the existing
  * freshnessLabel/freshnessTone/timeAgoLabel helpers apply unchanged. */
 export interface PublicRouteStop {
@@ -164,6 +195,15 @@ export interface PublicRoute {
   stops: PublicRouteStop[];
 }
 
+/** A Route's identity only, for a routes index -- no per-stop freshness
+ * assembly (see PublicRoute for the full detail, fetched by slug). */
+export interface PublicRouteSummary {
+  route_id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+}
+
 export interface PublicLocationDetail extends PublicLocationSummary {
   conditions: PublicConditionState[];
   recent_observations: PublicObservation[];
@@ -176,6 +216,8 @@ export interface PublicLocationDetail extends PublicLocationSummary {
   /** Active PlaceQuestions with at least one approved answer. Empty when
    * this Location has none (yet). */
   popular_questions: PublicPlaceQuestion[];
+  open_questions: PublicOpenQuestion[];
+  research_findings: PublicResearchFinding[];
   /** null for the overwhelming majority of Locations -- only set when this
    * Location is a stop on a seeded Route. */
   route: PublicRoute | null;
@@ -206,4 +248,7 @@ export interface ContentSource {
   getObservation(observationId: string): Promise<PublicObservation | null>;
   listKnowledgeTypes(): Promise<PublicKnowledgeType[]>;
   search(query: string): Promise<PublicSearchResult>;
+  listRoutes(): Promise<PublicRouteSummary[]>;
+  getRoute(slug: string): Promise<PublicRoute | null>;
+  listHubs(): Promise<PublicLocationSummary[]>;
 }
