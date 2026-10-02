@@ -50,6 +50,9 @@ export interface PublicObservation {
   /** The contribution's own place label ("Lukla main street"), when the
    * guide picked or searched one -- describes this report's coordinate. */
   location_label?: string | null;
+  /** The report's own coordinate (null when the guide's device gave none). */
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface PublicObservationList {

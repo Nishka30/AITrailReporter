@@ -1,14 +1,22 @@
 import Link from "next/link";
+import { Icon } from "@/components/guide/Icons";
 
 export default function NotFound() {
   return (
-    <div className="mx-auto flex min-h-[60vh] max-w-lg flex-col items-center justify-center px-5 text-center">
-      <p className="font-heading text-6xl font-extrabold text-accent-deep">404</p>
-      <p className="mt-4 font-heading text-xl font-bold text-ink">We couldn&rsquo;t find that page</p>
-      <p className="mt-2 text-sm text-ink-soft">It may have moved, or the report behind it hasn&rsquo;t been approved yet.</p>
-      <Link href="/explore" className="mt-8 rounded-full bg-ink px-6 py-3 text-sm font-semibold text-paper transition hover:bg-accent-deep">
-        Explore places
-      </Link>
+    <div className="page flex min-h-[60vh] flex-col justify-center py-20">
+      <p className="eyebrow">Off the map</p>
+      <h1 className="mt-3 text-[40px] font-bold tracking-[-0.035em] text-ink sm:text-[50px]">We couldn&rsquo;t find that page.</h1>
+      <p className="mt-4 max-w-xl text-[17px] leading-[1.75] text-ink-soft">
+        It may have moved, or the report behind it hasn&rsquo;t been reviewed yet.
+      </p>
+      <div className="mt-8 flex flex-wrap items-center gap-6">
+        <Link href="/explore" className="inline-flex min-h-[44px] items-center gap-2.5 rounded-[5px] bg-accent-deep px-5 text-[15px] font-bold text-white hover:bg-accent">
+          Explore places <Icon name="arrowRight" size={16} strokeWidth={2} />
+        </Link>
+        <Link href="/" className="text-[15px] font-bold text-accent-deep hover:underline">
+          Back to the home page
+        </Link>
+      </div>
     </div>
   );
 }

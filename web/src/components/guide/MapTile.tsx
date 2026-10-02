@@ -19,7 +19,15 @@ export interface MapTilePin {
   label?: string;
 }
 
-export const MAP_ATTRIBUTION = "Map © OpenStreetMap contributors";
+// Tile provider is configurable so production can use a keyed service
+// (OpenStreetMap's free tiles are not meant for production traffic).
+// Template placeholders: {z} {x} {y}.
+const TILE_URL = process.env.NEXT_PUBLIC_MAP_TILE_URL ?? "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+export const MAP_ATTRIBUTION = process.env.NEXT_PUBLIC_MAP_ATTRIBUTION ?? "Map © OpenStreetMap contributors";
+
+function tileUrl(z: number, x: number, y: number): string {
+  return TILE_URL.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
+}
 
 /**
  * A static, non-interactive map of a real place -- the site's honest visual
@@ -71,7 +79,7 @@ export function MapTile({
               top: (t.y - firstY) * TILE,
               width: TILE,
               height: TILE,
-              backgroundImage: `url(https://tile.openstreetmap.org/${zoom}/${t.x}/${t.y}.png)`,
+              backgroundImage: `url(${tileUrl(zoom, t.x, t.y)})`,
             }}
           />
         ))}

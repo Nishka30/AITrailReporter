@@ -29,8 +29,8 @@ export function SearchBar({
         aria-label="Search"
         className={
           compact
-            ? "w-full rounded-full border border-border/80 bg-paper-elevated/80 py-2 pl-4 pr-10 text-sm text-ink placeholder:text-ink-faint outline-none backdrop-blur-sm transition focus:border-accent-deep focus:bg-paper-elevated focus:ring-4 focus:ring-accent-soft/70"
-            : "w-full rounded-2xl border border-white/15 bg-white/95 py-4.5 pl-6 pr-16 text-base text-ink shadow-warm-lg placeholder:text-ink-faint outline-none backdrop-blur-md transition focus:ring-4 focus:ring-accent-soft/80"
+            ? "w-full rounded-[5px] border border-white/15 bg-white/10 py-2.5 pl-4 pr-10 text-[14px] text-white placeholder:text-white/55 outline-none transition focus:border-white/40 focus:bg-white/15"
+            : "w-full rounded-[5px] border border-border-strong bg-white py-4 pl-5 pr-16 text-[16px] text-ink placeholder:text-ink-faint outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-soft"
         }
       />
       <button
@@ -38,8 +38,8 @@ export function SearchBar({
         aria-label="Search"
         className={
           compact
-            ? "absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-full bg-ink p-2 text-paper transition hover:bg-accent-deep active:scale-90"
-            : "absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-xl bg-ink p-3 text-paper transition hover:bg-accent-deep active:scale-90"
+            ? "absolute right-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[4px] p-2 text-white/80 transition hover:text-white"
+            : "absolute right-2 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-[5px] bg-accent-deep p-3 text-white transition hover:bg-accent"
         }
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">

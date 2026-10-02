@@ -29,14 +29,14 @@ export function PhotoGrid({ observations }: { observations: PublicObservation[] 
             key={p.url}
             type="button"
             onClick={() => setOpenIndex(i)}
-            className="group relative aspect-square overflow-hidden rounded-2xl bg-paper-muted"
+            className="group relative aspect-square overflow-hidden rounded-[6px] bg-paper-muted"
           >
             <Image
               src={p.url}
               alt=""
               fill
               sizes="(min-width: 768px) 25vw, 50vw"
-              className="object-cover transition duration-500 group-hover:scale-110"
+              className="object-cover transition duration-500 group-hover:scale-[1.04]"
             />
           </button>
         ))}
@@ -58,13 +58,13 @@ export function PhotoGrid({ observations }: { observations: PublicObservation[] 
             </svg>
           </button>
           <div
-            className="relative flex max-h-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-ink"
+            className="relative flex max-h-full max-w-4xl flex-col overflow-hidden rounded-[8px] bg-ink"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="relative aspect-[4/3] w-full max-h-[70vh]">
               <Image src={active.url} alt="" fill sizes="90vw" className="object-contain" />
             </div>
-            <div className="bg-paper-elevated p-5">
+            <div className="bg-white p-5">
               {active.observation.evidence && (
                 <p className="text-[15px] leading-relaxed text-ink">{active.observation.evidence}</p>
               )}

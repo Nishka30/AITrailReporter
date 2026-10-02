@@ -3,10 +3,9 @@ public API. Refuses to run unless APP_ENVIRONMENT=development AND the active
 database host is localhost -- it can never write to production.
 
 Two parts:
-  A) Real geography: the seven Everest Base Camp villages that
-     scripts/seed_routes.py names but that had no Location yet (real
-     coordinates from that script), with catalog categories, then the route
-     is re-seeded so all eight stops resolve.
+  A) Real geography: the Everest Base Camp villages, via
+     scripts/seed_route_villages.py (the production-safe version), marked as
+     demo rows so --remove can take them away again.
   B) Demo guide activity: four demo guides, approved observations at Lukla,
      Thamel and the route villages, verified CategoryKnowledge behind the
      category reports, and approved answers to a few curated questions.
@@ -45,7 +44,7 @@ from app.db.models.submission_review import SubmissionReview
 from app.db.session import SessionLocal
 from app.services import rewards as reward_service
 
-import seed_routes  # noqa: E402  (scripts/ is on sys.path when run directly)
+import seed_route_villages  # noqa: E402  (scripts/ is on sys.path when run directly)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("seed_dev_demo")
@@ -69,64 +68,6 @@ def _assert_dev_database() -> None:
 # ---------------------------------------------------------------------------
 # A) Real geography
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _Village:
-    name: str
-    description: str
-    place_type: str
-    themes: tuple[str, ...]
-
-
-VILLAGES = (
-    _Village(
-        "Phakding",
-        "A riverside village on the Dudh Koshi and the usual first overnight after flying into Lukla, "
-        "with lodges strung along both banks.",
-        "area",
-        ("trekking", "lodging", "nature"),
-    ),
-    _Village(
-        "Namche Bazaar",
-        "The Sherpa trading town of the Khumbu, built in a horseshoe on the hillside, and the main "
-        "acclimatisation stop on the way to base camp.",
-        "area",
-        ("trekking", "lodging", "local_life", "food_drink"),
-    ),
-    _Village(
-        "Tengboche",
-        "A ridge-top village around Tengboche Monastery, the largest gompa in the Khumbu, with wide "
-        "views of Ama Dablam and Everest.",
-        "monastery",
-        ("culture_heritage", "religious", "trekking", "lodging"),
-    ),
-    _Village(
-        "Dingboche",
-        "A stone-walled farming village below Ama Dablam where most itineraries spend a second "
-        "acclimatisation day.",
-        "area",
-        ("trekking", "lodging", "nature"),
-    ),
-    _Village(
-        "Lobuche",
-        "A small cluster of lodges beside the Khumbu Glacier moraine, the last overnight before Gorak Shep.",
-        "area",
-        ("trekking", "lodging", "adventure"),
-    ),
-    _Village(
-        "Gorak Shep",
-        "The last lodge settlement below Everest Base Camp, on a frozen lakebed at about 5,160 m.",
-        "area",
-        ("trekking", "lodging", "adventure"),
-    ),
-    _Village(
-        "Everest Base Camp",
-        "The climbers' camp on the Khumbu Glacier at about 5,364 m, reached as a day walk from Gorak Shep.",
-        "base_camp",
-        ("trekking", "adventure", "nature", "scenic_spot"),
-    ),
-)
 
 
 def _category(db: Session, slug: str, kind: str) -> LocationCategory:
@@ -164,30 +105,9 @@ def _assign(db: Session, location: Location, slug: str, kind: str, relevance: in
 
 
 def seed_villages(db: Session) -> None:
-    by_name = {s.name: s for s in seed_routes.EVEREST_BASE_CAMP_ROUTE.stops}
-    for village in VILLAGES:
-        stop = by_name[village.name]
-        location = db.execute(
-            select(Location).where(Location.name == village.name, Location.provider == DEMO_PROVIDER)
-        ).scalars().first()
-        if location is None:
-            location = Location(
-                name=village.name,
-                description=village.description,
-                latitude=stop.latitude,
-                longitude=stop.longitude,
-                geog=make_point(stop.latitude, stop.longitude),
-                source="manual",
-                provider=DEMO_PROVIDER,
-                locality="Khumbu, Solukhumbu",
-            )
-            db.add(location)
-            db.flush()
-            logger.info("+ location %s", village.name)
-        _assign(db, location, village.place_type, "place_type", 100, True)
-        for i, theme in enumerate(village.themes):
-            _assign(db, location, theme, "theme", 90 - i * 8, False)
-    seed_routes.seed_route(db, seed_routes.EVEREST_BASE_CAMP_ROUTE)
+    # Same real villages as the production-safe script, marked as demo rows
+    # here so --remove takes them away again.
+    seed_route_villages.seed_villages(db, provider=DEMO_PROVIDER, rationale="dev demo seed")
 
 
 # ---------------------------------------------------------------------------
