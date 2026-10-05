@@ -33,7 +33,7 @@ const ABOUT_MAX_LENGTH = 400;
 /**
  * First-run setup (Step 17: now collects the full field profile).
  *
- * Name, phone number, and at least one brand are REQUIRED — they are the
+ * Name, phone number, and a brand are REQUIRED — they are the
  * identity every report is attributed to, and all three already exist on the
  * backend Guide. The photo and the "About you" note are genuinely optional and
  * can be added later from the Profile screen, so onboarding stays short:
@@ -49,7 +49,7 @@ export default function SetupScreen({ onGuideCreated }: Props) {
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [brands, setBrands] = useState<string[]>([]);
+  const [brand, setBrand] = useState<string | null>(null);
   const [about, setAbout] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
@@ -111,9 +111,9 @@ export default function SetupScreen({ onGuideCreated }: Props) {
       setError(phoneCheck.message);
       return;
     }
-    if (brands.length === 0) {
+    if (!brand) {
       setAttemptedSave(true);
-      setError('Please select at least one brand.');
+      setError('Please select a brand.');
       return;
     }
 
@@ -124,7 +124,7 @@ export default function SetupScreen({ onGuideCreated }: Props) {
       await createLocalGuide(db, trimmedName, normalizePhoneNumber(phone), {
         aboutText: trimmedAbout ? trimmedAbout : null,
         localPhotoUri: photoUri,
-        brands,
+        brand,
       });
       onGuideCreated();
     } catch (err) {
@@ -233,15 +233,14 @@ export default function SetupScreen({ onGuideCreated }: Props) {
         )}
 
         <Text style={[styles.fieldLabel, styles.fieldLabelSpaced]}>
-          Which brand(s) do you belong to?
+          Which brand do you belong to?
         </Text>
         <BrandSelector
-          selected={brands}
-          onChange={setBrands}
+          selected={brand}
+          onChange={setBrand}
           disabled={saving}
           showEmptyWarning={attemptedSave}
         />
-        <Text style={styles.fieldHint}>You can select more than one.</Text>
 
         {/* Collapsed by default — deliberately one tap away rather than a third
             field to scroll past. It can equally be filled in later. */}

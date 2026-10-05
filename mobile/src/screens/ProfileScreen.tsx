@@ -19,7 +19,7 @@ import {
   BrandSelector,
   Button,
   Card,
-  formatBrands,
+  formatBrand,
   Screen,
 } from '../components/ui';
 import {
@@ -83,7 +83,7 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
 
   const [name, setName] = useState(guide.name);
   const [phone, setPhone] = useState(guide.phoneNumber ?? '');
-  const [brands, setBrands] = useState<string[]>(guide.brands ?? []);
+  const [brand, setBrand] = useState<string | null>(guide.brand ?? null);
   const [about, setAbout] = useState(guide.aboutText ?? '');
   const [photoUri, setPhotoUri] = useState<string | null>(guide.localPhotoUri);
   const phoneCheck = validatePhoneNumber(phone);
@@ -220,12 +220,12 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
       return;
     }
 
-    if (brands.length === 0) {
+    if (!brand) {
       setAttemptedSave(true);
-      // Reveal the checkboxes so there is actually something on screen to fix
-      // -- the read-only text alone gives no way to correct an empty list.
+      // Reveal the radio list so there is actually something on screen to fix
+      // -- the read-only text alone gives no way to correct a missing brand.
       setEditingBrands(true);
-      setError('Please select at least one brand.');
+      setError('Please select a brand.');
       return;
     }
 
@@ -236,7 +236,7 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
       await updateLocalGuideProfile(db, guide.id, {
         name: trimmedName,
         phoneNumber: normalizePhoneNumber(phone),
-        brands,
+        brand,
         aboutText: trimmedAbout ? trimmedAbout : null,
         // Already committed the moment it was picked (see persistPhoto), so
         // this writes back the value that is ALREADY stored rather than a
@@ -402,18 +402,18 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
           autoCapitalize="words"
         />
 
-        {/* Read-only by default -- the normal profile view states the brand(s)
-            as plain text next to the name, not as editable checkboxes. The
-            checkbox UI (BrandSelector) only appears once "Edit" is tapped,
-            keeping this screen's default presentation a VIEW rather than a
-            form control for a field that rarely changes. */}
+        {/* Read-only by default -- the normal profile view states the brand
+            as plain text next to the name, not as an editable radio list. The
+            BrandSelector only appears once "Edit" is tapped, keeping this
+            screen's default presentation a VIEW rather than a form control
+            for a field that rarely changes. */}
         <View style={styles.brandRow}>
-          <Text style={styles.brandText}>Brand: {formatBrands(brands) ?? 'Not set'}</Text>
+          <Text style={styles.brandText}>Brand: {formatBrand(brand) ?? 'Not set'}</Text>
           <Pressable
             onPress={() => setEditingBrands((v) => !v)}
             disabled={saving}
             accessibilityRole="button"
-            accessibilityLabel={editingBrands ? 'Done editing brands' : 'Edit brands'}
+            accessibilityLabel={editingBrands ? 'Done editing brand' : 'Edit brand'}
             style={({ pressed }) => [styles.brandEditLink, pressed && styles.pressed]}
           >
             <Text style={styles.brandEditLinkText}>{editingBrands ? 'Done' : 'Edit'}</Text>
@@ -422,17 +422,15 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
         {editingBrands ? (
           <>
             <BrandSelector
-              selected={brands}
+              selected={brand}
               onChange={(next) => {
-                setBrands(next);
+                setBrand(next);
                 setSavedMessage(null);
               }}
               disabled={saving}
               showEmptyWarning={attemptedSave}
             />
-            <Text style={styles.fieldHint}>
-              Which brand(s) do you belong to? You can select more than one.
-            </Text>
+            <Text style={styles.fieldHint}>Which brand do you belong to?</Text>
           </>
         ) : (
           <View style={styles.brandSpacer} />

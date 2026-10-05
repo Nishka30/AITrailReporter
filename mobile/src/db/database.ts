@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 18;
+const DATABASE_VERSION = 19;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -634,7 +634,38 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
-  // Future schema changes: add `if (currentDbVersion === 18) { ...; currentDbVersion = 19; }`
+  if (currentDbVersion === 18) {
+    // Guide brand: the mobile UI moved from a multi-select (one or more
+    // brands) to a single-select (exactly one brand), mirroring the same
+    // change on the backend (see backend alembic migration
+    // a1f2c3d4e5b6_convert_guide_brands_to_scalar). The old `brands` column
+    // stored a JSON-encoded array string; the new `brand` column stores the
+    // plain code directly -- no encoding/decoding needed anywhere in the app
+    // anymore.
+    //
+    // Data-preserving: a guide that already had one or more brands recorded
+    // keeps the FIRST one (same arbitrary tie-break as the backend
+    // migration), rather than silently discarding real data. json_extract is
+    // SQLite's json1 function, available in every expo-sqlite build this app
+    // targets.
+    await db.execAsync(`
+      BEGIN TRANSACTION;
+
+      ALTER TABLE local_guide ADD COLUMN brand TEXT;
+
+      UPDATE local_guide
+        SET brand = json_extract(brands, '$[0]')
+        WHERE brands IS NOT NULL;
+
+      ALTER TABLE local_guide DROP COLUMN brands;
+
+      COMMIT;
+    `);
+    currentDbVersion = 19;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 19) { ...; currentDbVersion = 20; }`
   // Persist `PRAGMA user_version` INSIDE that new block too, right after its own
   // DDL/backfill completes -- never only once at the end of this function. A step
   // that throws must leave the DB honestly at its last COMPLETED version, so a

@@ -1,5 +1,4 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 
 import { colors, minTouchSize, spacing, type } from '../../theme/theme';
 
@@ -24,53 +23,53 @@ export function brandDisplayName(code: string): string {
   return match ? `${match.label} (${match.code})` : code;
 }
 
-/** "BaseCampTours (BCT) · HimalayanWonders (HW)" -- joins in BRAND_OPTIONS
- * order regardless of the input order, so the summary reads consistently
- * no matter which order a guide checked the boxes in. */
-export function formatBrands(codes: string[] | null | undefined): string | null {
-  if (!codes || codes.length === 0) return null;
-  const ordered = BRAND_OPTIONS.filter((b) => codes.includes(b.code));
-  return ordered.map((b) => brandDisplayName(b.code)).join(' · ');
+/** "BaseCampTours (BCT)", or null when no brand is recorded -- the one place
+ * the profile's read-only summary line is built. */
+export function formatBrand(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return brandDisplayName(code);
 }
 
 type Props = {
-  selected: string[];
-  onChange: (next: string[]) => void;
+  selected: string | null;
+  onChange: (next: string | null) => void;
   disabled?: boolean;
-  /** Shown under the checkbox list only once the guide has touched it and
-   * left every box unchecked -- matches the phone-number field's pattern of
-   * not scolding an untouched field (see SetupScreen/ProfileScreen). */
+  /** Shown under the radio list only once the guide has touched it and left
+   * nothing selected -- matches the phone-number field's pattern of not
+   * scolding an untouched field (see SetupScreen/ProfileScreen). */
   showEmptyWarning?: boolean;
 };
 
 /**
- * "Which brand(s) do you belong to?" -- a multi-select checkbox list over the
- * four controlled BRAND_OPTIONS. Plain Pressable + Ionicons, matching this
- * app's existing form idiom (no form library, no third-party checkbox
- * component exists anywhere in this codebase).
+ * "Which brand do you belong to?" -- a single-select radio list over the four
+ * controlled BRAND_OPTIONS. A guide belongs to exactly one brand, so picking
+ * a new option replaces the previous selection rather than adding to it.
+ * Plain Pressable + Ionicons, matching this app's existing form idiom (no
+ * form library, no third-party radio component exists anywhere in this
+ * codebase).
  */
 export default function BrandSelector({ selected, onChange, disabled, showEmptyWarning }: Props) {
-  function toggle(code: string) {
+  function select(code: string) {
     if (disabled) return;
-    onChange(selected.includes(code) ? selected.filter((c) => c !== code) : [...selected, code]);
+    onChange(code);
   }
 
   return (
     <View>
       {BRAND_OPTIONS.map((option) => {
-        const checked = selected.includes(option.code);
+        const checked = selected === option.code;
         return (
           <Pressable
             key={option.code}
-            onPress={() => toggle(option.code)}
+            onPress={() => select(option.code)}
             disabled={disabled}
-            accessibilityRole="checkbox"
+            accessibilityRole="radio"
             accessibilityState={{ checked, disabled }}
             accessibilityLabel={`${option.label} (${option.code})`}
             style={({ pressed }) => [styles.row, pressed && styles.pressed]}
           >
-            <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
-              {checked ? <Ionicons name="checkmark" size={14} color={colors.white} /> : null}
+            <View style={[styles.radio, checked && styles.radioChecked]}>
+              {checked ? <View style={styles.radioDot} /> : null}
             </View>
             <Text style={styles.label}>
               {option.label} <Text style={styles.code}>({option.code})</Text>
@@ -78,8 +77,8 @@ export default function BrandSelector({ selected, onChange, disabled, showEmptyW
           </Pressable>
         );
       })}
-      {showEmptyWarning && selected.length === 0 ? (
-        <Text style={styles.warning}>Select at least one brand.</Text>
+      {showEmptyWarning && !selected ? (
+        <Text style={styles.warning}>Select a brand.</Text>
       ) : null}
     </View>
   );
@@ -93,18 +92,23 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     minHeight: minTouchSize,
   },
-  checkbox: {
+  radio: {
     width: 22,
     height: 22,
-    borderRadius: 6,
+    borderRadius: 11,
     borderWidth: 1.5,
     borderColor: colors.border,
     backgroundColor: colors.paperElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkboxChecked: {
+  radioChecked: {
     borderColor: colors.marigoldDeep,
+  },
+  radioDot: {
+    width: 11,
+    height: 11,
+    borderRadius: 5.5,
     backgroundColor: colors.marigoldDeep,
   },
   label: { ...type.body, color: colors.ink },
