@@ -160,8 +160,8 @@ type GuideResolution = { serverGuideId: string } | { error: string };
  * rule every other record in this outbox follows. Returns an error message for
  * honest reporting, or null on success/nothing-to-do.
  *
- * Only name and phone_number are sent. The About text and profile photo are
- * local-only and are never transmitted (see api/guides.ts).
+ * name, phone_number, and brands are sent. The About text and profile photo
+ * are local-only and are never transmitted (see api/guides.ts).
  */
 async function pushProfileIfDirty(
   db: SQLiteDatabase,
@@ -174,6 +174,7 @@ async function pushProfileIfDirty(
       serverGuideId,
       name: guide.name,
       phoneNumber: guide.phoneNumber,
+      brands: guide.brands,
     });
     // Cleared only after the server CONFIRMED the change — never optimistically.
     await markProfileSynced(db, guide.id);
@@ -197,6 +198,7 @@ async function ensureServerGuideId(
       name: guide.name,
       phoneNumber: guide.phoneNumber,
       clientGuideId: guide.clientGuideId,
+      brands: guide.brands,
     });
     await setServerGuideId(db, guide.id, serverGuide.id);
     return { serverGuideId: serverGuide.id };

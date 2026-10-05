@@ -24,6 +24,8 @@ def update_guide(db: Session, guide_id: UUID, data: GuideUpdate) -> Guide | None
     Only fields the caller actually supplied are written — `model_fields_set`
     distinguishes "not mentioned" from "explicitly set to null", so clearing a
     phone number is possible while omitting it leaves the stored value alone.
+    `brands` follows the same rule; GuideUpdate's own validator already
+    rejects an explicitly-empty list, so there is no "clear brands" path here.
     A field-by-field UPDATE like this needs no row lock and no idempotency key:
     it is last-write-wins on two independent scalar columns, with no read-then-
     write step that a concurrent update could interleave with. (Contrast the
@@ -43,6 +45,8 @@ def update_guide(db: Session, guide_id: UUID, data: GuideUpdate) -> Guide | None
         guide.name = data.name
     if "phone_number" in fields_set:
         guide.phone_number = data.phone_number
+    if "brands" in fields_set:
+        guide.brands = data.brands
 
     db.commit()
     db.refresh(guide)
@@ -66,6 +70,7 @@ def create_or_get_guide(db: Session, data: GuideCreate) -> tuple[Guide, bool]:
         name=data.name,
         phone_number=data.phone_number,
         client_guide_id=data.client_guide_id,
+        brands=data.brands,
     )
     db.add(guide)
     try:

@@ -135,12 +135,24 @@ export interface LocalGuide {
   aboutText: string | null;
   localPhotoUri: string | null;
   /**
-   * True when `name`/`phoneNumber` have been edited locally and that change has
-   * not yet been pushed to the backend. Set by profile edits, cleared once the
-   * sync engine has confirmed the server accepted them — the same
-   * "local truth first, confirmed later" discipline every other outbox record
-   * in this app uses. Always false while `serverGuideId` is null, because
-   * guide creation sends the current values anyway.
+   * Which tour-operator brand(s) this guide belongs to -- short codes from
+   * BRAND_OPTIONS (components/ui/BrandSelector.tsx), mirroring the backend's
+   * GUIDE_BRANDS exactly (app/db/models/guide.py): 'BCT' | 'HW' | 'TH' | 'PH'.
+   * UNLIKE aboutText/localPhotoUri above, this DOES sync to the backend (see
+   * api/guides.ts) -- it already exists there as a Guide column, not a
+   * local-only profile note. Null for a guide created before brands existed,
+   * or any guide with none recorded -- never defaulted or invented. Stored on
+   * disk as a JSON string (see guideRepository.ts's LocalGuideRow); every
+   * other layer of the app only ever sees this as `string[] | null`.
+   */
+  brands: string[] | null;
+  /**
+   * True when `name`/`phoneNumber`/`brands` have been edited locally and that
+   * change has not yet been pushed to the backend. Set by profile edits,
+   * cleared once the sync engine has confirmed the server accepted them — the
+   * same "local truth first, confirmed later" discipline every other outbox
+   * record in this app uses. Always false while `serverGuideId` is null,
+   * because guide creation sends the current values anyway.
    */
   profileDirty: boolean;
   createdAt: string;

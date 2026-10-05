@@ -2,6 +2,8 @@ export { default as AppHeader } from './AppHeader';
 export { default as Avatar } from './Avatar';
 export { default as Badge } from './Badge';
 export type { BadgeTone } from './Badge';
+export { default as BrandSelector, BRAND_OPTIONS, brandDisplayName, formatBrands } from './BrandSelector';
+export type { BrandCode } from './BrandSelector';
 export { default as Button } from './Button';
 export type { ButtonVariant } from './Button';
 export { default as Card } from './Card';

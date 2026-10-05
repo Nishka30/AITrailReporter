@@ -165,9 +165,9 @@ def update_guide(guide_id: UUID, payload: GuideUpdate, db: Session = Depends(get
     """Updates a guide's editable identity fields (Step 17: the mobile Profile
     screen). Partial — only the fields present in the request body are written.
 
-    Accepts ONLY name and phone_number. The Profile screen's "About you" text
-    and profile photo are never sent here and have no server representation at
-    all; see GuideUpdate for the privacy reasoning.
+    Accepts name, phone_number, and brands. The Profile screen's "About you"
+    text and profile photo are never sent here and have no server
+    representation at all; see GuideUpdate for the privacy reasoning.
 
     Naturally idempotent: applying the same body twice leaves the same state, so
     unlike the creation endpoints this needs no client-generated id. The mobile

@@ -12,7 +12,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
 import { getGuideRewards, type GuideRewards } from '../api/rewards';
-import { AppHeader, Avatar, Badge, Button, Card, Screen } from '../components/ui';
+import { AppHeader, Avatar, Badge, BrandSelector, Button, Card, Screen } from '../components/ui';
 import {
   choosePhoto,
   deleteStoredPhoto,
@@ -51,8 +51,11 @@ const ABOUT_MAX_LENGTH = 400;
  * same person and a merge problem at every sync.
  *
  * WHAT SYNCS, AND WHAT DOESN'T:
- *   - name, phone_number  -> pushed to the backend Guide (it already has these
- *                            columns) via the sync engine's normal outbox.
+ *   - name, phone_number, brands -> pushed to the backend Guide (it already
+ *                            has these columns) via the sync engine's normal
+ *                            outbox. brands is zero or more of BRAND_OPTIONS'
+ *                            short codes (components/ui/BrandSelector.tsx),
+ *                            mirroring the backend's GUIDE_BRANDS exactly.
  *   - about, photo        -> LOCAL TO THIS DEVICE, always. They are personal
  *                            metadata, not field knowledge: never uploaded,
  *                            never turned into Observations, never included in
@@ -71,6 +74,7 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
 
   const [name, setName] = useState(guide.name);
   const [phone, setPhone] = useState(guide.phoneNumber ?? '');
+  const [brands, setBrands] = useState<string[]>(guide.brands ?? []);
   const [about, setAbout] = useState(guide.aboutText ?? '');
   const [photoUri, setPhotoUri] = useState<string | null>(guide.localPhotoUri);
   const phoneCheck = validatePhoneNumber(phone);
@@ -78,6 +82,10 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
   const [saving, setSaving] = useState(false);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Only shown after a failed save attempt -- same reasoning as SetupScreen's
+  // identical flag (don't scold the brand list before the guide has tried
+  // to save with none checked).
+  const [attemptedSave, setAttemptedSave] = useState(false);
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
 
@@ -188,12 +196,20 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
 
     const trimmedName = name.trim();
     if (!trimmedName) {
+      setAttemptedSave(true);
       setError('Please enter your name.');
       return;
     }
 
     if (!phoneCheck.valid) {
+      setAttemptedSave(true);
       setError(phoneCheck.message);
+      return;
+    }
+
+    if (brands.length === 0) {
+      setAttemptedSave(true);
+      setError('Please select at least one brand.');
       return;
     }
 
@@ -204,6 +220,7 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
       await updateLocalGuideProfile(db, guide.id, {
         name: trimmedName,
         phoneNumber: normalizePhoneNumber(phone),
+        brands,
         aboutText: trimmedAbout ? trimmedAbout : null,
         // Already committed the moment it was picked (see persistPhoto), so
         // this writes back the value that is ALREADY stored rather than a
@@ -368,6 +385,18 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
           editable={!saving}
           autoCapitalize="words"
         />
+
+        <Text style={styles.fieldLabel}>Brands</Text>
+        <BrandSelector
+          selected={brands}
+          onChange={(next) => {
+            setBrands(next);
+            setSavedMessage(null);
+          }}
+          disabled={saving}
+          showEmptyWarning={attemptedSave}
+        />
+        <Text style={styles.fieldHint}>Which brand(s) do you belong to? You can select more than one.</Text>
 
         <Text style={styles.fieldLabel}>Phone number</Text>
         <TextInput

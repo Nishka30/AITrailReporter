@@ -13,7 +13,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
-import { Avatar, Button } from '../components/ui';
+import { Avatar, BrandSelector, Button } from '../components/ui';
 import {
   choosePhoto,
   deleteStoredPhoto,
@@ -33,11 +33,11 @@ const ABOUT_MAX_LENGTH = 400;
 /**
  * First-run setup (Step 17: now collects the full field profile).
  *
- * Name and phone number are REQUIRED — they are the identity every report is
- * attributed to, and both already exist on the backend Guide. The photo and the
- * "About you" note are genuinely optional and can be added later from the
- * Profile screen, so onboarding stays short: two fields to fill, everything
- * else skippable at a glance.
+ * Name, phone number, and at least one brand are REQUIRED — they are the
+ * identity every report is attributed to, and all three already exist on the
+ * backend Guide. The photo and the "About you" note are genuinely optional and
+ * can be added later from the Profile screen, so onboarding stays short:
+ * three fields to fill, everything else skippable at a glance.
  *
  * Entirely offline, like every other write in this app: it creates the local
  * guide row and returns. The backend guide is created later, by the sync
@@ -49,12 +49,16 @@ export default function SetupScreen({ onGuideCreated }: Props) {
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [brands, setBrands] = useState<string[]>([]);
   const [about, setAbout] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
   const phoneCheck = validatePhoneNumber(phone);
 
   const [saving, setSaving] = useState(false);
+  // Only shown after a failed save attempt -- same "don't scold an untouched
+  // field" reasoning as the phone number's own validation message below.
+  const [attemptedSave, setAttemptedSave] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
@@ -98,11 +102,18 @@ export default function SetupScreen({ onGuideCreated }: Props) {
 
     const trimmedName = name.trim();
     if (!trimmedName) {
+      setAttemptedSave(true);
       setError('Please enter your name.');
       return;
     }
     if (!phoneCheck.valid) {
+      setAttemptedSave(true);
       setError(phoneCheck.message);
+      return;
+    }
+    if (brands.length === 0) {
+      setAttemptedSave(true);
+      setError('Please select at least one brand.');
       return;
     }
 
@@ -113,6 +124,7 @@ export default function SetupScreen({ onGuideCreated }: Props) {
       await createLocalGuide(db, trimmedName, normalizePhoneNumber(phone), {
         aboutText: trimmedAbout ? trimmedAbout : null,
         localPhotoUri: photoUri,
+        brands,
       });
       onGuideCreated();
     } catch (err) {
@@ -219,6 +231,17 @@ export default function SetupScreen({ onGuideCreated }: Props) {
             10-digit mobile number, so the team can reach you about your reports.
           </Text>
         )}
+
+        <Text style={[styles.fieldLabel, styles.fieldLabelSpaced]}>
+          Which brand(s) do you belong to?
+        </Text>
+        <BrandSelector
+          selected={brands}
+          onChange={setBrands}
+          disabled={saving}
+          showEmptyWarning={attemptedSave}
+        />
+        <Text style={styles.fieldHint}>You can select more than one.</Text>
 
         {/* Collapsed by default — deliberately one tap away rather than a third
             field to scroll past. It can equally be filled in later. */}

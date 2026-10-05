@@ -9,7 +9,7 @@ export const DATABASE_NAME = 'trailreporter.db';
  * Bump this and add a new `if (currentDbVersion === N)` step below whenever the
  * local schema changes — never edit an already-shipped migration step.
  */
-const DATABASE_VERSION = 17;
+const DATABASE_VERSION = 18;
 
 /**
  * Called once by <SQLiteProvider onInit={migrateDbIfNeeded}> the first time the
@@ -608,7 +608,33 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
   }
 
-  // Future schema changes: add `if (currentDbVersion === 17) { ...; currentDbVersion = 18; }`
+  if (currentDbVersion === 17) {
+    // Guide brands: which tour-operator brand(s) a guide belongs to (e.g.
+    // BaseCampTours, HimalayanWonders). Purely additive nullable column,
+    // exactly like v6->v7's about_text/local_photo_uri/profile_dirty step.
+    // NO BACKFILL, and none is needed: an existing guide genuinely has no
+    // brand recorded yet, so NULL is the truthful value, not a "not yet
+    // migrated" marker.
+    //
+    // Stored as a JSON-encoded TEXT string (e.g. '["BCT","HW"]') rather than
+    // a new child table -- SQLite has no native array/JSON column type, and
+    // this mirrors the backend's own choice of a single JSONB list column
+    // over a join table for the same small, fixed-shape multi-value field
+    // (see backend app/db/models/guide.py's GUIDE_BRANDS comment). Encoding/
+    // decoding happens entirely in guideRepository.ts, so every other layer
+    // of the app only ever sees `string[] | null`.
+    await db.execAsync(`
+      BEGIN TRANSACTION;
+
+      ALTER TABLE local_guide ADD COLUMN brands TEXT;
+
+      COMMIT;
+    `);
+    currentDbVersion = 18;
+    await db.execAsync(`PRAGMA user_version = ${currentDbVersion}`);
+  }
+
+  // Future schema changes: add `if (currentDbVersion === 18) { ...; currentDbVersion = 19; }`
   // Persist `PRAGMA user_version` INSIDE that new block too, right after its own
   // DDL/backfill completes -- never only once at the end of this function. A step
   // that throws must leave the DB honestly at its last COMPLETED version, so a
