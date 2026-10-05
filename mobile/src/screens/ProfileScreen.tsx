@@ -12,7 +12,16 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 
 import { getGuideRewards, type GuideRewards } from '../api/rewards';
-import { AppHeader, Avatar, Badge, BrandSelector, Button, Card, Screen } from '../components/ui';
+import {
+  AppHeader,
+  Avatar,
+  Badge,
+  BrandSelector,
+  Button,
+  Card,
+  formatBrands,
+  Screen,
+} from '../components/ui';
 import {
   choosePhoto,
   deleteStoredPhoto,
@@ -86,6 +95,10 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
   // identical flag (don't scold the brand list before the guide has tried
   // to save with none checked).
   const [attemptedSave, setAttemptedSave] = useState(false);
+  // The normal profile view shows brands as plain read-only text (see render
+  // below) -- this only flips on when the guide taps "Edit" next to it, or
+  // when a save attempt fails because no brand is selected.
+  const [editingBrands, setEditingBrands] = useState(false);
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [pickingPhoto, setPickingPhoto] = useState(false);
 
@@ -209,6 +222,9 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
 
     if (brands.length === 0) {
       setAttemptedSave(true);
+      // Reveal the checkboxes so there is actually something on screen to fix
+      // -- the read-only text alone gives no way to correct an empty list.
+      setEditingBrands(true);
       setError('Please select at least one brand.');
       return;
     }
@@ -386,17 +402,41 @@ export default function ProfileScreen({ guide, onDone, onOpenRewards }: Props) {
           autoCapitalize="words"
         />
 
-        <Text style={styles.fieldLabel}>Brands</Text>
-        <BrandSelector
-          selected={brands}
-          onChange={(next) => {
-            setBrands(next);
-            setSavedMessage(null);
-          }}
-          disabled={saving}
-          showEmptyWarning={attemptedSave}
-        />
-        <Text style={styles.fieldHint}>Which brand(s) do you belong to? You can select more than one.</Text>
+        {/* Read-only by default -- the normal profile view states the brand(s)
+            as plain text next to the name, not as editable checkboxes. The
+            checkbox UI (BrandSelector) only appears once "Edit" is tapped,
+            keeping this screen's default presentation a VIEW rather than a
+            form control for a field that rarely changes. */}
+        <View style={styles.brandRow}>
+          <Text style={styles.brandText}>Brand: {formatBrands(brands) ?? 'Not set'}</Text>
+          <Pressable
+            onPress={() => setEditingBrands((v) => !v)}
+            disabled={saving}
+            accessibilityRole="button"
+            accessibilityLabel={editingBrands ? 'Done editing brands' : 'Edit brands'}
+            style={({ pressed }) => [styles.brandEditLink, pressed && styles.pressed]}
+          >
+            <Text style={styles.brandEditLinkText}>{editingBrands ? 'Done' : 'Edit'}</Text>
+          </Pressable>
+        </View>
+        {editingBrands ? (
+          <>
+            <BrandSelector
+              selected={brands}
+              onChange={(next) => {
+                setBrands(next);
+                setSavedMessage(null);
+              }}
+              disabled={saving}
+              showEmptyWarning={attemptedSave}
+            />
+            <Text style={styles.fieldHint}>
+              Which brand(s) do you belong to? You can select more than one.
+            </Text>
+          </>
+        ) : (
+          <View style={styles.brandSpacer} />
+        )}
 
         <Text style={styles.fieldLabel}>Phone number</Text>
         <TextInput
@@ -573,6 +613,17 @@ const styles = StyleSheet.create({
   },
   fieldHint: { ...type.caption, color: colors.inkFaint, marginTop: 5, marginBottom: spacing.md },
   fieldHintWarn: { ...type.caption, color: colors.fix, marginTop: 5, marginBottom: spacing.md },
+
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  brandText: { ...type.body, color: colors.inkSoft, flex: 1 },
+  brandEditLink: { minHeight: minTouchSize, justifyContent: 'center', paddingHorizontal: spacing.xs },
+  brandEditLinkText: { ...type.smallBold, color: colors.marigoldDeep },
+  brandSpacer: { marginBottom: spacing.md },
 
   aboutLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   optionalTag: {
